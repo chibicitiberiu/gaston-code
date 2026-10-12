@@ -221,16 +221,25 @@ def user_turn(text: str) -> Block:
                               for ln in (text.strip().splitlines() or [""])])
 
 
+#: One line per line, for the kinds the renderer rejoins with "\n". A
+#: payload line cannot contain the separator that ends it, and these three
+#: take text that can: a notice about a path, an error from the far side, a
+#: tool summary with an argument in it.
+def _lines(text: str) -> list:
+    return [("t", clean(ln)) for ln in text.split("\n")]
+
+
 def notice(text: str) -> Block:
-    return Block("notice", {}, [("t", clean(text))])
+    return Block("notice", {}, _lines(text))
 
 
 def error(text: str) -> Block:
-    return Block("error", {}, [("t", clean(text))])
+    return Block("error", {}, _lines(text))
 
 
 def tool_call(name: str, summary: str) -> Block:
-    return Block("tool", {}, [("n", clean(name)), ("t", clean(summary))])
+    return Block("tool", {},
+                 [("n", clean(name).replace("\n", " ")), *_lines(summary)])
 
 
 def tool_result(body: str, *, error: bool = False, cap: int = 0) -> Block:
@@ -687,6 +696,16 @@ def encode(block: Block) -> bytes:
             raise RecordError(f"tag {tag!r} is not one ASCII letter")
         if tag not in allowed_tags:
             raise RecordError(f"{block.kind} has no payload tag {tag!r}")
+        if "\n" in text:
+            # The line separator cannot be inside a line. Found by the
+            # equality proof rather than by reasoning: error("x\ny") put a
+            # newline in one `t`, the guest's parser read the tail as a
+            # second line with tag "y", and the second half of the message
+            # vanished. A constructor that can see multi-line text splits
+            # it into several lines of the same tag; this refuses the rest.
+            raise RecordError(
+                f"{block.kind}'s {tag!r} payload contains a newline; split "
+                f"it into one line per tag")
         # A tag alone is a line with no payload, and that is load-bearing: a
         # blank line in a pasted message is an empty `t`, and without it the
         # blank lines vanish.

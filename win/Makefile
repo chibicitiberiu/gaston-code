@@ -214,6 +214,20 @@ FS_SRCS = fs/path.cpp fs/file.cpp fs/dir.cpp fs/list.cpp fs/reader.cpp \
           fs/writer.cpp fs/xfer.cpp fs/freespace.cpp fs/drives.cpp fs/ops.cpp fs/tree.cpp
 LIBFS = $(LIBDIR)/libfs.lib
 
+# libview (docs/stage3-plan.md): records to markup. libcore only -- it knows
+# nothing of the wire, and which frame carried a record is the exe's job.
+# Listed BEFORE libcore wherever both are linked.
+#
+# NOT in OBJS until stage 3 C2. CHECK_OWNED derives from CLIENT_SRCS, so
+# until the client links it, libview's growth is invisible to check-gaston
+# and arrives in one measured step rather than a byte at a time.
+#
+# Two translation units and not four: -xs costs about 2,144 bytes per TU
+# (docs/PROGRESS.md:4012-4018), so the substituter lives beside the record
+# parser rather than in a file of its own.
+VIEW_SRCS = view/render.cpp view/templates.cpp
+LIBVIEW = $(LIBDIR)/libview.lib
+
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
 # libcore only: it knows nothing of the wire, and turning a tree into
 # frames is the exe's job. Listed BEFORE libcore wherever both are linked.
@@ -244,7 +258,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
        $(LIBFS) $(LIBCORE)
 
-.PHONY: gremote gupdate fscheck execcheck execprobe keyprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: gremote gupdate fscheck rendercheck execcheck execprobe keyprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -367,6 +381,23 @@ execcheck: $(BUILD)/execcheck.exe
 $(BUILD)/execcheck.exe: $(EXECCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
+	@echo "built $@"
+
+# libview under Wine: every kind, every escape mode, the inline stack, the
+# wrap, the template layer and its degenerate fallback. Also the two modes
+# the stage leans on from outside: --render reads records on stdin and
+# writes markup on stdout, which is how B2 compares this renderer against
+# the bridge's byte for byte; --dump-templates prints what the profile API
+# actually handed back, which is how the guest gets to disagree with Wine
+# about control characters and significant spaces before that proof is
+# trusted (win/core/inifile.cpp:50-107).
+#
+# map= because check-% hands that path to cmovcheck.py and stackframes.py.
+RENDERCHECK_OBJS = $(call objs,checks/rendercheck.cpp) $(LIBVIEW) $(LIBCORE)
+rendercheck: $(BUILD)/rendercheck.exe
+$(BUILD)/rendercheck.exe: $(RENDERCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0, \
+	  map=$(BUILD)/rendercheck.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
 
 # libwire end to end (wire/connection.cpp, wire/listener.cpp): a Connection
@@ -561,7 +592,7 @@ gaston: $(BUILD)/gaston.exe
 gaston.exe: $(BUILD)/gaston.exe
 
 all: msgids $(BUILD)/gaston.exe gremote gupdate synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
-     netcheck rpccheck probe execprobe keyprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck fscheck
+     netcheck rpccheck probe execprobe keyprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck fscheck rendercheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
@@ -773,6 +804,10 @@ $(LIBAUTOMATION): $(call objs,$(AUTOMATION_SRCS))
 	@mkdir -p $(@D)
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 
+$(LIBVIEW): $(call objs,$(VIEW_SRCS))
+	@mkdir -p $(@D)
+	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
+
 # The map is not a debugging nicety: `make check` needs symbol names to gate on
 # stack frame sizes, and objdump cannot read Watcom's OMF objects.
 # Private window messages must not share a number (tools/check/msgids.py).
@@ -835,7 +870,7 @@ PYTHON ?= python3
 # It is set rather than omitted because the gate compares against whatever
 # it is given, and 0 means "must be empty", not "not applicable".
 check: check-sources check-gaston check-gremote check-gupdate \
-       check-autocheck check-fscheck
+       check-autocheck check-fscheck check-rendercheck
 
 # gremote's budget is its own, and unlike the client's it is a claim about a
 # program that runs BESIDE the thing being measured -- every number taken
@@ -902,7 +937,20 @@ check-gupdate: CHECK_OWNED = $(GUPDATE_OBJS)
 check-gupdate: CHECK_CAP   = 64000
 
 check-fscheck: CHECK_OWNED = $(FSCHECK_OBJS)
+# The full link list including the libraries, as every target above does.
+# Map modules are named by the .lib and never the .o, so an object-only
+# list would make cmovcheck fail outright on a module absent from the map
+# AND leave stackframes.py's $(filter %.lib,...) empty -- silently exempting
+# the whole renderer through the `.lib:` entry in EXEMPT. That gap is the
+# one CHECK_OWNED exists to close.
+check-rendercheck: CHECK_OWNED = $(RENDERCHECK_OBJS)
 check-fscheck: CHECK_CAP   = 200000
+# A check exe, so the cap is a sanity bound and not a budget anyone is
+# spending against: libview plus libcore plus the C runtime. What it is
+# really for is the OTHER four gates in check-% -- imports, CMOV, static
+# constructors and stack frames -- which is the only way the renderer's own
+# code is audited before C2 links it into the client.
+check-rendercheck: CHECK_CAP = 200000
 check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
 # 200,000 -> 212,000 (2026-10-02): the step runner's cases link the runner
 # and libautomation's new input primitives -- 203,633 measured. A test
