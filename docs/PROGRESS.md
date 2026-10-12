@@ -4398,7 +4398,7 @@ MSAA returning real roles from the box's own oleacc.
 
 ## Stage 3 -- the markup moves to the client (2026-10-12)
 
-`ROADMAP.md` stage 3, planned in `docs/stage3-plan.md`. Twenty-three commits,
+`ROADMAP.md` stage 3, planned in `docs/stage3-plan.md`. Twenty-seven commits,
 `1c49270..`, each gated with `make -C win check`, `make lint`,
 `make test-fast` and, where the image moved, the committed number in the
 message.
@@ -4411,7 +4411,7 @@ message.
 | live DOM write / render, 32MB VM | 3,799 µs -> 3,710 µs / **478 µs** |
 | `bridge/view/html.py` | 704 lines -> **123** |
 | `make test-fast` | 4,352 passed |
-| the whole suite | 4,741 passed |
+| the whole suite | 4,812 passed (4,352 fast + 460 under Wine) |
 
 **What moved.** The bridge sends what a block IS -- `<kind> [attr=value]*`,
 tagged payload lines, a dot -- in the frame body, and the client decides what
@@ -4469,6 +4469,23 @@ inline marks live in the record for exactly that reason.
 - **audit-2 03.17 said PARTIAL while its own ledger line said Fixed**, and
   nothing checks that those agree. It was cited twice as live justification
   while planning.
+- **Both status-bar warnings this stage added were written to a status bar
+  that does not exist yet**, and to a channel that would not have shown
+  them anyway. `rc_statusbar` is created ~170 lines below the `view.tpl`
+  check in `createChildren`, so `m_status` was null and the `if (m_status)`
+  made it silent; and `set_override` is the bridge's turn-status channel,
+  read only inside `refresh`'s `turn_active` branch and cleared when the
+  turn ends, so at boot there is no turn to show it in. Found after the
+  stage was closed, by taking `view.css` away on the guest and looking --
+  the four detection layers had been proved under Wine, where there is no
+  status bar to look at. `set_notice` is the channel that was missing.
+- **A missing `view.css` was fatal and silent.** `boot_local` logged one
+  line and returned 0 into a caller with no `else`, and `set_document`
+  returned void, so an unwritable program directory and a full disk could
+  not be reported at all. Harmless until C4: before it, a failure here
+  meant "wait for the bridge's DOC", which arrived on every connect. After
+  it, the cold start is the only path and there is nothing behind it. This
+  is the plan's layer 3, written down and not built.
 
 ### What the stage costs, said plainly
 
@@ -4500,3 +4517,11 @@ rendered and screenshotted, the template round trip, a cold start with no
 bridge reachable, and a real export driven through the modal Save dialog and
 opened in IE5 on the same machine. On the Athlon: the template round trip,
 the 76 cases, and the live timings.
+
+The degraded paths were verified last and separately, because they are the
+ones Wine cannot see: `view.css` renamed away gives a dialog naming
+`C:\GASTON\view.css` and a bar reading "no transcript - see gaston.log";
+`view.tpl` renamed away gives no dialog, a transcript of plain unstyled
+paragraphs and a bar reading "view.tpl missing - plain text"; both restored
+gives an empty bar and grey notices again.
+`docs/measurements/view-degraded-vm-20261012-*.png`.

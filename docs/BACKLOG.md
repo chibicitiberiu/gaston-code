@@ -2820,7 +2820,7 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 
 ## 31. The bridge renders the markup, so the wire is IE4/5-shaped
 
-**Status:** CLOSED 2026-10-12, stage 3, in twenty-three commits.
+**Status:** CLOSED 2026-10-12, stage 3, in twenty-seven commits.
 `docs/stage3-plan.md` is the plan and `docs/ROADMAP.md` stage 3 the outcome.
 
 The wire carries records -- `<kind> [attr=value]*`, tagged payload lines, a

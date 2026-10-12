@@ -1,13 +1,22 @@
 # Stage 3 — the markup moves to the client
 
-## STATUS, 2026-10-12: COMPLETE — twenty-three commits, `1c49270..`
+## STATUS, 2026-10-12: COMPLETE — twenty-seven commits, `1c49270..`
 
 `docs/PROGRESS.md` has the outcome and the numbers; `ROADMAP.md` stage 3 has
 the summary. The plan below is what was intended, kept as written so the two
 can be compared.
 
 **Where it was wrong, and the corrections are in the commits rather than
-here:** A3 cost 1,024 bytes and not ~200; the payload sanitiser cannot live
+here:** §3's layer 3 was written and not built -- `boot_local` reported a
+missing `view.css` to the log and nowhere else, and `set_document` returned
+void, so the two failures the layer exists for could not be reported at all;
+and both of §3's status-bar warnings were written against `set_override`,
+which is the bridge's turn-status channel and is read only while a turn is
+running, at a point in `createChildren` where the status bar does not yet
+exist. Neither appeared on the guest. Fixed after the stage was declared
+closed, which is itself the finding: the four detection layers were tested
+under Wine, where there is no status bar to look at. A3 cost 1,024 bytes and
+not ~200; the payload sanitiser cannot live
 in the encoder, because by then the payload is full of the marks it would
 strip; A1's strip could not come out at A5, because three producers still
 hand-built markup; `test_html.py`'s 42 tests were NOT split four ways,
@@ -21,7 +30,7 @@ real bugs before it was a test, and the guest measurement for the template
 round trip was not optional. Neither would have been done without the plan
 saying so.
 
-Nineteen commits in three phases were planned; twenty-three landed.
+Nineteen commits in three phases were planned; twenty-seven landed.
 A11 folded into C2 as the plan expected, and five of the planned commits
 needed a sibling the plan had not foreseen. `ROADMAP.md` stage 3. Planned 2026-10-12 and
 reviewed three times before any code: a design pass that argued four of the
