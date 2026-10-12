@@ -1,0 +1,45 @@
+The client picks its own window, measured on two machines
+=========================================================
+2026-10-13, stage 3b. One bridge, one conversation shape, two machines.
+
+This is the stage's whole claim in one number: the bridge sends no page
+size, is told none, and the two clients disagree about how much a page
+holds -- correctly, because they disagree about how much memory they have.
+
+                        QEMU guest        Athlon XP
+  mem_kb (HELLO)        32,288            261,580
+  reported              31 MB             255 MB
+  rc_page_blocks()      90                360
+  records in the test   122               402
+  pages shown           2                 2
+  page 1 ends at        line 089          line 359
+
+`rc_page_blocks` (win/net/net.cpp) is `bridge/view/pages.py`'s limits_for
+and `bridge/prefs.py`'s scaled(), moved to the client and done in
+sixteenths because there is no floating point in this image. A 32MB guest
+lands on exactly 90, which is what the bridge used to compute for it, so
+nothing moved on the machine the old arithmetic was measured for.
+
+WHAT THE BRIDGE SAW. One line in its log per guest:
+
+  guest has 31 MB
+  guest has 255 MB
+
+and no page cap at all. It used to say "pages capped at 16384 bytes / 90
+blocks" and compute that from mem_kb scaled by a PREFS key.
+
+THE SAME CONVERSATION ON THE OTHER MACHINE would have been five pages
+rather than two. Nothing on the bridge would have been different.
+
+HOW IT WAS DRIVEN. The VM through QMP (tools/vm/qmp.py); the Athlon
+through gremote at 10.0.0.125:7401 with autocheck's --type-into and
+--click, which is the only way to press Send on a machine with no QMP.
+Screenshots beside this file: ranges-athlon-20261013-{live,page1}.png and
+ranges-vm-20261013-live.png.
+
+WHAT THE SCREENSHOTS ALSO SHOW, and what no test caught: typing while
+paged back. Both machines return to the live end and show the user's
+message exactly once. On the first build they showed it in the window
+being read -- a record at index 124 drawn inside a window holding 0 to 89
+-- because the guest drew its own echo before the send. See the commit
+"the user's own message has one source, found on the guest".
