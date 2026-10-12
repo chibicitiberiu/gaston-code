@@ -241,3 +241,55 @@ def test_the_shipped_sheets_declare_the_version_the_code_expects():
         got = re.search(r"view-version:\s*(\d+)", repo_css(name))
         assert got, f"{name} carries no view-version marker"
         assert got.group(1) == want.group(1), name
+
+
+# --- the charset the two sides declare --------------------------------------
+
+
+def test_the_guest_and_the_bridge_name_the_same_charset_for_a_codepage():
+    """The <meta> must name the table the bytes were written with.
+
+    From stage 3 B4 the guest composes its own document and derives the name
+    from GetACP(); the bridge derives it from the codec it folds with. Two
+    derivations of one fact, in two languages, with nothing linking them --
+    and the failure is mojibake rather than an error, which is the kind
+    nobody reports as a bug because it looks like a font problem.
+
+    The CJK entries are the ones that matter: their IANA names are not their
+    numbers, and `windows-932` is not a charset any browser of the era
+    knows.
+    """
+    from bridge.files.caps import html_charset
+
+    src = open(os.path.join(HERE, "win", "app", "htmlview.cpp"),
+               encoding="utf-8").read()
+    body = re.search(r"static const char \*acp_charset\(\)\s*\{(.*?)\n\}",
+                     src, re.S)
+    assert body, "acp_charset moved; this test reads it by shape"
+
+    guest = dict(re.findall(r'case\s+(\d+):\s*return\s+"([^"]+)";',
+                            body.group(1)))
+    assert guest, "no cases matched"
+    for acp, name in guest.items():
+        assert html_charset(f"cp{acp}") == name, (acp, name)
+
+    # And the default arm, which is where cp1252 lands.
+    assert "windows-%u" in body.group(1)
+    assert html_charset("cp1252") == "windows-1252"
+
+
+def test_the_skeleton_the_guest_writes_holds_the_slots_it_looks_up():
+    """find_id returning NULL is not an error anywhere: every append then
+    goes nowhere and the transcript is blank forever, on a machine with no
+    console to say so. The bridge's skeleton was checked for this; the
+    guest's has to be too, and from B4 the guest's is the one that runs at
+    cold start."""
+    src = open(os.path.join(HERE, "win", "app", "htmlview.cpp"),
+               encoding="utf-8").read()
+    tail = re.search(r'static const char SKELETON_TAIL\[\] =(.*?);', src,
+                     re.S)
+    assert tail, "SKELETON_TAIL moved"
+    for macro in guest_slots():
+        assert macro in tail.group(1), (
+            f"{macro} is looked up by find_id but is not in the skeleton "
+            f"the guest writes")

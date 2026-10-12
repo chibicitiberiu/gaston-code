@@ -493,6 +493,59 @@ rc_html::~rc_html()
     delete d;
 }
 
+/* The document's skeleton, COMPILED IN while the stylesheet is a file.
+ *
+ * Not a template, and the asymmetry is deliberate rather than an oversight:
+ * the three slot ids are found at runtime by find_id, so they have to be
+ * known to C++ anyway, and a template whose keys the code must ALSO hold as
+ * constants is two sources for one fact. What a designer wants to change
+ * here is the style and the block markup, and both of those are files.
+ *
+ * #s is written by the GUEST and that is not a breach of "the guest
+ * transforms nothing": it renders no bridge content, it says what the app
+ * itself is doing. It is the one slot the old bridge-written skeleton made
+ * optional, BECAUSE "the bridge's DOC is authoritative and may be an older
+ * build than this guest" -- which is the whole argument this stage answers,
+ * and after C4 the sentence stops being true in the direction that made the
+ * slot optional. */
+static const char SKELETON_HEAD[] =
+    "<html><head><meta http-equiv=\"Content-Type\" "
+    "content=\"text/html; charset=";
+static const char SKELETON_MID[] = "\"><style>";
+static const char SKELETON_TAIL[] =
+    "</style></head><body><div id=\"" RC_SLOT_DONE "\"></div>"
+    "<div id=\"" RC_SLOT_LIVE "\"></div>"
+    "<div id=\"" RC_SLOT_STATUS "\"></div></body></html>";
+
+/* What to put in the <meta>, for THIS machine's ANSI codepage.
+ *
+ * Derived from GetACP() rather than sent: the charset must name the table
+ * the bytes were written with, and that is a fact about this machine. The
+ * bridge computes the same thing from the codec it folds with
+ * (bridge/files/caps.py html_charset) and the two must agree, which is what
+ * tests/python/meta/test_guest_css.py's charset case asserts.
+ *
+ * The CJK pages have conventional IANA names that browsers of the era
+ * recognise; their numeric spellings are not the web's. */
+static const char *acp_charset()
+{
+    switch (GetACP()) {
+    case 932: return "shift_jis";
+    case 936: return "gb2312";
+    case 949: return "euc-kr";
+    case 950: return "big5";
+    default:  break;
+    }
+    /* 1250..1258 are the Windows ANSI pages and take windows-NNNN. Anything
+     * else is accepted under its own number by every browser that can
+     * render it at all. */
+    {
+        static char buf[24];
+        rc_strf(buf, sizeof buf, "windows-%u", (unsigned)GetACP());
+        return buf;
+    }
+}
+
 int rc_html::boot_local()
 {
     char dir[MAX_PATH], path[MAX_PATH];
@@ -501,38 +554,64 @@ int rc_html::boot_local()
 
     GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
     { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
-    rc_strf(path, sizeof(path), "%s\\view.htm", dir);
+    rc_strf(path, sizeof(path), "%s\\view.css", dir);
 
+    /* THE STYLESHEET, not a finished document. Until stage 3 this read
+     * view.htm, which mktools-iso.sh GENERATED from bridge/view/html.py at
+     * package time -- so the appearance was the bridge's even in the file
+     * shipped beside the exe, and a guest could not change how the guest
+     * looks by rebuilding the guest. Now the client composes the document
+     * and the file holds only what a person would want to edit. */
     File f(fopen(path, "rb"));
     if (!f.valid()) {
-        rc_log("html: no cold-start document at %s", path);
+        rc_log("html: no stylesheet at %s", path);
         return 0;
     }
     fseek(f.get(), 0, SEEK_END);
     n = ftell(f.get());
     fseek(f.get(), 0, SEEK_SET);
-    /* A skeleton is a few KB. Anything far larger is not the file we ship,
-     * and reading it into a heap block on a 28KB-free machine is not worth
-     * finding out. */
+    /* A stylesheet is about 11KB. Anything far larger is not the file we
+     * ship, and reading it into a heap block on a 28KB-free machine is not
+     * worth finding out. */
     if (n > 0 && n < 64 * 1024) {
-        HeapPtr<char> buf((char *)HeapAlloc(GetProcessHeap(), 0,
-                                            (unsigned)n + 1));
-        if (buf.valid() &&
-            fread(buf.get(), 1, (size_t)n, f.get()) == (size_t)n) {
-            buf.get()[n] = '\0';
-            /* CLOSE BEFORE INSTALLING. set_document writes the document to
-             * this same path -- so calling it with the file still open means
-             * truncating and rewriting a file we are holding a FILE* to,
-             * with identical bytes, for no reason. It is pointless work and
-             * an unnecessary hazard on a platform whose sharing rules are
-             * not the ones anyone remembers. */
-            f.reset();
-            set_document(buf.get());
-            ok = 1;
-            rc_log("html: cold-start document installed (%ld bytes)", n);
+        const char *charset = acp_charset();
+        /* memcpy with lengths we already have, not strcpy: check-sources
+         * bans the str* family outright (win/core/str.h), and here the
+         * lengths are the thing being computed anyway. */
+        unsigned headN = (unsigned)strlen(SKELETON_HEAD);
+        unsigned csN   = (unsigned)strlen(charset);
+        unsigned midN  = (unsigned)strlen(SKELETON_MID);
+        unsigned tailN = (unsigned)strlen(SKELETON_TAIL);
+        unsigned total = (unsigned)n + headN + csN + midN + tailN + 1;
+        HeapPtr<char> buf((char *)HeapAlloc(GetProcessHeap(), 0, total));
+        if (buf.valid()) {
+            char *w = buf.get();
+            size_t got;
+            memcpy(w, SKELETON_HEAD, headN); w += headN;
+            memcpy(w, charset, csN);         w += csN;
+            memcpy(w, SKELETON_MID, midN);   w += midN;
+            got = fread(w, 1, (size_t)n, f.get());
+            if (got == (size_t)n) {
+                w += n;
+                memcpy(w, SKELETON_TAIL, tailN + 1);
+                /* CLOSE BEFORE INSTALLING. set_document writes view.htm
+                 * beside this file; holding a FILE* open across that is an
+                 * unnecessary hazard on a platform whose sharing rules are
+                 * not the ones anyone remembers. (It is no longer the SAME
+                 * file, as it was before stage 3 -- but closing early is
+                 * still right and is cheaper than reasoning about it.) */
+                f.reset();
+                set_document(buf.get());
+                ok = 1;
+                rc_log("html: document composed from %ld bytes of CSS, "
+                       "charset %s", n, charset);
+            } else {
+                rc_log("html: short read of %s (%u of %ld)", path,
+                       (unsigned)got, n);
+            }
         }
     } else {
-        rc_log("html: cold-start document is %ld bytes; ignored", n);
+        rc_log("html: stylesheet is %ld bytes; ignored", n);
     }
     /* Whatever path we leave by, the guard closes it. The explicit close
      * above is the one that must happen EARLY, not the one that must
