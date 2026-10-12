@@ -110,7 +110,7 @@ def main() -> int:
     if hello.headers.get("ops") != "1":
         print(f"this client does not declare ops=1 ({hello.headers})")
         return 2
-    conn.sendall(PR.ready("opsprobe", "none", 1, 1, 1).encode())
+    conn.sendall(PR.ready("opsprobe", "none").encode())
     time.sleep(2)
 
     def ask(frame: Frame) -> tuple[Frame, list[Frame]]:

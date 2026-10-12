@@ -8,6 +8,9 @@ version of work the user's edit displaced.
 """
 import logging
 import os
+import pathlib
+
+import conftest
 
 from bridge.agent.permissions import (
     _PATH_TOOLS,
@@ -18,7 +21,6 @@ from bridge.agent.permissions import (
     telling_argument,
 )
 from bridge.view.blocks import encode
-from bridge.view.htmlrender import render
 
 
 def test_reading_a_conflict_copy_is_allowed(tmp_path):
@@ -210,9 +212,9 @@ def test_an_input_call_is_described_step_by_step():
     card = render_request("mcp__machine__input", args, _NoCtx())
     steps = [t for tag, t in card.payload if tag == "s"]
     assert steps and any("close Notepad" in s for s in steps)
-    # And that the steps still become a list on screen, which is what the
-    # <ol> assertion was really about and what C2 must keep byte-identical.
-    assert "<ol>" in render(card)
+    # The steps become a list on screen because `s` lines are what the
+    # permsteps template wraps; that is the client's half and
+    # tests/python/meta/test_block_vocab.py is where it is checked.
 
 
 def test_a_move_names_both_ends_and_a_launch_its_command():
@@ -371,12 +373,16 @@ def test_the_card_heads_the_client_holds_match_the_ones_the_bridge_worded():
     After C2 the client's copy is win/resources/view.tpl and this test
     compares the bridge's wording against that file instead.
     """
-    from bridge.agent import prompts
-    from bridge.view.htmlrender import _PERM_HEAD
+    import re
 
-    assert prompts.text("policy.view.head") in _PERM_HEAD["view"]
-    assert "Permission required" in _PERM_HEAD["ask"]
-    assert "Answered" in _PERM_HEAD["ask"]
+    from bridge.agent import prompts
+
+    tpl = pathlib.Path(conftest.REPO, "win", "resources",
+                       "view.tpl").read_text(encoding="utf-8")
+    heads = dict(re.findall(r"^(permhead_\w+)\s*=\s*(.*)$", tpl, re.M))
+    assert prompts.text("policy.view.head") in heads["permhead_view"]
+    assert "Permission required" in heads["permhead_ask"]
+    assert "Answered" in heads["permhead_ask"]
 
 
 def test_a_rules_view_is_the_same_kind_as_a_request_and_is_not_settleable():
@@ -390,8 +396,10 @@ def test_a_rules_view_is_the_same_kind_as_a_request_and_is_not_settleable():
     card = rules_view(policy.preset("manual"), None, guest_root="C:\\WORK")
     assert card.kind == "permission"
     assert card.attrs["settleable"] == 0
-    assert 'id="perm"' not in render(card)
 
     ask = render_request("Grep", {"pattern": "*.log"}, _NoCtx())
     assert ask.attrs["settleable"] == 1
-    assert 'id="perm"' in render(ask)
+    # `settleable` IS the id, one step removed: win/resources/view.tpl has
+    # `perm` and `perm_plain`, and the client picks between them on this
+    # attribute. The assertion was on the rendered id until stage 3b
+    # deleted the bridge's renderer; the bridge's half is the flag.

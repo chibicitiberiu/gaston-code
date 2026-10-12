@@ -227,7 +227,7 @@ def main() -> int:
     if caps["automation"] != "2":
         print("this client does not run step lists (automation != 2)")
         return 2
-    conn.sendall(PR.ready("inputprobe", "none", 1, 1, 1).encode())
+    conn.sendall(PR.ready("inputprobe", "none").encode())
     time.sleep(3)
 
     only = set(filter(None, a.only.split(",")))

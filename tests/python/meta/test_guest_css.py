@@ -52,17 +52,24 @@ def test_every_class_the_guest_emits_is_in_its_stylesheet():
 
 
 def test_the_guest_and_the_bridge_agree_on_what_each_class_means():
-    """Not just that the name exists, but that both sides use it for the same
-    kind of block -- otherwise an error would render as a notice."""
+    """Not just that the name exists, but that the kind of block the bridge
+    makes and the template the client draws it with carry the same class --
+    otherwise an error would render as a notice.
+
+    THE TEMPLATE, not a rendered sample. This went through the bridge's own
+    renderer until stage 3b deleted it, which is what the comment here
+    predicted. The kinds come from the constructors, so the bridge's half is
+    still asserted; the class comes from view.tpl, which is where it lives.
+    """
     names = guest_classes()
-    # Through the renderer, because the constructors return structure now and
-    # the class name is the renderer's business. Stage 3 A7; at C2 the
-    # renderer is the guest's and this half of the test becomes a check
-    # against view.tpl instead.
-    from bridge.view.htmlrender import render
-    assert names["RC_CSS_NOTICE"] in render(H.notice("x"))
-    assert names["RC_CSS_ERROR"] in render(H.error("x"))
-    assert names["RC_CSS_USER"] in render(H.user_turn("x"))
+    tpl = open(os.path.join(HERE, "win", "resources", "view.tpl"),
+               encoding="utf-8").read()
+    keys = dict(re.findall(r"^(\w+)\s*=\s*(.*)$", tpl, re.M))
+    for const, kind, block in (("RC_CSS_NOTICE", "notice", H.notice("x")),
+                               ("RC_CSS_ERROR", "error", H.error("x")),
+                               ("RC_CSS_USER", "user", H.user_turn("x"))):
+        assert block.kind == kind, (const, block.kind)
+        assert names[const] in keys[kind], (const, keys.get(kind))
 
 
 def guest_slots() -> dict:
@@ -122,47 +129,29 @@ def test_the_two_slots_are_distinct():
 # there was no literal for anything to grep and no macro for anything to
 # sweep. Found while planning stage 3, fixed in A10.
 #
-# After C2 the renderer is the guest's and this reads win/resources/view.tpl
-# instead of htmlrender.py. The assertion does not change.
+# The renderer is the guest's since stage 3 C2 and the bridge's copy was
+# deleted in 3b, so both halves of this file read win/resources/view.tpl
+# now. The assertions did not change, which was the point.
 
 def rendered_classes() -> set:
-    """Every class the renderer can put in the document."""
-    from bridge.view import blocks as B
-    from bridge.view.htmlrender import _PERM_HEAD, render
+    """Every class the renderer can put in the document.
 
-    samples = [
-        B.Block("para", {}, [("t", "x")]),
-        B.Block("code", {}, [("l", "c"), ("t", "x")]),
-        B.Block("heading", {"level": 3}, [("t", "x")]),
-        B.Block("bullet", {}, [("t", "x")]),
-        B.Block("numbered", {}, [("t", "x")]),
-        B.Block("quote", {}, [("t", "x")]),
-        B.Block("rule"),
-        B.Block("table", {"header": 1}, [("r", ""), ("c", "x")]),
-        B.Block("user", {}, [("t", "x")]),
-        B.Block("notice", {}, [("t", "x")]),
-        B.Block("error", {}, [("t", "x")]),
-        B.Block("tool", {}, [("n", "e"), ("t", "x")]),
-        B.Block("toolresult", {"error": 0, "clipped": 3}, [("t", "x")]),
-        B.Block("toolresult", {"error": 1}, [("t", "x")]),
-        B.Block("thinking", {}, [("t", "x")]),
-        B.Block("clip", {"dropped": 3}),
-        B.Block("exportheading", {}, [("h", "t"), ("t", "w")]),
-    ] + [B.Block("permission", {"settleable": s},
-                 [("h", h), ("b", "x"), ("d", "y"), ("w", "z"), ("p", "p"),
-                  ("t", "t"), ("s", "s"), ("k", "k"), ("v", "v")])
-         for s, h in ((1, "ask"), (0, "view"))]
-
-    assert {b.kind for b in samples} == set(B.KINDS), (
-        "a kind with no sample here is a kind whose classes nothing checks")
-
+    FROM win/resources/view.tpl, which is where the markup lives since
+    stage 3. It was built by rendering one sample block per kind through
+    the bridge's emitter and scraping the result -- and stage 3b deleted
+    that emitter, which this file's comment above predicted. The assertion
+    did not change: the templates ARE what the renderer emits, so reading
+    them is nearer the truth than rendering a sample of them was.
+    """
+    tpl = open(os.path.join(HERE, "win", "resources", "view.tpl"),
+               encoding="utf-8").read()
     out = set()
-    for b in samples:
-        for m in re.findall(r'class="([^"]+)"', render(b)):
+    for line in tpl.splitlines():
+        if line.startswith((";", "#")) or "=" not in line:
+            continue
+        for m in re.findall(r'class="([^"]+)"', line.split("=", 1)[1]):
             out.update(m.split())
-    for head in _PERM_HEAD.values():
-        for m in re.findall(r'class="([^"]+)"', head):
-            out.update(m.split())
+    assert out, "no classes found in view.tpl; this test reads it by shape"
     return out
 
 

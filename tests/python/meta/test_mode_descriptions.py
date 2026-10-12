@@ -35,21 +35,19 @@ def test_every_mode_decides_every_category(mode_id):
 
 @pytest.mark.parametrize("mode_id", server.MODE_ORDER)
 def test_the_rules_view_names_the_mode_and_every_category(mode_id):
-    from bridge.view.htmlrender import render
-
     m = policy.preset(mode_id)
     block = perms.rules_view(m, None, guest_root="C:\\WORK")
-    # Both halves, deliberately. The payload is what a second client gets
-    # and is where the words have to be; the rendered form is what C2 has to
-    # keep byte-identical, and only it can catch an empty dash.
+    # THE PAYLOAD, which is the whole of the bridge's half. This also
+    # asserted on rendered HTML until stage 3b deleted the bridge's
+    # emitter -- and the thing that assertion was really protecting, that
+    # a category with no description does not render as a bare dash, is a
+    # property of the words. An empty description is an empty payload
+    # line, which is checkable here and on any client.
     payload = [t for _, t in block.payload]
     assert m.label in payload
-    html = render(block)
-    assert m.label in html
-    assert "&mdash; </p>" not in html
+    assert "" not in payload, "an empty line renders as a bare dash"
     for cat in K.CATS:
         assert server_text(f"policy.cat.{cat}") in payload
-        assert server_text(f"policy.cat.{cat}") in html
 
 
 def server_text(key):

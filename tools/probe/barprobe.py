@@ -36,8 +36,8 @@ import toolkit
 
 toolkit.on_path()
 
+from bridge.view import blocks as B  # noqa: E402
 from bridge.view import html as H  # noqa: E402
-from bridge.view.htmlrender import render  # noqa: E402
 from bridge.wire import protocol as PR  # noqa: E402
 from bridge.wire.compress import ENC_RAW  # noqa: E402
 from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
@@ -100,12 +100,14 @@ def main() -> int:
     print(f"guest connected, mem_kb={hello.headers.get('mem_kb')}")
 
     # No DOC: stage 3 C4 deleted the frame (see viewprobe).
-    conn.sendall(PR.ready("barprobe", "none", 1, 1, 1).encode())
+    conn.sendall(PR.ready("barprobe", "none").encode())
     conn.sendall(Frame("OPTIONSEND", {}).encode())
-    conn.sendall(PR.text_frame("append", ENC_RAW, 1,
-                               render(H.notice("barprobe: driving the bar "
-                                               "states"))
-                               .encode("cp1252", "replace")).encode())
+    # RECORDS, not markup. The probe sent rendered HTML through the bridge's
+    # emitter until stage 3b deleted it; the client renders now, which is
+    # what the probe is there to look at.
+    conn.sendall(PR.text_frame(
+        "append", ENC_RAW,
+        B.encode(H.notice("barprobe: driving the bar states"))).encode())
     time.sleep(1.5)
 
     for i, (name, what, frames) in enumerate(STEPS, 1):

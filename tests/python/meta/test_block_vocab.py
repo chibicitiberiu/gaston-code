@@ -1,7 +1,6 @@
 """The block vocabulary is a contract between four files in three languages.
 
     bridge/view/blocks.py        KINDS and ATTRS -- what may be sent
-    bridge/view/htmlrender.py    _RENDER -- what the oracle draws
     win/view/render.cpp          KINDS[] -- what the guest draws
     win/resources/view.tpl       the markup each one uses
 
@@ -24,7 +23,6 @@ import re
 import conftest
 
 from bridge.view import blocks as B
-from bridge.view.htmlrender import _RENDER
 
 RENDER_CPP = os.path.join(conftest.REPO, "win", "view", "render.cpp")
 TEMPLATES_CPP = os.path.join(conftest.REPO, "win", "view", "templates.cpp")
@@ -100,12 +98,6 @@ def tpl_file_keys() -> list:
 
 def test_both_renderers_know_the_same_kinds():
     assert set(B.KINDS) == guest_kinds()
-
-
-def test_the_oracle_knows_the_same_kinds():
-    """htmlrender is what B2 compares the guest against, so a kind it
-    cannot draw is a kind the proof cannot cover."""
-    assert set(B.KINDS) == set(_RENDER)
 
 
 def test_the_count_is_asserted_so_a_dropped_kind_fails_loudly():

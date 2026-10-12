@@ -8,17 +8,16 @@ add a notice has always been to write the `<div>` by hand, which is exactly
 how `.thinking` came to be emitted for the whole life of the feature with no
 rule anywhere.
 
-So: no file under `bridge/` may contain a markup literal, with one
-allowlisted exception.
+So: no file under `bridge/` may contain a markup literal. NO EXCEPTIONS,
+since stage 3b.
 
-WHY `htmlrender.py` IS ALLOWED, and why that is temporary. It is the ORACLE.
-`tests/python/guest/test_render_equivalence.py` feeds the same records to it
-and to the guest's renderer under Wine and compares byte for byte, which is
-what turns "the guest emits the same HTML MSHTML gets today" from an
-intention into a fact. Deleting it in this stage would mean trusting a new
-renderer on a platform that cannot be debugged, with no second opinion. It
-goes with pagination (stage 3b), and this allowlist goes with it -- at which
-point the equality proof becomes a checked-in fixture instead.
+There was one, for the whole of stage 3: `view/htmlrender.py`, the oracle
+that `tests/python/guest/test_render_equivalence.py` compared the guest's
+renderer against, byte for byte. Deleting it in that stage would have meant
+trusting a new renderer on a platform that cannot be debugged, with no
+second opinion. Stage 3b recorded the last passing comparison as a
+checked-in fixture and deleted the oracle, and the allowlist went with it --
+so this test now says what `ROADMAP.md` always claimed, without a footnote.
 
 WHAT THIS TEST CANNOT SEE, said plainly rather than implied, because a guard
 that is trusted beyond its reach is worse than none:
@@ -46,9 +45,6 @@ import conftest
 import pytest
 
 ROOT = pathlib.Path(conftest.REPO) / "bridge"
-
-#: The oracle. See the module docstring.
-ALLOW = {"view/htmlrender.py"}
 
 #: Directories that are not the bridge's own code. `devtools` holds fakegui,
 #: which is a CLIENT -- it is allowed markup for the same reason the Windows
@@ -117,8 +113,6 @@ def markup_literals(path: pathlib.Path) -> list:
 @pytest.mark.parametrize("path,rel", list(sources()),
                          ids=lambda x: x if isinstance(x, str) else "")
 def test_no_file_on_the_bridge_holds_markup(path, rel):
-    if rel in ALLOW:
-        pytest.skip(f"{rel} is the oracle; see the module docstring")
     found = markup_literals(path)
     assert not found, (
         f"{rel} holds markup: {found[:5]}. The bridge sends RECORDS -- what a "
@@ -126,23 +120,6 @@ def test_no_file_on_the_bridge_holds_markup(path, rel):
         f"client cannot be written without touching this file while that "
         f"literal is in it. If the text genuinely is not markup, widen the "
         f"pattern's exclusion in this file and say why.")
-
-
-def test_the_allowlist_is_not_empty_and_not_growing():
-    """One entry, and it is the oracle. The number is asserted so that
-    allowlisting a second file is a decision somebody has to write down
-    rather than a line in a diff."""
-    assert ALLOW == {"view/htmlrender.py"}
-
-
-def test_the_allowlisted_file_really_does_hold_markup():
-    """Otherwise the allowlist is stale and nobody would know -- which is
-    the state it SHOULD reach, when pagination deletes the oracle. This
-    failing is the reminder to delete the entry."""
-    found = markup_literals(ROOT / "view" / "htmlrender.py")
-    assert found, (
-        "htmlrender.py no longer holds markup, so the allowlist entry is "
-        "stale -- delete it, and this test with it")
 
 
 def test_the_guard_can_actually_fail():

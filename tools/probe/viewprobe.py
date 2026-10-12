@@ -241,7 +241,7 @@ def main() -> int:
     # No DOC: stage 3 C4 deleted the frame. The client composes its own
     # document from win/resources/view.css before it connects, so there is
     # nothing for a bridge -- or a stub -- to send it.
-    send(PR.ready("viewprobe", "none", 1, 1, 1))
+    send(PR.ready("viewprobe", "none"))
     send(Frame("OPTIONSEND", {}))
 
     if a.replay_fence:
@@ -283,7 +283,7 @@ def main() -> int:
     sent_records = []
     for name, block in checks:
         sent_records.append(B.encode(block))
-        send(PR.text_frame("append", ENC_RAW, 1, B.encode(block)))
+        send(PR.text_frame("append", ENC_RAW, B.encode(block)))
         print(f"  sent {name}")
         time.sleep(0.2)
 
@@ -297,7 +297,7 @@ def main() -> int:
          ("k", "path"), ("v", "C:\\TEMP\\OLD"),
          ("k", "permanent"), ("v", "yes")]))
     sent_records.append(perm)
-    send(PR.text_frame("append", ENC_RAW, 1, perm))
+    send(PR.text_frame("append", ENC_RAW, perm))
     print("  sent permission card")
     time.sleep(0.2)
 
@@ -305,7 +305,7 @@ def main() -> int:
         "if you can read every line above, the MSHTML host, the view class "
         "and the record renderer all work"))
     sent_records.append(last)
-    send(PR.text_frame("append", ENC_RAW, 1, last))
+    send(PR.text_frame("append", ENC_RAW, last))
 
     print(f"\nall frames sent. holding the link for {a.hold:.0f}s -- "
           f"look at the guest window now.")

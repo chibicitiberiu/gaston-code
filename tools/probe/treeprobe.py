@@ -64,7 +64,7 @@ def main() -> int:
     if hello.headers.get("ops") != "2":
         print(f"this client does not declare ops=2 ({hello.headers.get('ops')})")
         return 2
-    conn.sendall(PR.ready("treeprobe", "none", 1, 1, 1).encode())
+    conn.sendall(PR.ready("treeprobe", "none").encode())
     time.sleep(2)
     seq = [800]
 

@@ -1,10 +1,13 @@
 """What the model said, as structure. No markup anywhere in this file.
 
 This is the half of the old `html.py` that stage 3 keeps on the bridge. The
-split is along one line: **this decides what a thing IS, and `htmlrender.py`
-decides what it looks like.** A heading is a heading here and an `<h3>` there;
-a fenced block is `code` here and a `<pre>` inside a `<div class="codewrap">`
-there. Nothing in this module knows an element name, a class name or an escape.
+split is along one line: **this decides what a thing IS, and the client
+decides what it looks like.** A heading is a heading here and an `<h3>` in
+win/resources/view.tpl; a fenced block is `code` here and a `<pre>` inside a
+`<div class="codewrap">` there. Nothing in this module knows an element name,
+a class name or an escape. (The other half was `htmlrender.py`, kept through
+stage 3 as the oracle the guest's renderer was proved against and deleted in
+3b once that proof was recorded as a fixture.)
 
 WHY THE PARSE STAYS. It is the larger half -- the fence state that has to
 survive a feed boundary, the underscore lookarounds, the code-inside-bold

@@ -2262,16 +2262,15 @@ def test_a_tool_result_is_clipped_for_the_screen_not_the_model():
     person on a 640x480 screen with 32MB does not need it, and the guest
     should not spend memory holding it."""
     from bridge.view import html as H
-    from bridge.view.htmlrender import render
     block = H.tool_result("x" * 50_000)
-    # The count is an attribute now rather than a sentence, which is the
-    # point of the move: the bridge says how much it dropped and the client
-    # words it. Both halves are checked, because C2 has to keep the wording
-    # byte-identical and only the rendered form can say so.
+    # AN ATTRIBUTE, not a sentence, which is the point of the move: the
+    # bridge says how much it dropped and the client words it. The wording
+    # lives in win/resources/view.tpl's `clip` key and is checked there;
+    # what the bridge owes is the number and a payload that was actually
+    # cut.
     assert block.attrs["clipped"] == 50_000 - H._TOOL_RESULT_MAX
-    out = render(block)
-    assert len(out) < 4000
-    assert "more characters were sent to the model" in out
+    body = "".join(t for _, t in block.payload)
+    assert len(body) == H._TOOL_RESULT_MAX
 
 
 def test_an_empty_tool_result_still_says_something():

@@ -54,7 +54,7 @@ def main() -> int:
         for f in reader.feed(conn.recv(65536)):
             if f.type == "HELLO":
                 hello = f
-    conn.sendall(PR.ready("itemsprobe", "none", 1, 1, 1).encode())
+    conn.sendall(PR.ready("itemsprobe", "none").encode())
     # Close what an earlier run left, so "the" Explorer window is one.
     for _ in range(3):
         c = S.compile_steps([{"close": "ExploreWClass:nth(1)"}])
