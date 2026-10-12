@@ -3,8 +3,9 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 3b — pagination.**
-Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12. Phase 5 (Attach) shipped; 5.1 is
+**Current goal: `ROADMAP.md` stage 3c — several guest machines.**
+Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12, stage 3b on
+2026-10-13. Phase 5 (Attach) shipped; 5.1 is
 below, and 5.2/5.3 went in without a write-up of their own. Phase 6 is
 part-built: `ui`, `input`, `shot`, `focus`, `launch`, `ps`, `kill` and the
 clipboard pair are live and measured on real hardware, while `ocr` and the
@@ -4393,6 +4394,107 @@ rendered in MSHTML and the wire reporting 2.43:1. That turn is also the proof
 for the GUID commit -- every one of the thirteen is exercised by that window
 existing. On the Athlon: self_update, uilaneprobe 15/15, clipprobe 8/8, and
 MSAA returning real roles from the box's own oleacc.
+
+---
+
+## Stage 3b -- pagination: the bridge stops dividing the transcript (2026-10-13)
+
+`ROADMAP.md` stage 3b, planned in `docs/stage3b-plan.md`. Ten commits,
+`786a911..94e1835`.
+
+| | before | after |
+|---|---|---|
+| `bridge/view/pages.py` | 272 lines | **71** |
+| `bridge/view/htmlrender.py` | 410 lines | **gone** |
+| the four page frames | `GETPAGE`/`PAGESTART`/`PAGEEND`/`PAGESEALED` | `GETBLOCKS`/`RANGE`/`RANGEEND`/`GREW` |
+| HELLO keys | 39 | **39** |
+| `gaston.exe` | 495,865 | **496,377** of 498,425 |
+| `make test-fast` | 4,352 | 4,287 |
+| `make wine-smoke` | 460 | 461 |
+
+**What moved.** The client decides how much of a conversation it can hold,
+from its own memory and its own page-size setting, and asks for exactly that
+by `offset` and `limit`. The bridge keeps a list and serves a slice of it.
+`limits_for` and `prefs.scaled` are `rc_page_blocks` in `win/net/net.cpp`
+now, and they are not declared at the handshake either -- an earlier draft
+sent the answer as a HELLO key so the bridge could push a window after a
+switch, and taking that out is what left the bridge with no page-size number
+anywhere.
+
+### The stage was replanned in the middle of itself
+
+Five commits in, the plan it was being built against turned out to be too
+thin -- written from `ROADMAP.md`'s three sentences, with the design being
+arrived at while it was written. One adversarial review round against the
+code found **27 defects, three of which killed a decision**:
+
+- **Deleting the PREFS `view.page` key would have refused every
+  connection.** `prefs.py`'s key chain ends in `raise PrefsError` and on the
+  HELLO path that is fatal; the client sends the key unconditionally. A
+  PREFS key can stop being read and can never be removed. It would have
+  locked out every guest not reflashed in lockstep, permanently.
+- **The guest's ask after `SWITCHED` would have hung off `m_chats`**, which
+  is allowed to be NULL -- costing the whole transcript after every switch
+  rather than a page total, on exactly the machine already short of handles.
+- **`SWITCHED` is not only an attach frame.** `resume_pending` sends one on
+  the first message of a new conversation, before the turn lock, so an
+  unconditional ask would have answered with a `RANGE` -- which runs
+  `turnDone()` and `clear()` -- in the middle of a streaming turn.
+
+### Bugs found on the way, in the shipping code
+
+- **The user's own message had two sources**, and paging back on the real
+  machine is what showed it. The guest drew the echo itself before the send,
+  so it landed in whatever window was on screen -- including one the reader
+  had paged back to, where that record does not belong and where the bridge,
+  having recorded it at the end, would never put it. The bridge streams the
+  user turn now and the guest draws nothing. Audit **01.29** closes with it:
+  `user_turn` strips before escaping and the guest's escaper did not, so a
+  trailing blank line rendered one line taller in the local copy than in the
+  one shown after paging back. One escaper now.
+- **The window delivery raced block appends**, and the first attempt at the
+  lock was in the wrong place: reading the records and setting the live flag
+  outside it left a gap where a block was both absent from the window being
+  built and streamed as live -- and `RANGE` begins with a `clear()`, so it
+  was wiped by the window that did not contain it.
+- **`rendercheck` was never in the root Makefile's `guest-checks`**, for the
+  whole of stage 3 -- the stage whose renderer `test_guest_render.py` and
+  `test_render_equivalence.py` are the only proof of. `make clean && make
+  wine-smoke` would have failed all 69 at once. It built on every machine
+  that had run `make -C win all`, which is every machine the stage was
+  developed on. The list is hand-maintained and there is no gate on the gate.
+- **`session.py` called `over_soft_cap()` with no arguments**, so the
+  history replay sealed against the module defaults instead of the guest's
+  own caps -- a 128MB client's replay cut at a 32MB client's page size.
+  Deleted rather than fixed, with the rest of the paginator.
+- **`scenario_07_conversation_switch` was a dead golden**: it sent
+  `Frame("NEW", {})` against a dispatch table that says `NEWSESSION`, so the
+  one scenario covering a conversation switch had been asserting a lone
+  `unknown_type` ERROR. It covers the new switch flow now.
+
+### The oracle, and what replaced it
+
+`bridge/view/htmlrender.py` was the last markup on the bridge and the one
+allowlisted exception to stage 3's exit condition. The equality proof that
+justified keeping it is now a checked-in fixture --
+`tests/goldens/render/guest_render.json`, 46 cases, 71,943 bytes of expected
+HTML, generated from the oracle's last passing run before it was deleted.
+
+**A fixture is weaker than a proof and the file says so.** It pins the
+renderer to what it did on 2026-10-13; it cannot catch a renderer and an
+oracle drifting together, because there is no oracle. It deliberately does
+not use the frame goldens' update mechanism, which writes a *missing* file
+silently -- for this fixture that would re-bless a deleted file from the
+renderer it exists to pin, and the test would go green having proved
+nothing. `test_no_markup_on_the_bridge.py` has no allowlist now.
+
+### Verified
+
+Wine: the whole Python suite, `rendercheck`, the fixture. On the QEMU guest:
+a 120-block answer that paged by itself to 2/2 as it filled, paging back to
+1/2 and finding it ended exactly at the 90th record, a reconnect that
+restored the whole conversation through `GETBLOCKS`, and typing from a
+history window -- which is what found the echo bug and then proved it fixed.
 
 ---
 

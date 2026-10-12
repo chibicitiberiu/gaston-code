@@ -2820,10 +2820,41 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 
 ---
 
+## 32. ANCHOR went, and a block index is the shape it would come back in
+
+**Status:** recorded 2026-10-13, stage 3b. Not a defect; a feature deleted
+with its mechanism, written down so deleting it is a decision somebody can
+find rather than a gap somebody rediscovers.
+
+`anchor_frame(page, off, preview)` told the guest where a user turn landed,
+as a page number plus a byte offset *within that page*, "so the guest can
+jump back to it from history". The guest's handler wrote one `rc_log` line
+and nothing in `win/` ever read it.
+
+An anchor keyed on a page has no meaning once the client picks the page, and
+stage 3b was the stage removing pages -- rebuilding it there would have been
+adding a feature in the commit that removed one. So it went whole: the frame,
+`Anchor`, `Paginator.mark_user_turn` and `.anchors`, the turn runner's send
+(which fired on every turn, before the echo), `PresentationService.mark_user_turn`,
+fakegui's handler, the guest's handler and its dispatch row, and
+`golden_utils`' preview mask.
+
+**What it would cost to bring back.** A block INDEX, which is what the
+transcript is addressed by now: the bridge knows the index as `Transcript.add`
+returns it, and the guest can ask for the window containing it with the
+arithmetic the page bar already does (`index / per_page + 1`). One frame, one
+header, and a guest-side list of them -- which is the part that never existed:
+there was no UI for jumping to an anchor, which is why nothing read the frame.
+Build the UI first, or it is a wire feature with no consumer again.
+
 ## 31. The bridge renders the markup, so the wire is IE4/5-shaped
 
 **Status:** CLOSED 2026-10-12, stage 3, in twenty-seven commits.
 `docs/stage3-plan.md` is the plan and `docs/ROADMAP.md` stage 3 the outcome.
+**Finished 2026-10-13 by stage 3b**, which deleted `bridge/view/htmlrender.py`
+-- the oracle that stage 3 kept as its one allowlisted exception. There is no
+markup under `bridge/` at all now, and `test_no_markup_on_the_bridge.py` has
+no allowlist to explain.
 
 The wire carries records -- `<kind> [attr=value]*`, tagged payload lines, a
 dot -- in the frame body; frame headers did not change. The guest renders

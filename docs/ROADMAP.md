@@ -33,7 +33,7 @@ in stage 1 for that reason.
 | 1 | Fruit, the decisions that gate stage 3, and the injection harness — **DONE 2026-10-11** | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
 | 2 | Size: the flag decision and the gremote trim — **DONE 2026-10-11** | a measured before/after, and room in the caps for stage 3 |
 | 3 | The markup moves to the client — **DONE 2026-10-12** | a second client could be written without touching the bridge |
-| 3b | Pagination: the bridge stops dividing the transcript | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
+| 3b | Pagination: the bridge stops dividing the transcript — **DONE 2026-10-13** | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
 | 3c | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
@@ -297,31 +297,60 @@ measured rather than reasoned about.
 
 ---
 
-## Stage 3b — pagination: the bridge stops dividing the transcript
+## Stage 3b — pagination: the bridge stops dividing the transcript — DONE 2026-10-13
 
-Everything `pages.py` does exists to cut a stream of HTML into MSHTML-sized
-chunks at boundaries safe for MSHTML. After stage 3 every boundary is safe --
-a record is indivisible -- and the client picks the size, so nearly all of it
-is deletion: `Page`, `_seal`, `continued` (already always false), `MAX_BYTES`,
-`MAX_LINES`, `HARD_*`, the three `over_*` predicates, `message_boundary`,
-`limits_for`, `PAGESEALED`, the four page frames, `pagebar.cpp`'s arithmetic
-and the anchors. `pages.py` is 272 lines today and should end around 90 as an
-append-only `Transcript`.
+Planned in `docs/stage3b-plan.md`, which was replanned mid-stage after an
+adversarial review round found 27 defects in its first draft, three of which
+killed a decision. Ten commits, `786a911..94e1835`.
 
-What replaces it is the thing stage 3 made possible and deliberately did not
-build: **the guest asks for blocks by range.** `offset` and `limit`, nothing
-else -- the server has no opinion about what a page is, which is the whole
-point of the client declaring its own caps.
+**The exit condition, which is now what the code does:** the guest asks for
+blocks by range, and `pages.py` is an append-only transcript.
 
-Two things stage 3 was forced into that belong here:
+| | before | after |
+|---|---|---|
+| `bridge/view/pages.py` | 272 lines | **71** |
+| `bridge/view/htmlrender.py` | 410 lines | **gone** — the last markup on the bridge |
+| page frames | `GETPAGE`, `PAGESTART`, `PAGEEND`, `PAGESEALED` | `GETBLOCKS`, `RANGE`, `RANGEEND`, `GREW` |
+| `TEXT` headers | `mode`, `enc`, `page` (+ dead `total`/`off`) | `mode`, `enc`, `total` |
+| HELLO keys | 39 | **39** — the bridge needed none |
+| `gaston.exe` | 495,865 | 496,377 of 498,425 |
+| `PROTO_VERSION` | 2 | 3 |
 
-- `link.py` keeps a chunk loop for the export and nothing else.
-- The bridge's emitter (`bridge/view/htmlrender.py`) and the `HtmlStream`
-  shim die here, with the allowlist entry in
-  `test_no_markup_on_the_bridge.py` and the two tests that guard it. The
-  equality proof becomes a checked-in fixture at the same moment, which is
-  what keeps the guest's renderer pinned once the thing it was compared
-  against is gone.
+**What the bridge knows about a page now: nothing.** The client computes how
+many records it can hold from its own memory and its own Small/Normal/Large
+setting (`win/net/net.cpp` `rc_page_blocks`, which is `limits_for` and
+`prefs.scaled` moved across), puts that number in every `GETBLOCKS` as
+`limit`, and `offset=live` aligns to the grid that limit implies. A first
+draft of the stage declared the number as a HELLO key so the bridge could
+push a window after a conversation switch; removing it and making the guest
+ask is what makes the exit condition literally true.
+
+### What is worth knowing afterwards
+
+- **A PREFS key can stop being read. It can never be removed.** `prefs.py`'s
+  key chain ends in `raise PrefsError`, and on the HELLO path that is fatal.
+  The client sends `view.page` unconditionally, so deleting the branch would
+  have refused every connection from any guest not reflashed in lockstep --
+  permanently, for a setting the bridge no longer uses. Found by review,
+  before it shipped.
+- **The guest's own echo of the user's message was a second source**, and
+  paging back on the real machine is what showed it: the echo landed in the
+  window being read, where the record does not belong and where the bridge
+  would never put it. The bridge streams the user turn now, the guest draws
+  nothing, and audit 01.29 -- the two escapers that disagreed about a
+  trailing blank line -- closes with it.
+- **The window delivery races block appends**, and the first lock was in the
+  wrong place: reading the records and setting the live flag outside it left
+  a gap where a block was absent from the window being built and streamed as
+  live, and `RANGE` begins with a `clear()`.
+- **`rendercheck` was never in `guest-checks`** for the whole of stage 3 --
+  the stage whose renderer those 69 tests are the only proof of. It built on
+  any machine that had run `make -C win all`, so nobody saw it.
+- **The equality proof is a checked-in fixture now**
+  (`tests/goldens/render/guest_render.json`, 46 cases, 71,943 bytes),
+  generated from the oracle's last passing run. A fixture is weaker than a
+  proof and the file says so: it pins the renderer to what it did, and there
+  is no second renderer left to disagree with it.
 
 ---
 
