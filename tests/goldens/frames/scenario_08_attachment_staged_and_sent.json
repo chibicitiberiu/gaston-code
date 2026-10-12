@@ -21,46 +21,38 @@
     "type": "ATTGET"
   },
   {
-    "body": "<p>echo: [Attached file: SAMPLE.TXT]<br>Contents of SAMPLE.TXT:</p>",
+    "body": "para\nt echo: [Attached file: SAMPLE.TXT]\nt Contents of SAMPLE.TXT:\n.\n",
     "headers": {
       "enc": "deflate",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "67"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<div class=\"codewrap\"><pre>Hello from Windows 98\n</pre></div>",
+    "body": "code\nt Hello from Windows 98\nt\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "61"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<p>Inspect this file</p>",
+    "body": "para\nt Inspect this file\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "live",
-      "off": "0",
-      "page": "1",
-      "total": "24"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<p>Inspect this file</p>",
+    "body": "para\nt Inspect this file\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "24"
+      "page": "1"
     },
     "type": "TEXT"
   },

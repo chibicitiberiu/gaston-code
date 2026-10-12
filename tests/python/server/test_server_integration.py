@@ -30,6 +30,17 @@ from harness import (  # noqa: F401
 from bridge import server as srv
 from bridge.files import paths
 from bridge.server import Bridge
+from bridge.view import blocks
+
+
+def _rec(text: str) -> bytes:
+    """One paragraph record, for the tests that drive the paginator
+    directly. Split on newlines, because a payload line cannot contain the
+    separator that ends it."""
+    return blocks.encode(
+        blocks.Block("para", {}, [("t", ln) for ln in text.split("\n")]))
+
+
 from bridge.wire.protocol import (
     MAX_FRAME,
     PROTO_VERSION,
@@ -276,7 +287,7 @@ async def test_pagination_round_trip(harness):
     # persuading a model to emit 600 lines.
     guest = harness.bridge.connection.guest
     for i in range(600):
-        guest.view.pages.add("plain", f"line {i:04d} padding padding padding\n")
+        guest.view.pages.add(_rec(f"line {i:04d} padding padding padding\n"))
         if i % 100 == 0:
             guest.view.pages.message_boundary()
     total = guest.view.pages.count
@@ -303,7 +314,7 @@ async def test_getpage_live_returns_to_following(harness):
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
     for i in range(400):
-        guest.view.pages.add("plain", f"line {i}\n")
+        guest.view.pages.add(_rec(f"line {i}\n"))
         if i % 100 == 0:
             guest.view.pages.message_boundary()
 
@@ -334,7 +345,7 @@ async def test_history_mode_suppresses_live_streaming(harness):
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
     for i in range(400):
-        guest.view.pages.add("plain", f"line {i}\n")
+        guest.view.pages.add(_rec(f"line {i}\n"))
         if i % 100 == 0:
             guest.view.pages.message_boundary()
 
@@ -366,7 +377,7 @@ async def test_view_page_resets_on_reconnect(harness):
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
     for i in range(400):
-        guest.view.pages.add("plain", f"line {i}\n")
+        guest.view.pages.add(_rec(f"line {i}\n"))
         if i % 100 == 0:
             guest.view.pages.message_boundary()
 
@@ -392,55 +403,60 @@ async def test_view_page_resets_on_reconnect(harness):
     await harness.close(w2)
 
 
-async def test_a_block_split_across_a_page_boundary_is_not_rendered_twice(harness):
-    """02.33: `_write_block` captured `page_no` before `pages.add`, then sent
-    the WHOLE html as a live APPEND tagged with that one page number. When a
-    single block is long enough to split mid-run across the hard cap, the
-    tail lands on the next page (pages.py's `write`/`add`) but was ALSO
-    already inside the bytes just streamed live under the old page's number
-    -- so paging forward to where the tail actually lives re-sends it, and
-    the reader sees it twice.
+async def test_what_streams_live_is_what_landed_on_that_page(harness):
+    """02.33, and the bug class is gone rather than merely fixed.
 
-    Fixed by only ever streaming the piece of the run that landed on the page
-    the stream is tagged with; the tail reaches the guest when it is paged
-    to, not before.
+    `_write_block` captured `page_no` before `pages.add`, then streamed the
+    WHOLE html as a live APPEND tagged with that one page number. A block
+    long enough to split mid-run had its tail land on the next page AND go
+    out inside the bytes streamed under the old page's number -- so paging
+    forward re-sent it and the reader saw it twice.
+
+    A record is never split now, so a block cannot be in two places at
+    once. What is left to check is the property the fix established: the
+    live stream carries exactly the records that landed on the page it is
+    tagged with, and the record pushed onto a new page is NOT in it. That
+    still has to hold, because write_block still captures page_no before
+    the write and the paginator can still seal underneath it.
     """
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
 
-    # hard_bytes is 2x the default page_bytes (16384) with no mem_kb header,
-    # so this run must split: 32000 'A's, a newline the splitter should
-    # prefer to break at, then 10000 'B's that can only fit on the next page.
-    first_half = "A" * 32000
-    second_half = "B" * 10000
-    big = first_half + "\n" + second_half
+    # hard_bytes is 2x the default page_bytes (16384) with no mem_kb
+    # header, so the second of these cannot share a page with the first.
+    first = blocks.Block("code", {}, [("t", "A" * 30000)])
+    second = blocks.Block("code", {}, [("t", "B" * 10000)])
 
-    await harness.bridge.presentation.write_block(guest, big)
-    frames = await harness.recv_until(r, {"PAGESEALED"}, timeout=5)
+    await harness.bridge.presentation.write_block(guest, first)
+    seen = await harness.recv_until(r, {"TEXT"}, timeout=5)
+    await harness.bridge.presentation.write_block(guest, second)
+    seen += await harness.recv_until(r, {"PAGESEALED"}, timeout=5)
 
-    sealed = [f for f in frames if f.type == "PAGESEALED"]
+    sealed = [f for f in seen if f.type == "PAGESEALED"]
     assert sealed and sealed[0].headers["page"] == "1", (
-        "test setup: the run must actually split across a seal"
-    )
-    assert guest.view.pages.count == 2, "test setup: expected exactly two pages"
+        "test setup: the second record must force a seal")
+    assert guest.view.pages.count == 2, "test setup: expected two pages"
 
-    live_body = harness.body(frames).decode("cp1252")
-    assert "B" not in live_body, (
-        "the tail that landed on page 2 was streamed live under page 1's "
-        "APPEND -- it will be sent again when the reader pages forward"
-    )
-    assert live_body == first_half + "\n", (
-        "page 1's live stream must be exactly what pages.write put on page 1"
-    )
+    # Inflated in stream ORDER, every TEXT: one persistent deflate stream
+    # per connection, exactly the constraint the guest is under. Decoding
+    # a subset is what the guest would be doing if it dropped a frame.
+    texts = [f for f in seen if f.type == "TEXT"]
+    assert len(texts) == 2, [f.headers["page"] for f in texts]
+    assert harness.body(seen) == blocks.encode(first) + blocks.encode(second)
+
+    # The second went out under page 2, which is where it LANDED -- not
+    # under page 1, which is the number write_block was holding when it
+    # started. Tagging it with page 1 was survivable only while a run
+    # could be split; with records it meant the block was never streamed
+    # at all and a reader following LIVE never saw it.
+    assert [f.headers["page"] for f in texts] == ["1", "2"]
 
     await harness.send(w, Frame("GETPAGE", {"page": "2"}))
     frames2 = await harness.recv_until(r, {"PAGEEND"}, timeout=5)
-    page2_body = harness.body(frames2).decode("cp1252")
-    assert page2_body == second_half, (
-        "page 2 must hold exactly the tail, with nothing repeated from what "
-        "already streamed live on page 1"
-    )
+    assert harness.body(frames2) == blocks.encode(second), (
+        "page 2 must hold exactly the record that landed on it, with "
+        "nothing repeated from page 1")
     await harness.close(w)
 
 
@@ -2335,34 +2351,54 @@ async def test_the_chat_list_follows_a_forked_conversation(harness):
     await harness.close(writer)
 
 
-async def test_an_oversized_block_is_truncated_not_split_mid_element(harness):
+async def test_an_oversized_block_is_refused_rather_than_split(harness):
     """`total`/`off` are on every TEXT chunk and look like a reassembly
-    protocol. They are not.
+    protocol. They never were.
 
-    win/app/main.c's TEXT branch calls rc_html_block(f->body) per frame and
-    uses total/off only for the progress figure, so an APPEND block split
-    across frames arrives as several separate appends -- each a fragment of
-    markup, handed to insertAdjacentHTML. Half a <div>.
+    win/app/turn.cpp's TEXT branch called rc_html_block(f->body) per frame
+    and used total/off only for the progress figure, so an APPEND block
+    split across frames arrived as several separate appends -- each a
+    fragment of markup, handed to insertAdjacentHTML. Half a <div>.
 
     Splitting arbitrary HTML safely needs to know where its element
-    boundaries are, which this layer cannot know. So it truncates at the
-    boundary it CAN guarantee and says so. The model still has the whole
-    text; only the on-screen copy is shortened.
+    boundaries are, which that layer could not know, so it truncated at
+    the boundary it COULD guarantee and said so.
+
+    From stage 3 C2 there is nothing to guess at and nothing to truncate
+    TO: a body is whole records, and an oversize one is refused by
+    write_block against the client's declared maxblock before it reaches
+    the wire at all. The model still has the whole text, which was always
+    the argument for truncating; what changed is that the on-screen copy
+    is now absent rather than shortened, and absent is what a block the
+    client said it cannot hold was always going to be.
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge.connection.guest
 
-    huge = '<div class="tool">' + ("x" * 90_000) + "</div>"
-    await harness.bridge.connection.send_html(guest, huge, srv.APPEND, 1)
+    huge = blocks.Block("code", {}, [("t", "x" * 90_000)])
+    await harness.bridge.presentation.write_block(guest, huge)
+
+    got = await harness.recv_until(reader, {"TURN", "TEXT"}, timeout=1.5)
+    assert not [f for f in got if f.type == "TEXT"], (
+        "a record the client cannot hold reached the wire")
+    await harness.close(writer)
+
+
+async def test_a_block_within_the_bound_still_arrives_whole(harness):
+    """The other half, so the test above cannot pass by refusing
+    everything."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge.connection.guest
+
+    block = blocks.Block("code", {}, [("t", "y" * 4000)])
+    await harness.bridge.presentation.write_block(guest, block)
 
     got = await harness.recv_until(reader, {"TURN", "TEXT"}, timeout=3)
     texts = [f for f in got if f.type == "TEXT"]
-    assert len(texts) == 1, (
-        f"the block was split into {len(texts)} frames; the guest appends "
-        f"each one separately, so this is markup cut in half")
-    body = harness.body(texts)
-    assert b"too large to send" in body, "truncated without saying so"
+    assert len(texts) == 1, f"{len(texts)} frames; a record must not split"
+    assert harness.body(texts) == blocks.encode(block)
     await harness.close(writer)
 
 

@@ -122,24 +122,20 @@
     "type": "OPTIONSEND"
   },
   {
-    "body": "<p>Pre-disconnect stream...<br>Post-reconnect stream...</p>",
+    "body": "para\nt Pre-disconnect stream...\nt Post-reconnect stream...\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "live",
-      "off": "0",
-      "page": "1",
-      "total": "59"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<p>Pre-disconnect stream...<br>Post-reconnect stream...</p>",
+    "body": "para\nt Pre-disconnect stream...\nt Post-reconnect stream...\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "59"
+      "page": "1"
     },
     "type": "TEXT"
   },

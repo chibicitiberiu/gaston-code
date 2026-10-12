@@ -14,24 +14,20 @@
     "type": "TURN"
   },
   {
-    "body": "<p>Partial output before error.</p>",
+    "body": "para\nt Partial output before error.\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "live",
-      "off": "0",
-      "page": "1",
-      "total": "35"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<p>Partial output before error.</p>",
+    "body": "para\nt Partial output before error.\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "35"
+      "page": "1"
     },
     "type": "TEXT"
   },

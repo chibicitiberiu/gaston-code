@@ -50,15 +50,14 @@ from .blocks import (  # noqa: F401  -- re-exported for importers
     BlockStream,
     BlockUpdate,
 )
-from .htmlrender import esc, inline, render  # noqa: F401
+from .htmlrender import esc, render  # noqa: F401
 
-#: The old private names, kept because tests and probes import them by these
-#: spellings and A4 is a split, not a rename. They go as their callers do:
-#: `_TOOL_WRAP_COL` and `_fold_long_lines` with the wrap at C2, when the
-#: client takes over wrapping; `_TOOL_RESULT_MAX` stays on the bridge.
-_TOOL_WRAP_COL = _render.TOOL_WRAP_COL
+#: The one cap that STAYS on the bridge, and the line is bandwidth against
+#: appearance: truncating on the client means the bytes already crossed a
+#: 5 KB/s link. The wrap column left at C2 with the renderer -- the client
+#: knows its own window's width and this one was measured once in a
+#: 640x480 default that a resize makes wrong.
 _TOOL_RESULT_MAX = _blocks.TOOL_RESULT_MAX
-_fold_long_lines = _render.fold_long_lines
 _cells = _blocks.cells
 
 
@@ -69,15 +68,6 @@ class Update:
 
     def __repr__(self) -> str:
         return f"Update({self.mode}, {self.html!r})"
-
-
-def _table(lines: list[str]) -> str:
-    """Kept as a string-in, string-out helper for the importers that call it.
-
-    The real work is a parse (blocks.table_block) followed by a render
-    (htmlrender), which is the whole shape of the stage in one function.
-    """
-    return _render.render(_blocks.table_block(lines))
 
 
 # The one-shot constructors. A7 changed WHAT they return -- a Block rather

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from bridge.view import blocks as B
 from bridge.view.html import APPEND, LIVE
 from bridge.wire.link import GuestLink
 from bridge.wire.protocol import MAX_FRAME, Frame, ProtocolError
@@ -138,34 +139,66 @@ async def test_send_raw_ignores_writer_exceptions():
 
 
 @pytest.mark.asyncio
-async def test_send_html_live_mode_oversized_is_dropped(link):
+async def test_send_records_sends_one_frame_of_whole_records(link):
     writer = FakeWriter()
     link.writer = writer
-    budget = MAX_FRAME - 1024
-    huge_html = "<div>" + "x" * (budget + 100) + "</div>"
+    body = B.encode(B.Block("para", {}, [("t", "a")])) \
+        + B.encode(B.Block("rule"))
 
-    await link.send_html(None, huge_html, LIVE, page_no=1)
+    await link.send_records(None, body, APPEND, page_no=1)
+
+    assert _body_of(writer) == body
+    assert B.decode(_body_of(writer))          # and it parses
+
+
+@pytest.mark.asyncio
+async def test_an_empty_body_is_still_sent(link):
+    """ZERO IS REAL and is not an early return: an empty LIVE body is what
+    clears `#l` at the end of a turn. send_html had a special arm for this
+    and it was easy to lose."""
+    writer = FakeWriter()
+    link.writer = writer
+    await link.send_records(None, b"", LIVE, page_no=1)
+    assert len(writer.written) > 0
+    assert _body_of(writer) == b""
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_live_body_is_dropped(link):
+    """A LIVE update replaces an element wholesale, so half of one is
+    meaningless; the APPEND that follows carries the whole thing."""
+    writer = FakeWriter()
+    link.writer = writer
+    await link.send_records(None, b"x" * (MAX_FRAME - 1024 + 1), LIVE,
+                            page_no=1)
     assert len(writer.written) == 0
 
 
 @pytest.mark.asyncio
-async def test_send_html_append_mode_oversized_is_truncated(link):
+async def test_an_oversized_append_body_is_refused_and_logged(link, caplog):
+    """UNREACHABLE BY CONSTRUCTION, and kept anyway.
+
+    Two things upstream prevent it: write_block refuses a record larger
+    than the client declared it can hold, and the paginator gives an
+    oversize record a page of its own rather than cutting it. An
+    unreachable branch that fires is worth more than one that was deleted
+    -- it names both of the things that should have stopped it, which is
+    the whole of the debugging.
+
+    This is also where send_html's truncation went. It truncated because
+    it could not know where the element boundaries were; a body of whole
+    records has nothing to guess at, so there is nothing to truncate TO.
+    """
+    import logging
+
     writer = FakeWriter()
     link.writer = writer
-    budget = MAX_FRAME - 1024
-    huge_html = "<p>" + "a" * (budget + 500) + "</p>"
-
-    await link.send_html(None, huge_html, APPEND, page_no=1)
-    assert len(writer.written) > 0
-    # Payload was compressed with deflate; decompress to check truncated marker
-    from bridge.wire.compress import StreamDecompressor
-    from bridge.wire.protocol import FrameReader
-    reader = FrameReader()
-    frames = list(reader.feed(bytes(writer.written)))
-    assert len(frames) == 1
-    decomp = StreamDecompressor()
-    body = decomp.decompress(frames[0].body)
-    assert b"too large to send" in body
+    with caplog.at_level(logging.ERROR, logger="bridge.link"):
+        await link.send_records(None, b"x" * (MAX_FRAME - 1024 + 1), APPEND,
+                                page_no=1)
+    assert len(writer.written) == 0
+    assert any("maxblock" in r.message or "paginator" in r.message
+               for r in caplog.records), caplog.records
 
 
 @pytest.mark.asyncio
@@ -201,7 +234,7 @@ async def test_send_export_failure_aborts_with_error(link):
 
 
 def _body_of(writer) -> bytes:
-    """The one TEXT frame a send_html wrote, decompressed."""
+    """The one TEXT frame a send wrote, decompressed."""
     from bridge.wire.compress import StreamDecompressor
     from bridge.wire.protocol import FrameReader
     frames = list(FrameReader().feed(bytes(writer.written)))
@@ -209,122 +242,3 @@ def _body_of(writer) -> bytes:
     if frames[0].headers.get("enc") == "deflate":
         return StreamDecompressor().decompress(frames[0].body)
     return frames[0].body
-
-
-@pytest.mark.asyncio
-async def test_send_html_strips_nul_which_would_truncate_the_dom_copy(link):
-    """A NUL is a partial loss the user cannot see and the cache does not share.
-
-    `win/app/turn.cpp:190` gives the cache `(f->body, f->body_len)` and
-    `rc_html::block` a `const char *`, so the DOM stops at the first NUL while
-    the cache keeps the whole block. The same transcript then renders two
-    different ways depending on whether it arrived live or was redrawn from
-    the cache on reconnect.
-    """
-    writer = FakeWriter()
-    link.writer = writer
-
-    await link.send_html(None, "<p>before\x00after</p>", APPEND, page_no=1)
-
-    body = _body_of(writer)
-    assert b"\x00" not in body
-    assert b"<p>beforeafter</p>" == body
-
-
-@pytest.mark.asyncio
-async def test_send_html_keeps_cr_and_tab(link):
-    """Only the NUL goes. The other control bytes are display content.
-
-    `\\r` reaches the renderer today and is a line break there, because
-    `HtmlStream.feed` splits with `str.splitlines()`, which splits on it; a
-    lone `\\r` in an unterminated tail travels verbatim. `\\t` is whitespace
-    inside a `<pre>` and removing it would re-indent code. Stage 3's renderer
-    is specified to carry both, and B2 compares it byte-for-byte against this
-    path, so a strip added here would quietly break that proof.
-    """
-    writer = FakeWriter()
-    link.writer = writer
-
-    await link.send_html(None, "<pre>a\tb\rc</pre>", APPEND, page_no=1)
-
-    assert _body_of(writer) == b"<pre>a\tb\rc</pre>"
-
-
-@pytest.mark.asyncio
-async def test_send_html_live_nul_is_stripped_silently(link):
-    """Same strip on the live path, without the log line.
-
-    The open block is re-sent whole on every flush, so one NUL in a long
-    answer would be ten log lines a second for the rest of the turn. The
-    APPEND that seals the block reports it once.
-    """
-    writer = FakeWriter()
-    link.writer = writer
-
-    await link.send_html(None, "<p>partial\x00</p>", LIVE, page_no=1)
-
-    assert _body_of(writer) == b"<p>partial</p>"
-
-
-@pytest.mark.asyncio
-async def test_send_html_all_nul_body_sends_nothing_on_append(link):
-    """Stripping can empty a body, and an empty APPEND has nothing to append."""
-    writer = FakeWriter()
-    link.writer = writer
-
-    await link.send_html(None, "\x00\x00", APPEND, page_no=1)
-
-    assert len(writer.written) == 0
-
-
-@pytest.mark.asyncio
-async def test_send_html_all_nul_body_still_clears_the_live_slot(link):
-    """An emptied LIVE body must still be sent: it is what clears `#l`.
-
-    `send_html`'s existing empty-body arm sends a zero-length LIVE frame for
-    exactly this reason, and the strip must land on the near side of it.
-    """
-    writer = FakeWriter()
-    link.writer = writer
-
-    await link.send_html(None, "\x00", LIVE, page_no=1)
-
-    assert len(writer.written) > 0
-    assert _body_of(writer) == b""
-
-
-@pytest.mark.asyncio
-async def test_send_html_renders_a_block_as_well_as_markup(link):
-    """A6: the one place a byte leaves the bridge renders a Block.
-
-    Here rather than at each of the three TEXT producers, which is the whole
-    reason GuestLink exists -- before it, header stringification and
-    fold.encode were decided independently at 44 call sites. It also means
-    C2 has one line to change rather than three.
-    """
-    from bridge.view import blocks as Bk
-    from bridge.view.htmlrender import render
-
-    block = Bk.Block("para", {}, [("t", Bk.runs("**a** and `b`"))])
-
-    w1 = FakeWriter()
-    link.writer = w1
-    await link.send_html(None, block, APPEND, page_no=1)
-    w2 = FakeWriter()
-    link.writer = w2
-    await link.send_html(None, render(block), APPEND, page_no=1)
-
-    assert _body_of(w1) == _body_of(w2)
-    assert _body_of(w1) == b"<p><b>a</b> and <code>b</code></p>"
-
-
-@pytest.mark.asyncio
-async def test_a_block_on_the_live_path_too(link):
-    """The LIVE producer bypasses write_block entirely (presentation.py), so
-    it is a third path and not a variation on the first."""
-    from bridge.view import blocks as Bk
-
-    writer = FakeWriter()
-    link.writer = writer
-    await link.send_html(None, Bk.Block("rule"), LIVE, page_no=1)
-    assert _body_of(writer) == b"<hr>"

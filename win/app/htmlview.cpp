@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <string.h>
 #include "app/htmlview.h"
+#include "view/render.h"
 #include "app/comptr.h"
 #include "core/log.h"
 #include "core/str.h"
@@ -877,6 +878,75 @@ int rc_html::poll()
     return 1;
 }
 
+/* --- the records the bridge sends, and the buffer they render into -------
+ *
+ * A heap buffer per RECORD and not one per frame, which is the memory
+ * mitigation the plan's §7 asks for: a page replay is up to 90 blocks, and
+ * rendering them into one buffer would hold the whole page's markup AND
+ * the UTF-16 BSTR to_bstr makes of it -- twice the rendered length -- on a
+ * machine measured at 28 KB free after a turn. One record at a time holds
+ * one record's worth.
+ *
+ * It does NOT apply to live(): that is put_innerHTML on #l, a wholesale
+ * replacement, because the bridge re-sends the whole open block every
+ * flush. Inserting per record there would append a fresh copy every 100ms,
+ * and the live path is one record by construction.
+ */
+class HtmlBuf : public ByteSink
+{
+public:
+    HtmlBuf() : m_buf(0), m_len(0), m_cap(0) {}
+    ~HtmlBuf() { if (m_buf) HeapFree(GetProcessHeap(), 0, m_buf); }
+
+    bool write(const void *data, unsigned len)
+    {
+        if (m_len + len + 1 > m_cap && !grow(m_len + len + 1))
+            return false;
+        memcpy(m_buf + m_len, data, len);
+        m_len += len;
+        m_buf[m_len] = '\0';
+        return true;
+    }
+
+    const char *str() const { return m_buf ? m_buf : ""; }
+    unsigned len() const { return m_len; }
+
+private:
+    HtmlBuf(const HtmlBuf &);
+    HtmlBuf &operator=(const HtmlBuf &);
+
+    bool grow(unsigned need)
+    {
+        /* Doubling from 4KB, a live update's size. CAPPED, because the one
+         * allocation in this program with no ceiling was the pre-ready
+         * queue and audit 04.29 is what that cost. A record needing more
+         * is refused and logged, not grown into. */
+        unsigned want = m_cap ? m_cap : 4096;
+        char *bigger;
+        while (want < need && want < (1u << 20))
+            want *= 2;
+        if (want < need) {
+            rc_log("html: a record needs %u bytes of markup, over the cap",
+                   need);
+            return false;
+        }
+        bigger = (char *)(m_buf
+                          ? HeapReAlloc(GetProcessHeap(), 0, m_buf, want)
+                          : HeapAlloc(GetProcessHeap(), 0, want));
+        if (!bigger) {
+            rc_log("html: no memory to render %u bytes", want);
+            return false;
+        }
+        m_buf = bigger;
+        m_cap = want;
+        return true;
+    }
+
+    char    *m_buf;
+    unsigned m_len;
+    unsigned m_cap;
+};
+
 /* --- the transcript's own vocabulary -------------------------------------
  *
  * Escaping lives here because it has to happen on EVERY path into the
@@ -956,15 +1026,11 @@ void rc_html::settle(int was_at_bottom)
  * and apply the scroll policy. Heap rather than stack because escaping can
  * expand five-fold and the largest frame in this program is already in
  * main.c. */
-void rc_html::say(const char *cls, const char *text)
-{
-    say_id(cls, NULL, text);
-}
-
-void rc_html::say_id(const char *cls, const char *id, const char *text)
+void rc_html::say_local(RcLocal kind, const char *text)
 {
     unsigned n, cap;
     int bottom;
+    HtmlBuf out;
 
     if (!text) return;
     n = (unsigned)strlen(text);
@@ -977,25 +1043,21 @@ void rc_html::say_id(const char *cls, const char *id, const char *text)
      * bytes is the true worst case, "&quot;"); only the silence was wrong. */
     HeapPtr<char> esc((char *)HeapAlloc(GetProcessHeap(), 0, cap));
     if (!esc.valid()) {
-        rc_log("html: no memory to escape a %u byte %s block", n, cls);
+        rc_log("html: no memory to escape a %u byte local block", n);
         return;
     }
     esc_into(text, esc.get(), cap);
 
-    HeapPtr<char> div((char *)HeapAlloc(GetProcessHeap(), 0, cap + 96));
-    if (!div.valid()) {
-        rc_log("html: no memory to wrap a %u byte %s block", n, cls);
+    /* THE WRAPPER COMES FROM view.tpl from stage 3 C2, so the class names
+     * and the element are in one file with every other block's. What does
+     * NOT come from there is the escaping above: see rc_wrap_local's
+     * comment in view/render.h for why these keep their own. */
+    if (!rc_wrap_local(kind, esc.get(), out)) {
+        rc_log("html: could not wrap a %u byte local block", n);
         return;
     }
-    if (id && *id)
-        rc_strf(div.get(), cap + 96, "<div class=\"%s\" id=\"%s\">%s</div>",
-                cls, id, esc.get());
-    else
-        rc_strf(div.get(), cap + 96, "<div class=\"%s\">%s</div>",
-                cls, esc.get());
-
     bottom = at_bottom();
-    append(div.get());
+    append(out.str());
     settle(bottom);
 }
 
@@ -1042,9 +1104,9 @@ void rc_html::settle_perm()
 }
 
 void rc_html::notice(const char *text)
-{ say(RC_CSS_NOTICE, text); }
+{ say_local(RC_LOCAL_NOTICE, text); }
 void rc_html::error(const char *text)
-{ say(RC_CSS_ERROR, text); }
+{ say_local(RC_LOCAL_ERROR, text); }
 void rc_html::user(const char *text)
 {
     /* STRIP BEFORE ESCAPING, because the bridge does (01.56).
@@ -1072,14 +1134,14 @@ void rc_html::user(const char *text)
                  || b[n - 1] == '\r' || b[n - 1] == '\n')) n--;
 
     {
-        /* say() takes a C string, so the trimmed tail needs its own copy.
+        /* say_local takes a C string, so the trimmed tail needs its own copy.
          * Heap rather than stack: the input is the user's whole message and
          * the largest frame in this program already lives in main. */
         HeapPtr<char> t((char *)HeapAlloc(GetProcessHeap(), 0, n + 1));
-        if (!t.valid()) { say_id(RC_CSS_PENDING, RC_ID_PENDING, b); return; }
+        if (!t.valid()) { say_local(RC_LOCAL_PENDING, b); return; }
         memcpy(t.get(), b, n);
         t.get()[n] = '\0';
-        say_id(RC_CSS_PENDING, RC_ID_PENDING, t.get());
+        say_local(RC_LOCAL_PENDING, t.get());
     }
 }
 
@@ -1090,6 +1152,48 @@ void rc_html::block(const char *html)
     bottom = at_bottom();
     append(html);
     settle(bottom);
+}
+
+void rc_html::records(const char *rec, unsigned len, unsigned wrapcol)
+{
+    const char *p = rec;
+    const char *end = rec + len;
+    int bottom;
+
+    if (!rec || !len) return;
+    bottom = at_bottom();
+    while (p < end) {
+        /* One record at a time, so the buffer is reused rather than
+         * accumulated across a page. rc_render_count would be a second
+         * pass; instead the renderer is asked for one record and says
+         * where it stopped. */
+        HtmlBuf out;
+        int n = rc_render_one(p, (unsigned)(end - p), wrapcol, out);
+        if (n <= 0) {
+            rc_log("html: a record was refused %u bytes into a %u byte "
+                   "body; the rest of it is dropped",
+                   (unsigned)(p - rec), len);
+            break;
+        }
+        if (out.len())
+            append(out.str());
+        p += n;
+    }
+    settle(bottom);
+}
+
+void rc_html::live_records(const char *rec, unsigned len, unsigned wrapcol)
+{
+    HtmlBuf out;
+
+    /* An EMPTY body is not nothing to do: it is what clears #l at the end
+     * of a turn, and live("") is how that has always been said. */
+    if (!rec || !len) { live(""); return; }
+    if (!rc_render(rec, len, wrapcol, out)) {
+        rc_log("html: live record refused; leaving what is on screen");
+        return;
+    }
+    live(out.str());
 }
 
 void rc_html::set_autoscroll(int on) { d->autoscroll = on; }

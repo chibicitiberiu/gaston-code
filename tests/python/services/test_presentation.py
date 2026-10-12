@@ -16,96 +16,118 @@ import pytest
 from bridge.services.presentation import PresentationService
 from bridge.view import blocks as B
 from bridge.view.html import APPEND, LIVE
-from bridge.view.htmlrender import render
 from bridge.view.transcript import TranscriptView
 
 
 @pytest.fixture
 def svc():
     conn = MagicMock()
-    conn.send_html = AsyncMock()
+    conn.send_records = AsyncMock()
     conn.send = AsyncMock()
     conn.wire_yield = AsyncMock()
     guest = MagicMock()
     guest.view = TranscriptView()
+    # A real number, because write_block compares against it. A MagicMock
+    # here made every size check a TypeError, which is the mock equivalent
+    # of the capability being unset.
+    guest.caps.maxblock = 61440
     return PresentationService(conn), guest, conn
 
 
 PROSE = B.Block("para", {}, [("t", B.runs("**bold** and `code`"))])
-EXPECTED = "<p><b>bold</b> and <code>code</code></p>"
+RECORD = B.encode(PROSE)
 
 
 @pytest.mark.asyncio
-async def test_write_block_takes_a_block(svc):
+async def test_write_block_encodes_and_sends_a_record(svc):
     s, guest, conn = svc
     await s.write_block(guest, PROSE)
-    conn.send_html.assert_awaited_once()
-    assert conn.send_html.await_args.args[1] == EXPECTED
-    assert conn.send_html.await_args.args[2] == APPEND
+    conn.send_records.assert_awaited_once()
+    assert conn.send_records.await_args.args[1] == RECORD
+    assert conn.send_records.await_args.args[2] == APPEND
 
 
 @pytest.mark.asyncio
-async def test_write_block_still_takes_markup(svc):
-    """A6 adds a type, it does not replace one. Thirty-three call sites are
-    still passing strings at this commit."""
+async def test_write_block_refuses_markup(svc):
+    """A6 widened the type to str | Block so the call sites could convert
+    one at a time; C2 closes it. A string here would reach the guest as a
+    record it cannot parse, and failing loudly beats a transcript that
+    silently stops -- which is what an unparseable body does."""
+    s, guest, _conn = svc
+    with pytest.raises(TypeError):
+        await s.write_block(guest, "<p>markup</p>")
+
+
+@pytest.mark.asyncio
+async def test_the_record_reaches_the_paginator_whole(svc):
+    s, guest, _conn = svc
+    await s.write_block(guest, PROSE)
+    assert guest.view.pages.live.records == [RECORD]
+
+
+@pytest.mark.asyncio
+async def test_the_live_arm_bypasses_write_block(svc):
+    """The path that is easy to miss: write_updates sends LIVE straight to
+    the connection, so a change made only in write_block leaves the
+    streaming half unconverted. It never reaches the paginator either --
+    the open block is replaced wholesale on the guest, not appended."""
     s, guest, conn = svc
-    await s.write_block(guest, EXPECTED)
-    assert conn.send_html.await_args.args[1] == EXPECTED
+    from bridge.view.blocks import BlockUpdate
+
+    await s.write_updates(guest, [BlockUpdate(LIVE, PROSE)])
+    assert conn.send_records.await_args.args[1] == RECORD
+    assert conn.send_records.await_args.args[2] == LIVE
+    assert guest.view.pages.live.records == []
 
 
 @pytest.mark.asyncio
-async def test_the_block_and_the_markup_reach_the_paginator_identically(svc):
-    s1, g1, _ = svc
-    await s1.write_block(g1, PROSE)
-    conn2 = MagicMock()
-    conn2.send_html = AsyncMock()
-    conn2.send = AsyncMock()
-    g2 = MagicMock()
-    g2.view = TranscriptView()
-    await PresentationService(conn2).write_block(g2, EXPECTED)
-
-    assert g1.view.pages.all_text() == g2.view.pages.all_text()
-    assert g1.view.pages.all_text() == EXPECTED
-
-
-@pytest.mark.asyncio
-async def test_the_live_arm_bypasses_write_block_and_still_renders(svc):
-    """This is the path that is easy to miss: write_updates sends LIVE
-    straight to the connection, so a change made only in write_block leaves
-    the streaming half unconverted."""
+async def test_an_empty_live_body_is_sent_because_it_clears_the_slot(svc):
+    """`block is None` is not "nothing to do". It is what empties `#l` at
+    the end of a turn, and skipping it would leave the last partial
+    paragraph on screen under the finished one."""
     s, guest, conn = svc
-    from bridge.view.html import Update
+    from bridge.view.blocks import BlockUpdate
 
-    await s.write_updates(guest, [Update(LIVE, render(PROSE))])
-    assert conn.send_html.await_args.args[1] == EXPECTED
-    assert conn.send_html.await_args.args[2] == LIVE
+    await s.write_updates(guest, [BlockUpdate(LIVE, None)])
+    conn.send_records.assert_awaited_once()
+    assert conn.send_records.await_args.args[1] == b""
 
 
 @pytest.mark.asyncio
 async def test_send_page_is_the_third_producer(svc):
     s, guest, conn = svc
     await s.write_block(guest, PROSE)
-    conn.send_html.reset_mock()
+    conn.send_records.reset_mock()
 
     await s.send_page(guest, "live")
-    sent = [c.args[1] for c in conn.send_html.await_args_list]
-    assert EXPECTED in "".join(sent)
+    sent = b"".join(c.args[1] for c in conn.send_records.await_args_list)
+    assert RECORD in sent
 
 
 @pytest.mark.asyncio
 async def test_a_block_with_no_payload_sends_nothing(svc):
-    """A kind that DECLARES payload tags and carries none renders as "", the
-    same as the old _render's `if not lines: return ""`. write_block's
-    existing empty guard then has to run AFTER the render, not before it.
-
-    Not the same as a payload-less KIND: `rule` has no tags to carry and is
-    still an <hr>."""
+    """A kind that DECLARES payload tags and carries none has nothing to
+    draw. Not the same as a payload-less KIND: `rule` has no tags to carry
+    and is still a record."""
     s, guest, conn = svc
     await s.write_block(guest, B.Block("para", {}, []))
-    conn.send_html.assert_not_awaited()
+    conn.send_records.assert_not_awaited()
 
     await s.write_block(guest, B.Block("rule"))
-    assert conn.send_html.await_args.args[1] == "<hr>"
+    assert conn.send_records.await_args.args[1] == B.encode(B.Block("rule"))
+
+
+@pytest.mark.asyncio
+async def test_a_record_over_the_client_s_declared_bound_is_refused(svc):
+    """REFUSED, not truncated and not split. Half a record is two
+    fragments the guest throws away, and a block the client said it cannot
+    hold is one it will not render however it arrives. The model still has
+    the whole text either way."""
+    s, guest, conn = svc
+    guest.caps.maxblock = 200
+    await s.write_block(guest, B.Block("code", {}, [("t", "x" * 5000)]))
+    conn.send_records.assert_not_awaited()
+    assert guest.view.pages.live.records == []
 
 
 # --- the client's declaration survives the user's settings ------------------

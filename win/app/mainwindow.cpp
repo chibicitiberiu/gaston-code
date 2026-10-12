@@ -19,6 +19,7 @@
 #include "app/config.h"
 #include "core/app.h"
 #include "app/mainwindow.h"
+#include "view/render.h"
 #include "core/log.h"
 #include "core/path.h"
 #include "core/str.h"
@@ -626,7 +627,8 @@ void MainWindow::restoreCache()
         m_html->notice("The bridge is not reachable. This is the last page "
                        "of your conversation as it was cached here; it is "
                        "not live, and nothing typed now will be sent.");
-        m_cache->load_page(pages, m_html);
+        m_cache->load_page(pages, m_html,
+                           m_turn ? m_turn->wrapCol() : 56);
     }
     rc_log("cache: showed page %d of %d for %s", pages, pages, sess);
 }
@@ -992,6 +994,40 @@ void MainWindow::createChildren(HWND hwnd, HINSTANCE inst)
     } else {
         m_uiFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
         m_uiFontBold = m_uiFont;
+    }
+
+    /* THE MARKUP, BEFORE THE VIEW, because the first thing the view does
+     * is render a notice and it would otherwise render it through the
+     * fallback. Stage 3 C2.
+     *
+     * A failure here is NOT fatal and is not a reason to refuse the
+     * window: this box is updated by hand with COPY and a half-updated
+     * one is a real state, so the renderer degrades to escaped text in a
+     * paragraph and the client says so. Where it says so matters -- in
+     * the DEGRADED state a transcript notice renders as an unstyled <p>
+     * indistinguishable from model prose, in a document whose CSS is
+     * probably also missing, because all three files ship and COPY
+     * together. So it goes to the status bar, which is pane text rather
+     * than HTML, and to the log. */
+    {
+        char dir[MAX_PATH], err[256];
+        GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
+        { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
+        if (!rc_tpl_load(dir, err, sizeof err)) {
+            rc_log("view: %s -- the transcript will be plain text", err);
+            if (m_status)
+                m_status->set_override("view.tpl is missing or unreadable; "
+                                       "the transcript is plain text");
+        } else if (rc_tpl_version() != RC_VIEW_VERSION) {
+            /* Loud and NON-FATAL: a stale appearance beats no transcript,
+             * and a hand-updated box is exactly where the two files get
+             * out of step. */
+            rc_log("view: view.tpl says version %d, this build expects %d",
+                   rc_tpl_version(), RC_VIEW_VERSION);
+            if (m_status)
+                m_status->set_override("view.tpl is from a different build; "
+                                       "the transcript may look wrong");
+        }
     }
 
     m_html = rc_html::create(hwnd);

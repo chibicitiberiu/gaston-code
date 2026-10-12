@@ -1,7 +1,7 @@
 """TranscriptView: what one guest is watching and how much of it fits.
 
 docs/audit/02-bridge-python.md 02.2 groups `GuestSession`'s 30 fields into
-seven, by who reads them; this is the "View" group -- `pages`, `render`,
+seven, by who reads them; this is the "View" group -- `pages`, `parse`,
 `coalescers`, `view_page` and the two page-size limits scaled to the
 guest's RAM at handshake. `GuestLink` (bridge/wire/link.py) already moved
 the "Link" group out the same way; this follows it.
@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..wire.coalesce import Coalescer
-from .html import HtmlStream
+from .blocks import BlockStream
 from .pages import Paginator
 
 #: Paginator's own defaults, used when a guest's scaled limits are still 0
@@ -46,10 +46,14 @@ class TranscriptView:
     #: page, which is what bounds its memory by page size rather than by
     #: conversation length.
     pages: Paginator = field(default_factory=Paginator)
-    render: HtmlStream = field(default_factory=HtmlStream)
+    #: The PARSER, not a renderer -- stage 3 C2. It was an HtmlStream and
+    #: the field was called `render`, which stopped being true when the
+    #: markup moved to the client: what this produces is structure, and
+    #: what draws it is on the far side of the wire now.
+    parse: BlockStream = field(default_factory=BlockStream)
     #: One coalescer per source stream (assistant text, thinking). Coalescing
-    #: happens BEFORE rendering, so the renderer receives whole lines in
-    #: ~2KB batches rather than single tokens -- which is what lets it close
+    #: happens BEFORE parsing, so the parser receives whole lines in ~2KB
+    #: batches rather than single tokens -- which is what lets it close
     #: blocks properly and keeps the number of DOM updates on the guest down.
     coalescers: dict[str, Coalescer] = field(default_factory=dict)
     #: Which page the guest is showing. None means LIVE (follow the last
@@ -66,7 +70,7 @@ class TranscriptView:
     toolmax: int = 0
 
     async def reset(self) -> None:
-        """Start over: a fresh paginator and renderer, every live coalescer
+        """Start over: a fresh paginator and parser, every live coalescer
         stopped and dropped, and the view back on LIVE.
 
         `_new_session` and `_switch` each rebuilt this by hand, with their
@@ -77,7 +81,7 @@ class TranscriptView:
         """
         self.pages = Paginator(self.page_bytes or DEFAULT_PAGE_BYTES,
                                self.page_blocks or DEFAULT_PAGE_BLOCKS)
-        self.render = HtmlStream()
+        self.parse = BlockStream()
         for c in self.coalescers.values():
             await c.stop()
         self.coalescers.clear()

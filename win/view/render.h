@@ -84,6 +84,48 @@
  */
 bool rc_render(const char *rec, unsigned len, unsigned wrapcol, ByteSink &out);
 
+/* Render exactly ONE record and say how many bytes it used, or -1.
+ *
+ * For the caller that inserts per record rather than per frame -- the
+ * transcript, where a page replay is up to 90 blocks and rendering them
+ * into one buffer would hold the whole page's markup AND the UTF-16 copy
+ * MSHTML makes of it, on a machine measured at 28KB free after a turn.
+ *
+ * Returning the LENGTH rather than a cursor keeps the caller's loop
+ * obvious and means the parse is not run twice to find the boundary. */
+int rc_render_one(const char *rec, unsigned len, unsigned wrapcol,
+                  ByteSink &out);
+
+/* --- what the GUEST composes ------------------------------------------
+ *
+ * A notice, an error, the echo of what you typed, the status line. These
+ * are not bridge content and never cross the wire: they say what the APP
+ * is doing, which is why "the guest transforms nothing" does not cover
+ * them and never did.
+ *
+ * They take ALREADY-ESCAPED markup and only wrap it, because the guest's
+ * own escaping is not the record path's and the difference is deliberate:
+ * esc_into escapes the double quote as well, and folds a newline to <br>,
+ * because there is no upstream line splitter for a status message. The
+ * record path escapes three characters and keeps newlines, matching the
+ * bridge byte for byte. Routing these through the record path instead
+ * would turn every multi-line local notice into one wrapped line.
+ *
+ * What they DO get from the record path is the template: the class names
+ * and the element live in view.tpl with everything else, so a designer
+ * restyling the transcript does not have to find two places.
+ */
+enum RcLocal
+{
+    RC_LOCAL_NOTICE = 0,
+    RC_LOCAL_ERROR,
+    RC_LOCAL_USER,
+    RC_LOCAL_PENDING,   /* the echo, before the bridge acknowledges it */
+    RC_LOCAL_STATUS
+};
+
+bool rc_wrap_local(RcLocal kind, const char *escaped, ByteSink &out);
+
 /* How many whole records `rec` holds, or -1 if it is malformed. A frame body
  * is zero or more WHOLE records and zero is real -- an empty LIVE body is
  * what clears the open slot. */

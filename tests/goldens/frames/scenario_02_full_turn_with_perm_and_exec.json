@@ -14,24 +14,20 @@
     "type": "TURN"
   },
   {
-    "body": "<p>Executing command...</p>",
+    "body": "para\nt Executing command...\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "live",
-      "off": "0",
-      "page": "1",
-      "total": "27"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<p>Executing command...</p>",
+    "body": "para\nt Executing command...\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "27"
+      "page": "1"
     },
     "type": "TEXT"
   },
@@ -44,24 +40,20 @@
     "type": "TEXT"
   },
   {
-    "body": "<div class=\"tool\"><span class=\"toolname\">Bash</span> command: vol c:</div>",
+    "body": "tool\nn Bash\nt command: vol c:\n.\n",
     "headers": {
-      "enc": "deflate",
+      "enc": "raw",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "74"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<div class=\"perm\" id=\"perm\"><div class=\"permhead\">Permission required</div><div class=\"permdonehead\">Answered</div><p><b>Bash</b> &mdash; vol c:</p><p class=\"permwarn\"><b>Check this one:</b> runs a command on the bridge computer</p><table><tr><th>command</th><td>vol c:</td></tr></table></div>",
+    "body": "permission settleable=1\nh ask\nb Bash\nd vol c:\nw runs a command on the bridge computer\nk command\nv vol c:\n.\n",
     "headers": {
       "enc": "deflate",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "293"
+      "page": "1"
     },
     "type": "TEXT"
   },
@@ -102,13 +94,11 @@
     "type": "EXEC"
   },
   {
-    "body": "<p>Output: Volume in drive C is DOS</p>",
+    "body": "para\nt Output: Volume in drive C is DOS\n.\n",
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "39"
+      "page": "1"
     },
     "type": "TEXT"
   },

@@ -361,9 +361,9 @@ class ConnectionService:
         if self.handle_frame:
             await self.handle_frame(guest, f)
 
-    async def send_html(self, guest: GuestSession, html: str, mode: str,
-                        page_no: int) -> None:
-        await guest.link.send_html(guest, html, mode, page_no)
+    async def send_records(self, guest: GuestSession, body: bytes,
+                           mode: str, page_no: int) -> None:
+        await guest.link.send_records(guest, body, mode, page_no)
 
     async def wire_yield(self, guest: GuestSession) -> None:
         await guest.link.wire_yield(guest)

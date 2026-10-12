@@ -341,3 +341,27 @@ def test_a_result_under_the_cap_is_not_marked_clipped():
     assert "clipped" not in B.tool_result("short", cap=100).attrs
     assert "clipped" not in B.tool_result("x" * 100, cap=100).attrs
     assert B.tool_result("x" * 101, cap=100).attrs["clipped"] == 1
+
+
+def test_no_constructor_can_put_a_nul_on_the_wire():
+    """Where A1's send_html strip went.
+
+    That strip sat on the one path to innerHTML and was removed at C2,
+    when send_html itself went. The protection moved upstream to clean(),
+    which runs where model text BECOMES payload -- so it covers every
+    constructor rather than the one path, and a NUL cannot reach a record
+    at all instead of being removed on the way out.
+
+    Why it mattered: the guest NUL-terminates every body it receives, and
+    turn.cpp hands the cache (body, len) and the renderer a const char *.
+    The DOM stopped at the first NUL while the cache kept the whole block,
+    so the same transcript rendered two different ways depending on
+    whether it arrived live or was redrawn on reconnect.
+    """
+    bad = "before\x00after"
+    for block in (B.notice(bad), B.error(bad), B.user_turn(bad),
+                  B.tool_call(bad, bad), B.tool_result(bad),
+                  B.thinking(bad), B.code_block(bad), B.para(bad)):
+        wire = B.encode(block)
+        assert b"\x00" not in wire, block.kind
+        assert b"beforeafter" in wire, block.kind

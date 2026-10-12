@@ -184,7 +184,7 @@ def test_the_enum_the_array_and_the_file_hold_the_same_keys_in_order():
 
 
 def test_the_template_count_is_asserted():
-    assert len(guest_template_keys()) == 40, len(guest_template_keys())
+    assert len(guest_template_keys()) == 41, len(guest_template_keys())
 
 
 def test_every_kind_has_the_templates_it_needs():
@@ -277,3 +277,45 @@ def test_no_value_begins_or_ends_with_a_space():
         assert value == " " + value.strip() or value == value.strip(), (
             f"{key} has leading or trailing space the profile API will "
             f"silently drop: {value!r}")
+
+
+def test_the_pending_echo_s_class_and_id_are_both_load_bearing():
+    """rc_html::settle_pending finds the element BY ID and writes the
+    `user` class over the pending one. So view.tpl's `pending` has to carry
+    RC_ID_PENDING, and the class it is replaced with has to be the one in
+    the `user` template -- otherwise an acknowledged message either never
+    settles or settles into an unstyled paragraph.
+
+    Three files, nothing linking them: win/app/htmlview.h names the macros,
+    view.tpl writes the markup, and htmlview.cpp does the swap.
+    """
+    hdr = read(os.path.join(conftest.REPO, "win", "app", "htmlview.h"))
+    pend_id = re.search(r'#define RC_ID_PENDING\s+"([a-z]+)"', hdr)
+    user_cls = re.search(r'#define RC_CSS_USER\s+"([a-z ]+)"', hdr)
+    assert pend_id and user_cls, "the macros moved"
+
+    tpl = tpl_values()
+    assert f'id="{pend_id.group(1)}"' in tpl["pending"], tpl["pending"]
+    assert user_cls.group(1) in tpl["pending"], (
+        "settle_pending writes this class over the pending one, so the "
+        "element must already be in that family")
+    assert user_cls.group(1) in tpl["user"]
+
+
+def test_the_five_runtime_classes_stay_in_c():
+    """Not every RC_CSS_* moved into view.tpl, and which ones did is the
+    distinction worth asserting: a class the code WRITES at runtime --
+    put_className on an element that already exists -- is a DOM operation,
+    not markup, and has nowhere to live in a template.
+
+    settle_perm writes permdone, settle_pending writes you. Both must stay
+    named in C, and both must also appear in the stylesheet, which
+    test_guest_css.py checks from the other side.
+    """
+    hdr = read(os.path.join(conftest.REPO, "win", "app", "htmlview.h"))
+    src = read(os.path.join(conftest.REPO, "win", "app", "htmlview.cpp"))
+    for macro in ("RC_CSS_USER", "RC_CSS_PERMDONE"):
+        assert re.search(rf"#define {macro}\s+\"", hdr), macro
+        assert f"to_bstr({macro})" in src, (
+            f"{macro} is defined but nothing writes it; if the DOM "
+            f"operation went, the macro should have gone with it")

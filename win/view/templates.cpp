@@ -69,7 +69,7 @@ static const char *const KEYS[TPL_COUNT] = {
     "bullet", "numbered", "item",
     "code", "lang", "pre",
     "table", "row", "cell", "headcell",
-    "user", "notice", "error", "thinking", "status",
+    "user", "pending", "notice", "error", "thinking", "status",
     "tool", "toolresult", "toolresult_err", "clip",
     "perm", "perm_plain", "permhead_ask", "permhead_view",
     "permlead", "permlead_desc", "permwarn", "permprev", "permpara",

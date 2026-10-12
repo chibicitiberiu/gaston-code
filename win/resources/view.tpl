@@ -67,6 +67,12 @@ headcell        = <th>{}</th>
 
 ; --- what the app and the machine say -----------------------------------
 user            = <div class="you">{}</div>
+; The echo of what you typed, before the bridge has acknowledged it. The
+; class and the id are BOTH load-bearing and neither is only markup:
+; rc_html::settle_pending finds the element by id and writes the `user`
+; class over this one, so "you" must be in both and the id must match
+; RC_ID_PENDING in win/app/htmlview.h. test_block_vocab.py asserts it.
+pending         = <div class="you pending" id="pend">{}</div>
 notice          = <div class="notice">{}</div>
 error           = <div class="err">{}</div>
 thinking        = <div class="thinking">{}</div>

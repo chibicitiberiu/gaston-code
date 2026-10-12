@@ -1,6 +1,7 @@
 /* statusbar.cpp -- Status bar control and indicator panes implementation.
  */
 #include "app/statusbar.h"
+#include "view/render.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,6 +67,33 @@ int rc_statusbar::height() const
     GetWindowRect(m_hwnd, &srect);
     return srect.bottom - srect.top;
 }
+
+/* A sink over a fixed buffer, for the one caller that has a bounded
+ * string and a stack to put it on. The status row is "receiving 41s"
+ * wrapped in a div: tens of bytes, not thousands, so the heap sinks the
+ * transcript uses would be ceremony. Overflow truncates and says so
+ * through write()'s false, which rc_wrap_local propagates. */
+template <unsigned N>
+class FixedSink : public ByteSink
+{
+public:
+    FixedSink() : m_len(0) { m_buf[0] = '\0'; }
+
+    bool write(const void *data, unsigned len)
+    {
+        if (m_len + len + 1 > N) return false;
+        memcpy(m_buf + m_len, data, len);
+        m_len += len;
+        m_buf[m_len] = '\0';
+        return true;
+    }
+
+    const char *str() const { return m_buf; }
+
+private:
+    char     m_buf[N];
+    unsigned m_len;
+};
 
 void rc_statusbar::resize()
 {
@@ -144,12 +172,21 @@ void rc_statusbar::refresh(rc_state net_state, const char *host, int port,
         set_pane(2, buf);
 
         if (html) {
-            char row[256];
-            rc_strf(row, sizeof(row),
-                    "<div class=\"" RC_CSS_STATUS "\">"
-                    "<img src=\"spin.gif\" width=\"16\" height=\"16\" alt=\"\">"
-                    "%s %lus</div>", what, secs);
-            html->status(row);
+            /* THE MARKUP IS IN view.tpl from stage 3 C2, including the
+             * spinner's <img>. It was built here with rc_strf, which is
+             * also the precedent that makes the template substituter
+             * refuse to hand a loaded value to a formatter: a designer
+             * writing `width:100%` into view.tpl would otherwise be an
+             * arbitrary format directive against a mismatched argument
+             * list.
+             *
+             * The TEXT is still formatted here, because "receiving 41s"
+             * is this program talking about itself and is not content. */
+            char row[64];
+            FixedSink<256> out;
+            rc_strf(row, sizeof(row), "%s %lus", what, secs);
+            if (rc_wrap_local(RC_LOCAL_STATUS, row, out))
+                html->status(out.str());
         }
     }
 }

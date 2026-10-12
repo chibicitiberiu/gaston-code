@@ -923,6 +923,35 @@ bool rc_render(const char *rec, unsigned len, unsigned wrapcol, ByteSink &out)
     return true;
 }
 
+bool rc_wrap_local(RcLocal kind, const char *escaped, ByteSink &out)
+{
+    static const TplKey MAP[] = {
+        TPL_NOTICE, TPL_ERROR, TPL_USER, TPL_PENDING, TPL_STATUS
+    };
+    TplKey k;
+
+    if ((unsigned)kind >= sizeof MAP / sizeof MAP[0])
+        return false;
+    k = MAP[kind];
+    return rc_tpl_open(k, 0, out)
+        && out.write(escaped, (unsigned)strlen(escaped))
+        && rc_tpl_close(k, 0, out);
+}
+
+int rc_render_one(const char *rec, unsigned len, unsigned wrapcol,
+                  ByteSink &out)
+{
+    const char *p = rec;
+    const char *end = rec + len;
+    Record r;
+
+    if (!parseRecord(p, end, r))
+        return -1;
+    if (!renderOne(r, wrapcol, out))
+        return -1;
+    return (int)(p - rec);
+}
+
 int rc_render_count(const char *rec, unsigned len)
 {
     const char *p = rec;

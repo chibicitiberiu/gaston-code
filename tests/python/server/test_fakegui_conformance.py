@@ -366,9 +366,11 @@ async def test_fakegui_writes_a_real_export_to_a_file(harness, monkeypatch):
         guest = await _wait_attached(harness)
         # Something long enough to be chunked, so the multi-frame path and
         # the `off` continuity check are both exercised.
+        from bridge.view import blocks as B
+
         for i in range(400):
             await harness.bridge.presentation.write_block(
-                guest, "<p>paragraph %04d of an exported transcript</p>" % i)
+                guest, B.para("paragraph %04d of an exported transcript" % i))
 
         await harness.bridge.session.on_export(guest, Frame("EXPORT", {}))
 

@@ -28,6 +28,7 @@ from harness import FakeCtx, harness  # noqa: F401
 
 from bridge.agent.session import Turn
 from bridge.files.sync import Baseline
+from bridge.view import blocks
 from bridge.wire.protocol import Frame, hello
 from tests.python.server.golden_utils import (
     FRAME_GOLDENS_DIR,
@@ -264,7 +265,8 @@ async def test_golden_06_page_request_and_seal(harness):
     # Fill several pages directly into transcript
     guest = harness.bridge.connection.guest
     for i in range(600):
-        guest.view.pages.add("plain", f"line {i:04d} padding padding\n")
+        guest.view.pages.add(blocks.encode(blocks.Block(
+            "para", {}, [("t", f"line {i:04d} padding padding")])))
         if i % 100 == 0:
             guest.view.pages.message_boundary()
 

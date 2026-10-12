@@ -128,24 +128,20 @@
     "type": "TURN"
   },
   {
-    "body": "<p>Starting before reconnect...<br>Finished after reconnect.</p>",
+    "body": "para\nt Starting before reconnect...\nt Finished after reconnect.\n.\n",
     "headers": {
       "enc": "deflate",
       "mode": "live",
-      "off": "0",
-      "page": "1",
-      "total": "64"
+      "page": "1"
     },
     "type": "TEXT"
   },
   {
-    "body": "<p>Starting before reconnect...<br>Finished after reconnect.</p>",
+    "body": "para\nt Starting before reconnect...\nt Finished after reconnect.\n.\n",
     "headers": {
       "enc": "deflate",
       "mode": "append",
-      "off": "0",
-      "page": "1",
-      "total": "64"
+      "page": "1"
     },
     "type": "TEXT"
   },

@@ -282,10 +282,15 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        rpc/rpc.cpp rpc/cmdlog.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
        sync/syncrpc.cpp \
        ui/uiservice.cpp ui/uirpc.cpp ui/uiengine.cpp ui/uirec.cpp ui/inject.cpp
-# libautomation before libwire before libexec before libcore: the first three
+# libautomation before libwire before libexec before libcore: the first four
 # call into libcore, and wlink resolves in the order the libraries are named.
+#
+# $(LIBVIEW) joins here at stage 3 C2 and not before. CHECK_OWNED derives
+# from CLIENT_SRCS, so until the client links it the renderer's growth was
+# invisible to check-gaston -- which is what let it arrive in ONE measured
+# step at C0 rather than a byte at a time across four commits.
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
-       $(LIBFS) $(LIBCORE)
+       $(LIBFS) $(LIBVIEW) $(LIBCORE)
 
 .PHONY: gremote gupdate fscheck rendercheck execcheck execprobe keyprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 

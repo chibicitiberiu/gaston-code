@@ -36,8 +36,8 @@ import toolkit
 
 toolkit.on_path()
 
+from bridge.view import blocks as B  # noqa: E402
 from bridge.view import html as H  # noqa: E402
-from bridge.view.htmlrender import render  # noqa: E402
 from bridge.wire import protocol as PR  # noqa: E402
 from bridge.wire.compress import ENC_RAW  # noqa: E402
 from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
@@ -48,9 +48,9 @@ class _SockWriter:
 
     The probe is synchronous and GuestLink is not, which is why this exists at
     all -- and it is worth the twelve lines, because the alternative is the
-    probe reimplementing send_html's budget, its clip marker and its deflate
-    decision. Those are production policy; a second copy here would drift and
-    the measurement would stop describing what the guest actually receives.
+    probe reimplementing send_records' refusals and its deflate decision.
+    Those are production policy; a second copy here would drift and the
+    measurement would stop describing what the guest actually receives.
     """
 
     def __init__(self, sock):
@@ -77,14 +77,14 @@ def replay_fence(send, conn, a) -> int:
     the before and after -- but only inside a TURN, so this sends TURN start
     and end around the stream.
 
-    Everything goes through the REAL HtmlStream and the REAL GuestLink:
-    `_tail`'s elision, the fence's cross-feed state, the deflate decision and
-    send_html's budget. A hand-built corpus pushed through bare text_frame
-    measures a different shape than production -- and gets it wrong in a way
-    that shows up immediately, because the sealing APPEND of a 60KB fence is
-    65,821 bytes on the wire and the cap is 65,536. send_html truncates it
-    with the clip marker; a probe that did not would just crash, which is how
-    this was found.
+    Everything goes through the REAL BlockStream and the REAL GuestLink:
+    `_tail`'s elision, the fence's cross-feed state and the deflate
+    decision. A hand-built corpus pushed through bare text_frame measures a
+    different shape than production, and before stage 3 C2 it also crashed
+    -- the sealing APPEND of a 60KB fence was 65,821 bytes of markup
+    against a 65,536 cap, which is how that was found. A record of the same
+    block is smaller, because the markup is no longer in it; what bounds it
+    now is the client's declared maxblock.
 
     The cadence is the coalescer's (bridge/services/presentation.py), and the
     measurement is per update.
@@ -112,7 +112,7 @@ def replay_fence(send, conn, a) -> int:
     # LIVE_CAP source bytes, which comes out around 4.4KB of markup, and that
     # is the figure the renderer will be handed.
     print(f"replaying a {len(body)} byte fence in {len(lines)} lines "
-          f"at {a.cadence:.2f}s; LIVE_CAP={H.HtmlStream.LIVE_CAP}, so about "
+          f"at {a.cadence:.2f}s; LIVE_CAP={B.BlockStream.LIVE_CAP}, so about "
           f"{len(lines) * a.cadence:.0f}s")
 
     link = GuestLink()
@@ -120,11 +120,12 @@ def replay_fence(send, conn, a) -> int:
 
     async def drive() -> tuple[int, int]:
         n_live = n_append = 0
-        stream = H.HtmlStream()
+        stream = B.BlockStream()
         # Fed a line at a time, which is what the paginator works in.
         for line in body.splitlines(keepends=True):
             for u in stream.feed(line):
-                await link.send_html(None, u.html, u.mode, 1)
+                rec = B.encode(u.block) if u.block is not None else b""
+                await link.send_records(None, rec, u.mode, 1)
                 if u.mode == H.LIVE:
                     n_live += 1
                 else:
@@ -133,7 +134,9 @@ def replay_fence(send, conn, a) -> int:
                 # measures the socket rather than the view.
                 await asyncio.sleep(a.cadence)
         for u in stream.flush():
-            await link.send_html(None, u.html, u.mode, 1)
+            if u.block is None:
+                continue
+            await link.send_records(None, B.encode(u.block), u.mode, 1)
             n_append += 1
         return n_live, n_append
 
@@ -215,42 +218,59 @@ def main() -> int:
     if a.replay_fence:
         return replay_fence(send, conn, a)
 
-    # One of each thing the view can be told. The first three are PLAIN TEXT
-    # and the view escapes them itself; the rest are finished markup from
-    # bridge/view/html.py, which is the only path allowed to carry markup
-    # because the guest transforms nothing.
+    # One of each thing the view can be told, as RECORDS. Until stage 3 C2
+    # these were finished markup and the guest handed the bytes to MSHTML;
+    # now the guest renders them, which makes this probe the only thing
+    # that looks at the result with human eyes. The bridge's own tests
+    # compare the two renderers to each other and cannot see a class that
+    # is spelled right and styled wrong.
     checks = [
-        ("notice", H.notice("viewprobe: this is a notice")),
-        ("error", H.error("viewprobe: this is an error <&> \" escaped")),
-        ("user turn", H.user_turn("a user turn with <angle> & ampersand")),
-        ("tool call", H.tool_call("exec", "dir C:\\WORK")),
-        ("tool result", H.tool_result("VOLUME IN DRIVE C IS WIN98\n"
+        ("notice", B.notice("viewprobe: this is a notice")),
+        ("error", B.error("viewprobe: this is an error <&> \" escaped")),
+        ("user turn", B.user_turn("a user turn with <angle> & ampersand")),
+        ("tool call", B.tool_call("exec", "dir C:\\WORK")),
+        ("tool result", B.tool_result("VOLUME IN DRIVE C IS WIN98\n"
                                       " 3 FILE(S)      1,234 BYTES")),
-        ("tool error", H.tool_result("Access denied.", error=True)),
+        ("tool error", B.tool_result("Access denied.", error=True)),
+        ("tool result clipped", B.tool_result("x" * 3000)),
         # No link case: there is no [text](url) run. `_INLINE` has three
-        # groups -- code, bold, em -- and `inline("[t](http://x/)")` returns
-        # its input. This read as a link test until 2026-10-12 and was
-        # silently passing on the escaping instead.
-        ("inline runs", H.inline("**bold**, _em_, `code`, nested "
-                                 "**bold with `code` inside**, and "
-                                 "<escaping> & \"quotes\" to check")),
+        # groups -- code, bold, em -- and the inline parser returns that
+        # substring unchanged. This read as a link test until 2026-10-12
+        # and was silently passing on the escaping instead.
+        ("inline runs", B.para("**bold**, _em_, `code`, nested "
+                               "**bold with `code` inside**, and "
+                               "<escaping> & \"quotes\" to check")),
+        ("heading", B.Block("heading", {"level": 3}, [("t", "A heading")])),
+        ("bullets", B.Block("bullet", {}, [("t", "one"), ("t", "two")])),
+        ("numbered", B.Block("numbered", {}, [("t", "first"),
+                                              ("t", "second")])),
+        ("quote", B.Block("quote", {}, [("t", "a quoted line")])),
+        ("rule", B.Block("rule")),
+        ("code", B.code_block("int main(void) {\n    return 0;\n}", "c")),
+        ("table", B.table_block(["|head|cells|", "|--|--|",
+                                 "|a <b>|`c`|"])),
+        ("thinking", B.thinking("a thought, in passing")),
     ]
-    # render() explicitly, rather than letting send_html do it: this probe
-    # IS the check that the bridge's markup reaches MSHTML intact, so the
-    # step being checked should be visible in the probe rather than hidden
-    # in the transport. From stage 3 A7 the constructors return structure.
-    for name, item in checks:
-        markup = item if isinstance(item, str) else render(item)
-        send(PR.text_frame("append", ENC_RAW, 1, markup.encode("cp1252",
-                                                              "replace")))
+    for name, block in checks:
+        send(PR.text_frame("append", ENC_RAW, 1, B.encode(block)))
         print(f"  sent {name}")
         time.sleep(0.2)
 
-    send(PR.text_frame("append", ENC_RAW, 1,
-                       render(H.notice(
-                           "if you can read every line above, the MSHTML "
-                           "host and the view class both work"
-                       )).encode("cp1252", "replace")))
+    # And a permission card, which is the one composite kind and the only
+    # one whose payload ORDER matters.
+    send(PR.text_frame("append", ENC_RAW, 1, B.encode(B.Block(
+        "permission", {"settleable": 1},
+        [("h", "ask"), ("b", "delete"), ("d", "C:\\TEMP\\OLD"),
+         ("w", "this cannot be undone"), ("p", "3 files, 2 KB"),
+         ("s", "bring Notepad to the front"), ("s", "close Notepad"),
+         ("k", "path"), ("v", "C:\\TEMP\\OLD"),
+         ("k", "permanent"), ("v", "yes")]))))
+    print("  sent permission card")
+    time.sleep(0.2)
+
+    send(PR.text_frame("append", ENC_RAW, 1, B.encode(B.notice(
+        "if you can read every line above, the MSHTML host, the view class "
+        "and the record renderer all work"))))
 
     print(f"\nall frames sent. holding the link for {a.hold:.0f}s -- "
           f"look at the guest window now.")

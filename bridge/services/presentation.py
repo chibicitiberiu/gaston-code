@@ -11,9 +11,8 @@ from typing import Any
 
 from ..guest import GuestSession
 from ..view import html as H
-from ..view.blocks import Block
+from ..view.blocks import KINDS, MAX_RECORD, Block, encode
 from ..view.html import APPEND, LIVE
-from ..view.htmlrender import render
 from ..wire.coalesce import Coalescer
 from ..wire.protocol import Frame, error, notice, pageend, pagesealed, pagestart
 
@@ -35,7 +34,7 @@ class PresentationService:
                 # once per call and `style` does not change under it.
                 if style == "plain":
                     await self.write_updates(
-                        guest, guest.view.render.feed(text))
+                        guest, guest.view.parse.feed(text))
                 else:
                     # The only other style is "thinking" (session.py's
                     # on_thinking). It used to build its own div from the
@@ -62,18 +61,28 @@ class PresentationService:
         """Flush all stream coalescers and flush the renderer."""
         for c in list(guest.view.coalescers.values()):
             await c.flush()
-        await self.write_updates(guest, guest.view.render.flush())
+        await self.write_updates(guest, guest.view.parse.flush())
 
     async def write_updates(
         self, guest: GuestSession, updates: list
     ) -> None:
-        """Send a batch of renderer updates."""
+        """Send a batch of parser updates.
+
+        The LIVE arm BYPASSES write_block, deliberately and as it always
+        has: the open block is replaced wholesale on the guest rather than
+        appended, so it never reaches the paginator. It is also the one
+        place an EMPTY body is meaningful -- that is what clears `#l` at
+        the end of a turn -- which is why `block is None` is sent rather
+        than skipped.
+        """
         for u in updates:
             if u.mode == APPEND:
-                await self.write_block(guest, u.html)
+                if u.block is not None:
+                    await self.write_block(guest, u.block)
             else:
-                await self.connection.send_html(
-                    guest, u.html, LIVE, guest.view.pages.live.number
+                body = encode(u.block) if u.block is not None else b""
+                await self.connection.send_records(
+                    guest, body, LIVE, guest.view.pages.live.number
                 )
 
     async def write_block(
@@ -86,34 +95,77 @@ class PresentationService:
     ) -> None:
         """Record a finished block into the paginator, then send it.
 
-        Takes a `Block` as well as markup from A6 onwards. The paginator
-        still holds HTML at this point, so the render happens here on the way
-        in; C2 is where the paginator starts holding records instead and this
-        line becomes an encode.
-
-        All 33 write_block call sites are untouched by that change, because
-        the constructors in blocks.py kept their names and their signatures.
+        The paginator holds RECORDS from stage 3 C2, so the encode happens
+        here on the way in -- which is the line A6 said would become this.
+        A string caller is one that still hand-builds markup, and there are
+        none left in the bridge; the union stays on the signature until C5's
+        grep proves it.
         """
-        if isinstance(html, Block):
-            html = render(html)
-        if not html:
+        if isinstance(html, str):
+            if not html:
+                return
+            raise TypeError(
+                "write_block takes a Block from stage 3 C2; the bridge does "
+                "not render markup any more and a string here would reach "
+                "the guest as a record it cannot parse")
+        if not html.payload and KINDS[html.kind][1]:
             return
 
-        page_no = guest.view.pages.live.number
-        sealed, chunks = guest.view.pages.write("html", html)
+        record = encode(html)
+        if len(record) > self._maxblock(guest):
+            # REFUSED, not truncated, and not split. Half a record is two
+            # fragments the guest must throw away, and a block the client
+            # said it cannot hold is one it will not render however it
+            # arrives. The model still has the whole text either way --
+            # the same answer tool_result gives.
+            log.warning("block of %d record bytes exceeds the %d the client "
+                        "declared it can hold; it was not sent",
+                        len(record), self._maxblock(guest))
+            return
+        sealed, chunks = guest.view.pages.write(record)
 
-        if stream and (guest.view.view_page is None or guest.view.view_page == page_no):
-            on_this_page = "".join(text for pg, text in chunks if pg == page_no)
-            if on_this_page:
-                await self.connection.send_html(
-                    guest, on_this_page, APPEND, page_no
-                )
+        # TAGGED WITH THE PAGE IT LANDED ON, which is the fix for a bug
+        # this rewrite exposed and did not introduce. The old code captured
+        # page_no BEFORE the write and then streamed only the chunks whose
+        # page matched it -- so a block that forced a seal, and therefore
+        # landed on the NEXT page, matched nothing and was never streamed
+        # at all. A reader following LIVE simply never saw it. Verified
+        # against the shipping code: two blocks, the second forcing a seal,
+        # and the second produces no TEXT frame.
+        #
+        # It was survivable before only because a run could be SPLIT, so
+        # the part that stayed still went out; 02.17 then made splitting
+        # rare by sealing between blocks instead, which made the hole the
+        # common case without anyone noticing. Records cannot split at all.
+        #
+        # Safe to send under a page the guest is not showing: Turn::onText
+        # ignores the page header entirely and appends what arrives. A
+        # reader following LIVE wants continuous text, and one who has
+        # paged away is excluded by the view_page test below.
+        landed = chunks[0][0] if chunks else guest.view.pages.live.number
+        if stream and (guest.view.view_page is None
+                       or guest.view.view_page == landed):
+            await self.connection.send_records(
+                guest, record, APPEND, landed
+            )
 
         if notify:
             for pg in sealed:
                 await self.connection.send(
                     guest, pagesealed(pg.number, guest.view.pages.count)
                 )
+
+    @staticmethod
+    def _maxblock(guest: GuestSession) -> int:
+        """What the client said it can hold, or the bridge's own bound.
+
+        A client that did not say gets blocks.MAX_RECORD, which is a sanity
+        bound rather than a policy: before stage 3 C1 nothing declared one
+        and the only limit was the frame cap.
+        """
+        caps = getattr(guest, "caps", None)
+        declared = getattr(caps, "maxblock", 0) or 0
+        return declared or MAX_RECORD
 
     async def on_getpage(self, guest: GuestSession, f: Frame) -> None:
         await self.send_page(guest, f.headers.get("page", ""))
@@ -148,8 +200,8 @@ class PresentationService:
             ),
         )
         for run in page.runs:
-            await self.connection.send_html(
-                guest, run.text, APPEND, page.number
+            await self.connection.send_records(
+                guest, run.body, APPEND, page.number
             )
             await self.connection.wire_yield(guest)
         await self.connection.send(guest, pageend(page.number))

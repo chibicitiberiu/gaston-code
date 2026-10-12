@@ -20,10 +20,7 @@ import asyncio
 import logging
 import time
 
-from ..view.blocks import Block
 from ..view.html import LIVE
-from ..view.htmlrender import render
-from . import fold
 from .compress import (
     ENC_DEFLATE,
     ENC_RAW,
@@ -110,102 +107,53 @@ class GuestLink:
                 return False
         return True
 
-    async def send_html(self, guest, html: str | Block, mode: str,
-                        page_no: int) -> None:
-        """Fold to CP1252, compress if worthwhile, chunk under the frame cap.
+    async def send_records(self, guest, body: bytes, mode: str,
+                           page_no: int) -> None:
+        """One frame of whole records. Compress if worthwhile, never split.
 
-        Chunking keeps the send lock free between chunks, so a long block
-        cannot delay a keystroke or a Stop. A LIVE update is never chunked --
-        it replaces an element wholesale, so half of one is meaningless; an
-        oversized one is simply dropped and the APPEND that follows carries the
-        whole thing.
+        WHAT REPLACED send_html, and the shape is simpler by one whole
+        mechanism. That function folded, then chunked a long block across
+        frames with `total`/`off` on each -- headers that look like a
+        reassembly protocol and are not: the guest called rc_html_block per
+        frame and used them only to drive a progress figure, so a split
+        block arrived as several appends, each a fragment of markup, and
+        insertAdjacentHTML got half a <div>. What the user saw was the tail
+        of a code block rendered as page furniture.
 
-        A `Block` is rendered HERE, at the one place a byte leaves the bridge
-        for a guest, rather than at each of the three TEXT producers. That is
-        the whole point of this class existing -- before it, header
-        stringification and fold.encode were decided independently at 44 call
-        sites -- and it means stage 3's C2 has one line to change rather than
-        three: render, or encode a record.
+        It could not split safely because it could not know where the
+        element boundaries were, so it truncated instead and said so. None
+        of that applies now. A body is zero or more WHOLE records; the
+        caller (PresentationService.write_block) refuses a record larger
+        than the client declared it can hold, before it ever gets here; and
+        the paginator gives an oversize record a page of its own rather
+        than cutting it. There is nothing left to chunk.
+
+        ZERO IS REAL and is not an early return: an empty LIVE body is what
+        clears `#l` at the end of a turn.
+
+        The clip marker went with the chunking. It is the serialiser's now
+        -- `clipped=N` on the record -- because the client words it, and a
+        client with no screen can ignore it.
         """
-        if isinstance(html, Block):
-            html = render(html)
-        data = fold.encode(html)
-
-        # A NUL truncates the block in the DOM and nowhere else, which is the
-        # worst shape a loss can take: `win/app/turn.cpp:190` hands the CACHE
-        # `(f->body, f->body_len)` and so keeps every byte, then hands
-        # `rc_html::block` a `const char *` (`win/app/htmlview.h`) that stops
-        # at the first one. The guest NUL-terminates every body it receives
-        # (`win/wire/connection.cpp:281` inflated, `:689` raw), so the tail of
-        # a block silently vanishes from the screen while sitting intact in
-        # the cache -- and a reconnect redraws from the cache, so the same
-        # transcript shows two different things depending on how it got there.
-        #
-        # `fold` is NOT the place for this: `fold.encode` short-circuits on
-        # `text.isascii()`, so a NUL never reaches `_fold_char`, and
-        # `protocol.py:48` routes every HEADER value through the same function
-        # -- a strip there would be both a no-op here and a silent edit of
-        # values that are not display text. So it belongs on the one path that
-        # ends at `innerHTML`, which is this one.
-        #
-        # Silent on LIVE: the bridge re-sends the whole open block every
-        # flush, so one NUL in a growing block would log ten lines a second,
-        # and the APPEND that seals it reports the same text once.
-        if b"\x00" in data:
-            if mode != LIVE:
-                log.warning("stripped %d NUL byte(s) from a %s block of %d "
-                            "bytes; they truncate the DOM copy and nothing "
-                            "else", data.count(b"\x00"), mode, len(data))
-            data = data.replace(b"\x00", b"")
-
-        if not data:
-            if mode == LIVE:
-                await self.send(guest, text_frame(mode, ENC_RAW, page_no, b""))
+        if mode == LIVE and len(body) > MAX_FRAME - 1024:
+            # Dropped, as before: a LIVE update replaces an element
+            # wholesale, so half of one is meaningless, and the APPEND that
+            # follows carries the whole thing.
+            log.warning("live body of %d bytes exceeds the frame budget; "
+                        "dropped, the append will carry it", len(body))
             return
-
-        budget = MAX_FRAME - 1024   # headroom for headers and deflate overhead
-        if mode == LIVE and len(data) > budget:
+        if len(body) > MAX_FRAME - 1024:
+            # REFUSE AND LOG, which is what this always did once it could
+            # not split -- only now it is unreachable by construction and
+            # the log line says so, because an unreachable branch that
+            # fires is worth more than one that was deleted.
+            log.error("a body of %d record bytes reached the wire; "
+                      "write_block's maxblock check and the paginator's "
+                      "own-page rule should both have prevented it",
+                      len(body))
             return
-
-        # An APPEND block is ONE element, and the guest does not reassemble.
-        #
-        # `total`/`off` are on every chunk and look like a reassembly
-        # protocol; they are not. win/app/main.c's TEXT branch calls
-        # rc_html_block(f->body) per frame and uses total/off only to drive
-        # the progress figure -- so a block split here arrives as several
-        # separate appends, each a fragment of markup, and insertAdjacentHTML
-        # gets half a <div>. What the user sees is the tail of a code block
-        # rendered as page furniture.
-        #
-        # Splitting arbitrary HTML safely would mean knowing where its element
-        # boundaries are, which is not a thing this function can know. So it
-        # truncates at the boundary it CAN guarantee and says it did -- the
-        # same answer tool_result gives, and the model still has the whole
-        # text either way.
-        if mode != LIVE and len(data) > budget:
-            cut = "\n<div class=\"clip\">-- this block was too large to send "
-            cut += "to the machine in one piece and has been shortened here; "
-            cut += "the model still has all of it --</div>"
-            marker = fold.encode(cut)
-            log.warning("block of %d bytes exceeds the %d frame budget; "
-                        "truncating rather than splitting an element",
-                        len(data), budget)
-            data = data[:budget - len(marker)] + marker
-
-        total = len(data)
-        for i in range(0, total, budget):
-            chunk = data[i:i + budget]
-            # total/off are in DECOMPRESSED bytes and are on every chunk, not
-            # just the first: the guest shows a progress figure from them, and
-            # a reconnect mid-transfer would otherwise leave it with a
-            # denominator it never received.
-            await self.send(guest, text_frame(mode, ENC_RAW, page_no, chunk,
-                                              total=total, off=i),
-                            compress=True)
-            if i + budget < total:
-                # Between chunks, not merely between calls: without this, a
-                # big page or export starves the event loop -- see wire_yield.
-                await self.wire_yield(guest)
+        await self.send(guest, text_frame(mode, ENC_RAW, page_no, body),
+                        compress=True)
 
     async def send_export(self, guest, data: bytes) -> None:
         """Stream an export to the guest, chunked, with a START and an END.

@@ -31,6 +31,8 @@
 
 #include <windows.h>
 
+#include "view/render.h"
+
 /* The CSS classes this side emits. They are defined by the BRIDGE's
  * stylesheet (bridge/view/html.py), which the guest receives whole in the DOC
  * frame -- so these three names are a contract between two files in two
@@ -153,7 +155,27 @@ public:
      * the record of what was asked and answered, and it is right that it
      * does not shrink. */
     void settle_perm();
-    void block(const char *html);          /* bridge-rendered */
+    void block(const char *html);          /* finished markup, guest-made */
+
+    /* --- what the bridge actually sends, from stage 3 ---------------------
+     *
+     * A frame body of zero or more WHOLE records. `records` renders and
+     * inserts them ONE AT A TIME, which is the memory mitigation rather
+     * than a style: a page replay is up to 90 blocks, and one buffer for
+     * all of them would hold the page's markup and the UTF-16 copy MSHTML
+     * makes of it at once.
+     *
+     * `live_records` renders the whole body and replaces #l wholesale,
+     * because the bridge re-sends the open block every flush -- inserting
+     * per record there would append a fresh copy ten times a second. An
+     * empty body is NOT a no-op: it is what clears the slot at turn end.
+     *
+     * `wrapcol` is the column a literal block's long lines break at. The
+     * view passes its own window's; export passes a fixed one. It is a
+     * parameter rather than a setting because the two differ and because
+     * the bridge no longer knows it. */
+    void records(const char *rec, unsigned len, unsigned wrapcol);
+    void live_records(const char *rec, unsigned len, unsigned wrapcol);
 
     /* Honour the user's setting. Off means a block still lands, but the view
      * does not jump -- which is the whole point of the option. */
@@ -211,8 +233,15 @@ private:
      * sites reached it directly. `block` is the supported way in. */
     void renavigate();
     void append(const char *frag);
-    void say(const char *cls, const char *text);
-    void say_id(const char *cls, const char *id, const char *text);
+    /* One of the blocks the GUEST composes, escaped here and wrapped in
+     * its template from view.tpl. Replaced say()/say_id(), which took a
+     * class name and built the <div> with rc_strf -- the markup is in the
+     * template file with every other block's now, and the class name is
+     * no longer repeated in two languages.
+     *
+     * The ESCAPING is still this side's and deliberately not the record
+     * path's: see rc_wrap_local in win/view/render.h. */
+    void say_local(RcLocal kind, const char *text);
     void settle(int was_at_bottom);
 };
 

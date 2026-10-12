@@ -58,14 +58,31 @@ rc_cache *rc_cache::create(const char *exe_dir)
 
 /* Non-zero if the whole path fit. CHECKED by every caller, because a
  * truncated one is not a shorter path, it is a DIFFERENT file: with an exe
- * directory near 250 characters the "P%03d.HTM" suffix is what gets cut, so
- * P001.HTM and P002.HTM resolve to one name -- page 2 overwrites page 1,
+ * directory near 250 characters the "P%03d.HT2" suffix is what gets cut, so
+ * P001.HT2 and P002.HT2 resolve to one name -- page 2 overwrites page 1,
  * page_count() stops at 1, and paging back offline shows the wrong page with
  * nothing to say so. Unlikely on a C:\GASTON install; listed because it is
  * the ignored-return class this codebase set out to close. (audit 01.37) */
 int rc_cache::path_for(char *out, unsigned cap, int n) const
 {
-    return rc_strf(out, cap, "%s\\P%03d.HTM", dir, n);
+    /* .HT2, NOT .HTM, and the version is in the FILENAME rather than in a
+     * FORMAT file beside the pages. Stage 3 C2 changed what a page holds
+     * -- records, not markup -- and a P###.HTM written by an older build
+     * would render as escaped text.
+     *
+     * The obvious shape, a FORMAT file that open_session checks and a
+     * directory it throws away when the version differs, LOSES DATA. The
+     * cold-start-with-no-bridge path calls open_session and then bails at
+     * mainwindow.cpp:620-631 if page_count() is zero -- so the first
+     * launch after an upgrade with no bridge reachable would delete the
+     * cached conversation before printing the "bridge not reachable"
+     * notice, with nothing to re-fetch it from. It would also need a
+     * delete primitive this class does not have.
+     *
+     * With the version in the name: page_count() finds none, the client
+     * re-fetches from the bridge, nothing is deleted, and the old files
+     * sit there until BACKLOG 11a gets round to them. */
+    return rc_strf(out, cap, "%s\\P%03d.HT2", dir, n);
 }
 
 void rc_cache::open_session(const char *session_id)
@@ -180,7 +197,7 @@ void rc_cache::end_page()
     }
 }
 
-int rc_cache::load_page(int n, rc_html *html)
+int rc_cache::load_page(int n, rc_html *html, unsigned wrapcol)
 {
     char path[MAX_PATH];
     long size;
@@ -208,7 +225,9 @@ int rc_cache::load_page(int n, rc_html *html)
     got = fread(buf, 1, (size_t)size, fp.get());
     buf[got] = '\0';
 
-    html->block(buf);
+    /* Records, one at a time, which is also what keeps a 90-block page
+     * from being rendered into one buffer here. */
+    html->records(buf, (unsigned)got, wrapcol);
     HeapFree(GetProcessHeap(), 0, buf);
     return 1;
 }

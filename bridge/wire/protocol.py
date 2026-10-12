@@ -357,7 +357,12 @@ def text_frame(mode: str, enc: str, page: int, body: bytes = b"", *,
                total: int | None = None, off: int | None = None) -> Frame:
     """One TEXT frame -- either a LIVE replace or one chunk of an APPEND
     block. `total`/`off` are set together, only when this is a chunk of a
-    larger send; see GuestLink.send_html for why they are on every chunk."""
+    larger send.
+
+    UNUSED BY TEXT from stage 3 C2. A body is zero or more whole records
+    and nothing chunks one, so nothing sets these on a TEXT frame any more;
+    the export's own family still does. They stay on the signature because
+    removing them is pagination's commit to make, not this one's."""
     h = {"mode": mode, "enc": enc, "page": str(page)}
     if total is not None:
         h["total"] = str(total)

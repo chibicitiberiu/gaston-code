@@ -46,8 +46,25 @@ HARD_BLOCKS = MAX_BLOCKS * 2
 
 @dataclass
 class PageRun:
-    style: str
-    text: str
+    """A run of whole records, in order.
+
+    A LIST OF RECORDS and not one concatenated string, which is the shape
+    stage 3 C2 needed and the reason this class survived at all: the
+    paginator must be able to hand a caller the records that landed on a
+    page without re-parsing a flat buffer to find where each one begins.
+    Re-parsing is exactly what moving the markup off the wire was meant to
+    stop anybody having to do.
+
+    `style` is gone with it. It was always "html" -- presentation.py had one
+    caller and it passed a constant -- and it existed so that add() could
+    coalesce adjacent runs of the same kind. There is one kind.
+    """
+
+    records: list[bytes] = field(default_factory=list)
+
+    @property
+    def body(self) -> bytes:
+        return b"".join(self.records)
 
 
 @dataclass
@@ -58,20 +75,28 @@ class Page:
     nbytes: int = 0
     blocks: int = 0
     sealed: bool = False
-    continued: bool = False       # split mid-run from the previous page
+    #: Split mid-run from the previous page. ALWAYS FALSE from stage 3 C2
+    #: and kept only because PAGESTART carries it: a record is never cut, so
+    #: no page continues another. Setting it true for a page sealed by the
+    #: block cap would be a lie the guest draws a marker for. It dies with
+    #: the rest of pagination in stage 3b.
+    continued: bool = False
 
-    def add(self, style: str, text: str) -> None:
-        if self.runs and self.runs[-1].style == style:
-            self.runs[-1].text += text
-        else:
-            self.runs.append(PageRun(style, text))
-        self.lines += text.count("\n")
-        self.nbytes += len(text)
+    def add(self, record: bytes) -> None:
+        if not self.runs:
+            self.runs.append(PageRun())
+        self.runs[-1].records.append(record)
+        self.lines += record.count(b"\n")
+        self.nbytes += len(record)
         self.blocks += 1
 
     @property
-    def text(self) -> str:
-        return "".join(r.text for r in self.runs)
+    def body(self) -> bytes:
+        return b"".join(r.body for r in self.runs)
+
+    @property
+    def records(self) -> list:
+        return [rec for r in self.runs for rec in r.records]
 
     # Caps are passed in rather than read from the module, because they are
     # sized to the guest's memory and two guests can differ.
@@ -142,6 +167,10 @@ class Paginator:
     def anchors(self) -> list[Anchor]:
         return list(self._anchors)
 
+    def all_records(self) -> list:
+        """Every record in the transcript, in order. For the export."""
+        return [rec for p in self._pages for rec in p.records]
+
     def all_text(self) -> str:
         """Every page's HTML, in order, as one string.
 
@@ -149,8 +178,17 @@ class Paginator:
         rather than a page of it. Built here rather than by reaching into
         `_pages` from outside, because "in order" is this class's business --
         the live page is the last one, and that is not obvious from the API.
+
+        It RENDERS, from stage 3 C2, because the pages hold records now.
+        That is a decode and a render per block and it is deliberately
+        temporary: C3 moves the export to the guest, this goes, and
+        all_records() is what is left. Keeping it for one commit is what
+        lets C2 be about the live path alone.
         """
-        return "".join(p.text for p in self._pages)
+        from .blocks import decode
+        from .htmlrender import render
+        return "".join(render(b) for rec in self.all_records()
+                       for b in decode(rec))
 
     def page(self, number: int) -> Page | None:
         if 1 <= number <= len(self._pages):
@@ -159,68 +197,54 @@ class Paginator:
 
     # --- writing -----------------------------------------------------------
 
-    def add(self, style: str, text: str) -> list[Page]:
-        """Append a run. Returns any pages sealed as a result."""
-        sealed, _chunks = self.write(style, text)
+    def add(self, record: bytes) -> list[Page]:
+        """Append a record. Returns any pages sealed as a result."""
+        sealed, _chunks = self.write(record)
         return sealed
 
-    def write(self, style: str, text: str) -> tuple[list[Page], list[tuple[int, str]]]:
-        """Append a run, tracking exactly which page each piece landed on.
+    def write(self, record: bytes) -> tuple[list[Page], list[tuple[int, bytes]]]:
+        """Append one record, saying which page it landed on.
 
-        A run longer than the room left on the live page is split across a
-        seal (below), and a caller that streams what it just wrote to a live
-        viewer needs to know that split happened -- sending the whole run
-        tagged with the page it STARTED on double-renders the tail once the
-        reader pages forward to where it actually landed (02.33). `add()` is
-        the old interface for callers that only want to know what sealed.
+        ONE RECORD AT A TIME, which is what removed the loop. Until stage 3
+        this took a string of markup and split it across page seals when it
+        did not fit, and a caller streaming what it had just written needed
+        to know where each piece went -- sending the whole run tagged with
+        the page it STARTED on double-renders the tail once the reader pages
+        forward (02.33). A record is indivisible, so there is one piece.
+
+        THE MID-RUN SPLIT IS GONE and this is its replacement, named rather
+        than left implicit. A byte-count split through a record cuts between
+        payload lines and leaves two fragments the guest must refuse -- the
+        same class of damage the old comment describes for HTML, where
+        page N ended on an unclosed <pre> and MSHTML "fixed" it into a code
+        block missing its frame.
+
+        But deleting the arm alone would make this loop forever: a record
+        larger than hard_bytes on a fresh page failed every remaining
+        condition and nothing advanced `text`. So the rule is explicit --
+        **a record too large for a page gets a page of its own, whole** --
+        and it falls out of the structure rather than needing a branch: a
+        page with no runs always accepts, whatever the size. What bounds
+        that size is the client's declared `maxblock`, not this.
         """
         sealed: list[Page] = []
-        chunks: list[tuple[int, str]] = []
-        if not text:
-            return sealed, chunks
+        if not record:
+            return sealed, []
 
         # A page holding too many elements is sealed before the next one is
-        # added. Unlike the byte cap this needs no splitting: a block boundary
-        # is already a clean place to stop.
+        # added. Unlike the byte cap this needs no splitting: a block
+        # boundary is already a clean place to stop.
         if self.live.over_hard_blocks(self.hard_blocks) and self.live.runs:
-            sealed.append(self._seal(continued=True))
+            sealed.append(self._seal(continued=False))
 
-        while text:
+        page = self.live
+        if page.runs and (page.nbytes + len(record) > self.hard_bytes
+                          or page.over_hard_cap(self.hard_bytes)):
+            sealed.append(self._seal(continued=False))
             page = self.live
-            room = self.hard_bytes - page.nbytes
 
-            if room <= 0:
-                sealed.append(self._seal(continued=True))
-                continue
-
-            if len(text) <= room and not page.over_hard_cap(self.hard_bytes):
-                page.add(style, text)
-                chunks.append((page.number, text))
-                text = ""
-            elif (page.runs and len(text) <= self.hard_bytes):
-                # SEAL BETWEEN BLOCKS RATHER THAN THROUGH ONE (02.17). A
-                # byte-count split knows nothing about HTML tags: splitting
-                # mid-element left page N ending `<div class="codewrap">
-                # <pre>...` unclosed and page N+1 opening `...</pre></div>`,
-                # which MSHTML "fixes" into a code block missing its frame.
-                # There is a clean boundary whenever the page already holds
-                # something -- the start of this block -- so take it; the
-                # mid-run split stays only for a block bigger than a page.
-                sealed.append(self._seal(continued=True))
-                continue
-            else:
-                # Hard cap reached mid-run. Prefer to break at a newline inside
-                # the allowed span so a code block splits between lines.
-                chunk = text[:room]
-                nl = chunk.rfind("\n")
-                if nl > 0:
-                    chunk = chunk[: nl + 1]
-                page.add(style, chunk)
-                chunks.append((page.number, chunk))
-                text = text[len(chunk):]
-                sealed.append(self._seal(continued=True))
-
-        return sealed, chunks
+        page.add(record)
+        return sealed, [(page.number, record)]
 
     def message_boundary(self) -> Page | None:
         """A turn ended. Seal here if the page is over the soft cap.

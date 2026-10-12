@@ -91,11 +91,19 @@ public:
 
     /* Render a cached page into `html`, or return zero if it is not there.
      * The caller is expected to have cleared the view first, exactly as
-     * PAGESTART does on the live path. */
-    int  load_page(int n, rc_html *html);
+     * PAGESTART does on the live path.
+     *
+     * `wrapcol` because the pages hold RECORDS from stage 3 C2 and this is
+     * a render. A page cached at one window size and replayed at another
+     * wraps to the new one, which is more than the live path manages -- it
+     * holds rendered markup and cannot re-wrap without the records. */
+    int  load_page(int n, rc_html *html, unsigned wrapcol);
 
     /* How many pages this conversation has on disk: the highest N for which
-     * P<N>.HTM exists, counting from 1. Zero means nothing is cached. */
+     * P<N>.HT2 exists, counting from 1. Zero means nothing is cached, which
+     * is also what an upgrade from a build that wrote .HTM looks like --
+     * deliberately, so the client re-fetches rather than rendering records
+     * that are actually markup. */
     int  page_count() const;
 
     /* The chat list, streamed a row at a time in both directions.

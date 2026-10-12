@@ -9,16 +9,29 @@ it is finished, or streaming reads as a stall.
 import re
 
 from bridge.view import html as H
+from bridge.view.blocks import clean, runs
 from bridge.view.html import (
     APPEND,
     LIVE,
     HtmlStream,
     document,
     esc,
-    inline,
     render,
     user_turn,
 )
+from bridge.view.htmlrender import TOOL_WRAP_COL, spans
+
+
+def inline(text: str) -> str:
+    """Markdown source straight to HTML, as html.inline used to be.
+
+    It was two steps all along and C2 separated them for good: the parse
+    marks the inline runs (blocks.runs) and the renderer draws them
+    (htmlrender.spans). The composition is still worth testing in one
+    place, because every assertion below is about a grammar rule and its
+    rendered result, and splitting each into two would say less.
+    """
+    return spans(runs(clean(text)))
 
 
 def appended(updates):
@@ -268,7 +281,7 @@ def test_a_long_tool_result_line_is_broken_by_the_bridge():
     body = out[out.index("<pre>") + 5:out.index("</pre>")]
     lines = body.split("\n")
     assert len(lines) > 1, "it must actually break"
-    assert all(len(line) <= H._TOOL_WRAP_COL for line in lines), lines
+    assert all(len(line) <= TOOL_WRAP_COL for line in lines), lines
     # Broken at spaces, so it still reads as prose.
     assert not any(line.startswith(" ") for line in lines), lines
     assert ("".join(line + " " for line in lines).split()
@@ -283,7 +296,7 @@ def test_an_unbreakable_run_is_broken_anyway():
     out = render(H.tool_result("x" * 200))
     body = out[out.index("<pre>") + 5:out.index("</pre>")]
     lines = body.split("\n")
-    assert max(len(line) for line in lines) <= H._TOOL_WRAP_COL
+    assert max(len(line) for line in lines) <= TOOL_WRAP_COL
     assert "".join(lines) == "x" * 200, "and no character is lost doing it"
 
 

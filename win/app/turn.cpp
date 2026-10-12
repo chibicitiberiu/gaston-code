@@ -188,14 +188,53 @@ void Turn::onText(rc_frame *f)
     const char *mode = rc_frame_get(f, "mode");
     turnReceiving();
     if (mode && strcmp(mode, "live") == 0) {
-        if (m_html) m_html->live(f->body);
+        /* (body, body_len) and not body alone. The cache has always been
+         * given the length and the view a NUL-terminated pointer, which is
+         * how a \x00 in model text came to truncate what was on screen
+         * while the cache kept the whole block. Records are bytes; there
+         * is no second shape to get wrong. */
+        if (m_html) m_html->live_records(f->body, f->body_len, wrapCol());
     } else {
         if (mode && strcmp(mode, "append") != 0)
             rc_log("TEXT: unrecognized mode=\"%s\" (want \"append\" or "
                    "\"live\"); treating as a finished block", mode);
+        /* THE CACHE STORES RECORDS, not markup, and that is what the page
+         * filename's version bump is for (cache.cpp path_for): a P###.HTM
+         * written by an older build holds HTML this renderer would show as
+         * escaped text. */
         if (m_cache) m_cache->add(f->body, f->body_len);
-        if (m_html) m_html->block(f->body);
+        if (m_html) m_html->records(f->body, f->body_len, wrapCol());
     }
+}
+
+/* The column a literal block breaks at, from the window rather than from
+ * the bridge.
+ *
+ * This number used to be the bridge's: 56, measured once in the client's
+ * default 640x480 window on the Athlon. It was wrong for every other
+ * window and the bridge had no way to learn better, which is one of the
+ * three MSHTML-shaped numbers stage 3 moved.
+ *
+ * THE HONEST LIMIT, and it is worth stating where the number is taken: a
+ * RESIZE DOES NOT RE-WRAP what is already in the document. The client
+ * holds rendered markup, not records, and holding records would cost heap
+ * on a machine measured at 28KB free after a turn. New blocks and a
+ * re-rendered page pick up the new width.
+ */
+unsigned Turn::wrapCol() const
+{
+    /* 8pt Courier New in the result box: 57 characters before the right
+     * edge at 640x480, measured on the guest 2026-10-03, and the pane is
+     * ~470px of the window. Scaled from that rather than re-measured,
+     * because the ratio is what the measurement established and the font
+     * does not change. Floored at 20: below that the wrap is noise and a
+     * window that small is not being read. */
+    RECT rc;
+    unsigned cols;
+    if (!m_hwnd || !GetClientRect(m_hwnd, &rc))
+        return 56;
+    cols = (unsigned)((rc.right - rc.left) * 56 / 640);
+    return cols < 20 ? 20 : cols;
 }
 
 void Turn::onTool(rc_frame *f)
