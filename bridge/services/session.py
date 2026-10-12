@@ -359,7 +359,9 @@ class SessionService:
             await self.presentation.flush_text(guest)
             if not shows_tool_result(is_err, guest.turn_stopped):
                 return
-            await self.presentation.write_block(guest, H.tool_result(body, error=is_err))
+            await self.presentation.write_block(
+                guest, H.tool_result(body, error=is_err,
+                                     cap=guest.view.toolmax))
 
         async def on_system(subtype: str, data: dict) -> None:
             if subtype == "compact_boundary":

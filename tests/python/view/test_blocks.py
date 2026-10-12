@@ -302,3 +302,42 @@ def test_the_budget_counts_folded_bytes_because_folding_expands():
     assert len(rec) > len("para\nt " + "\u2026" * 10 + "\n.\n")
     for body in B.pack([block] * 20, 300):
         assert len(body) <= 300 or len(B.decode(body)) == 1
+
+
+# --- the client's cap ------------------------------------------------------
+
+
+def test_the_default_cap_is_the_bridge_s_own():
+    big = B.tool_result("x" * 5000)
+    assert big.attrs["clipped"] == 5000 - B.TOOL_RESULT_MAX
+    assert len("".join(big.texts())) == B.TOOL_RESULT_MAX
+
+
+def test_a_client_can_ask_for_less():
+    small = B.tool_result("x" * 5000, cap=100)
+    assert small.attrs["clipped"] == 4900
+    assert len("".join(small.texts())) == 100
+
+
+def test_a_client_can_ask_for_all_of_it():
+    """NO_TOOL_CAP, not a large number: "no limit" has to survive a future
+    change to what "large" means."""
+    whole = B.tool_result("x" * 5000, cap=B.NO_TOOL_CAP)
+    assert "clipped" not in whole.attrs
+    assert len("".join(whole.texts())) == 5000
+
+
+def test_saying_nothing_and_saying_none_are_different_answers():
+    """cap=0 is "the client has no opinion" and gets the bridge's number;
+    NO_TOOL_CAP is "all of it". A handshake exists to tell those apart, so
+    they cannot both be zero."""
+    assert B.tool_result("x" * 5000, cap=0).attrs["clipped"] > 0
+    assert "clipped" not in B.tool_result("x" * 5000,
+                                          cap=B.NO_TOOL_CAP).attrs
+    assert B.NO_TOOL_CAP != 0
+
+
+def test_a_result_under_the_cap_is_not_marked_clipped():
+    assert "clipped" not in B.tool_result("short", cap=100).attrs
+    assert "clipped" not in B.tool_result("x" * 100, cap=100).attrs
+    assert B.tool_result("x" * 101, cap=100).attrs["clipped"] == 1

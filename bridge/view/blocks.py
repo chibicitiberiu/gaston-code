@@ -208,6 +208,12 @@ def table_block(lines: list[str]) -> Block:
 #: the client means the bytes already crossed a 5 KB/s link.
 TOOL_RESULT_MAX = 1200
 
+#: What a client sends for `toolmax` when it wants the whole thing. A
+#: sentinel rather than a large number, so "no limit" survives a future
+#: change to what "large" means -- and distinct from an ABSENT key, which
+#: means the client has no opinion and gets TOOL_RESULT_MAX.
+NO_TOOL_CAP = -1
+
 
 def user_turn(text: str) -> Block:
     """One user message, as its own block."""
@@ -227,21 +233,40 @@ def tool_call(name: str, summary: str) -> Block:
     return Block("tool", {}, [("n", clean(name)), ("t", clean(summary))])
 
 
-def tool_result(body: str, *, error: bool = False) -> Block:
+def tool_result(body: str, *, error: bool = False, cap: int = 0) -> Block:
     """What a tool actually returned.
 
     Capped, because a tool can return a great deal more than a 640x480 screen
     or a 32MB machine wants, and the model already has the full text. The cap
     is a count of DROPPED characters rather than a marker, so the client words
     it and a client with no screen can ignore it.
+
+    `cap` is the CLIENT's, declared at the handshake as `toolmax` from stage
+    3 C1. Threaded as a parameter here at A12 so that C1 only has to fill it
+    in, the way Paginator.max_blocks already worked.
+
+      0            the client did not say, so TOOL_RESULT_MAX stands
+      NO_TOOL_CAP  it asked for all of it
+      n > 0        it asked for n
+
+    An ABSENT opinion and "none, thank you" are different answers and the
+    handshake exists to tell them apart, which is why the second is a
+    sentinel rather than a zero.
+
+    This cap stays on the bridge while the wrap column leaves, and the line
+    between them is bandwidth against appearance: truncating on the client
+    means the bytes already crossed a 5 KB/s link.
     """
     body = (body or "").strip()
     if not body:
         body = "(no output)"
-    kept = body[:TOOL_RESULT_MAX]
+    limit = TOOL_RESULT_MAX if cap == 0 else cap
     attrs = {"error": 1 if error else 0}
-    if len(body) > TOOL_RESULT_MAX:
-        attrs["clipped"] = len(body) - TOOL_RESULT_MAX
+    if limit == NO_TOOL_CAP or len(body) <= limit:
+        kept = body
+    else:
+        kept = body[:limit]
+        attrs["clipped"] = len(body) - limit
     return Block("toolresult", attrs,
                  [("t", clean(ln)) for ln in kept.split("\n")])
 

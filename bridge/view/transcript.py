@@ -60,6 +60,10 @@ class TranscriptView:
     #: Page caps for THIS guest, scaled to the RAM it reported in HELLO.
     page_bytes: int = 0
     page_blocks: int = 0
+    #: How much of a tool result this guest wants to see, declared at the
+    #: handshake from stage 3 C1. 0 means it did not say and blocks.py
+    #: chooses; blocks.NO_TOOL_CAP means all of it.
+    toolmax: int = 0
 
     async def reset(self) -> None:
         """Start over: a fresh paginator and renderer, every live coalescer
