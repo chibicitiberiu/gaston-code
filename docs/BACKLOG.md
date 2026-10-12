@@ -3321,3 +3321,18 @@ down under whoever logged in next, for whatever reason they logged in.
 **The observation this entry is waiting for:** shut the machine down from the
 Start menu by hand, and note whether it powers off. That one fact chooses
 between the two causes above and nothing else needs to be measured.
+
+**2026-10-13, later: the machine is off.** It stopped answering ping, its
+NetBIOS name query times out and its ARP entry has gone incomplete -- so the
+NIC lost power, which is a real power-off and not the "safe to turn off"
+screen (that leaves Windows halted but was never the state here, since the box
+answered ping throughout). It was shut down at the keyboard.
+
+**Still wanted, and now cheap:** WHICH action did it -- the power button, or
+Start > Shut Down? If the Start menu powered it off, APM works on this machine
+and cause 2 is the live one: `win/exec/system.cpp:92` passes `EWX_POWEROFF`
+alone where Win9x wants `EWX_SHUTDOWN | EWX_POWEROFF`, and the fix is one
+token plus a `reboot("poweroff")` over the wire to prove it. If it took the
+button, cause 1 stands and `core/app.h:87` is right about this machine too --
+in which case that comment should say it was confirmed on the Athlon rather
+than only on the VM.
