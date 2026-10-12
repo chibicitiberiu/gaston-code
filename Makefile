@@ -90,9 +90,15 @@ wine-smoke: guest-checks
 # missing from wine-smoke. They built anyway, because `make -C win all` builds
 # everything -- so after a `make clean; make test` their two suites would hit
 # guest_exe's loud failure, which is the good outcome of a bad list.
+# rendercheck was missing for the whole of stage 3, which SHIPPED the renderer
+# this list is supposed to prove: it is in win/Makefile's `all` and has its own
+# target, so it built on any machine that had run `make -C win all` and the 69
+# tests in test_guest_render.py and test_render_equivalence.py passed every
+# time. After `make clean` they would all have failed at once. The list is
+# hand-maintained and that is the whole hazard; there is no gate on the gate.
 guest-checks:
 	@$(MAKE) -C win gaston gremote gupdate synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck execcheck uicheck cppcheck rpccheck framecheck netcheck autocheck \
-	                probe capscheck workcheck toolcheck fscheck
+	                probe capscheck workcheck toolcheck fscheck rendercheck
 
 # RichEdit 2.0 was what Win98 shipped, and this gated on the 3.0-only messages
 # that compile clean and fail on the guest. The transcript moved to MSHTML, so
