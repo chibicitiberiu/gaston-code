@@ -125,18 +125,27 @@ public:
      * That path is gone and the logic is kept anyway, because it is what
      * makes it safe to call this more than once, and because a CSS edit
      * landing on a reconnect was the one thing DOC bought that nothing
-     * replaces: an edit now lands on the next START. */
-    void set_document(const char *doc);
-
-    /* Install the cold-start document shipped beside the exe (view.htm).
+     * replaces: an edit now lands on the next START.
      *
-     * Non-zero if one was found and installed. Without it the transcript is
-     * a bare grey rectangle until a bridge answers -- which is exactly when
-     * the app most needs somewhere to say "no bridge answered". The file is
-     * GENERATED from bridge/view/html.py at package time (tools/gen/mktools-iso.sh)
-     * so there is one stylesheet, not two that drift; the bridge's DOC frame
-     * still wins at runtime. */
-    int  boot_local();
+     * FALSE if the document could not be installed, and the reason is in
+     * `bootErr` for boot_local to hand its caller. This used to be void,
+     * because a failure here only meant waiting for the bridge's DOC to
+     * arrive instead; with no DOC there is nothing else coming, so a
+     * read-only program directory is a permanently blank transcript and
+     * the person at the keyboard has to be told which directory. */
+    bool set_document(const char *doc);
+
+    /* Compose the document from win/resources/view.css, beside the exe, and
+     * install it. Non-zero if that worked.
+     *
+     * THE ONLY WAY A DOCUMENT IS EVER INSTALLED, since stage 3 C4 deleted
+     * the DOC frame. Before that this was the cold start and the bridge's
+     * frame won at runtime, so returning 0 meant "wait for the bridge" and
+     * the caller could ignore it. Now 0 means the transcript will stay a
+     * bare grey rectangle for the rest of the session, which is a thing to
+     * say out loud: `err` gets the reason, naming the file or directory,
+     * for the status bar and a message box. */
+    int  boot_local(char *err, unsigned errCap);
 
     /* --- what the transcript can be told ---------------------------------
      *

@@ -33,6 +33,7 @@ rc_statusbar::rc_statusbar(HWND hwnd, HINSTANCE inst)
         m_ico_pie[i] = load_ico(inst, IDI_PIE0 + i, s);
 
     m_status_override[0] = '\0';
+    m_notice[0] = '\0';
 }
 
 rc_statusbar *rc_statusbar::create(HWND parent, HINSTANCE inst)
@@ -119,6 +120,12 @@ void rc_statusbar::clear_override()
     m_status_override[0] = '\0';
 }
 
+void rc_statusbar::set_notice(const char *text)
+{
+    rc_strf(m_notice, sizeof(m_notice), " %s", text ? text : "");
+    if (m_notice[1]) set_pane(2, m_notice);
+}
+
 void rc_statusbar::refresh(rc_state net_state, const char *host, int port,
                            rc_xferstat *xfer, int turn_active,
                            DWORD turn_start_ms, int turn_state,
@@ -188,6 +195,12 @@ void rc_statusbar::refresh(rc_state net_state, const char *host, int port,
             if (rc_wrap_local(RC_LOCAL_STATUS, row, out))
                 html->status(out.str());
         }
+    }
+    else if (m_notice[1]) {
+        /* Nobody else writes pane 2 at rest, and refresh() runs on every
+         * state change -- so without this the notice would be painted once
+         * at boot and wiped by the first reconnect. */
+        set_pane(2, m_notice);
     }
 }
 

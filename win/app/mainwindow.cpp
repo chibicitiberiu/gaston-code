@@ -1002,33 +1002,48 @@ void MainWindow::createChildren(HWND hwnd, HINSTANCE inst)
      * indistinguishable from model prose, in a document whose CSS is
      * probably also missing, because all three files ship and COPY
      * together. So it goes to the status bar, which is pane text rather
-     * than HTML, and to the log. */
+     * than HTML, and to the log.
+     *
+     * HELD UNTIL THE STATUS BAR EXISTS, rather than set here. rc_statusbar
+     * is created ~170 lines below this, so `m_status` is still null at both
+     * of the places that have something to say and every set_override call
+     * made here was a no-op that looked exactly like a working one -- the
+     * same shape as the autoscroll bug documented further down this
+     * function, and found the same way, by looking at the guest instead of
+     * at the code. The LAST writer wins: a document that could not be built
+     * at all is worse news than a stale template.
+     *
+     * Pane 2 is 260px, about 32 characters (statusbar.cpp's parts[]), so
+     * these are short by necessity; the log line and, where there is one,
+     * the message box carry the detail. */
+    char viewWarn[64];
+    viewWarn[0] = '\0';
     {
         char dir[MAX_PATH], err[256];
         GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
         { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
         if (!rc_tpl_load(dir, err, sizeof err)) {
             rc_log("view: %s -- the transcript will be plain text", err);
-            if (m_status)
-                m_status->set_override("view.tpl is missing or unreadable; "
-                                       "the transcript is plain text");
+            rc_strf(viewWarn, sizeof viewWarn,
+                    "view.tpl missing - plain text");
         } else if (rc_tpl_version() != RC_VIEW_VERSION) {
             /* Loud and NON-FATAL: a stale appearance beats no transcript,
              * and a hand-updated box is exactly where the two files get
              * out of step. */
             rc_log("view: view.tpl says version %d, this build expects %d",
                    rc_tpl_version(), RC_VIEW_VERSION);
-            if (m_status)
-                m_status->set_override("view.tpl is from a different build; "
-                                       "the transcript may look wrong");
+            rc_strf(viewWarn, sizeof viewWarn,
+                    "view.tpl is another build's");
         }
     }
 
     m_html = rc_html::create(hwnd);
+    char viewErr[256];
+    viewErr[0] = '\0';
     if (!m_html)
         MessageBoxA(hwnd, "Could not create the HTML view.", RC_TITLE,
                     MB_OK | MB_ICONERROR);
-    else if (m_html->boot_local()) {
+    else if (m_html->boot_local(viewErr, sizeof viewErr)) {
         /* There is a document now, before anything has been connected to.
          * The poll timer is what notices it has finished loading; on_doc
          * arms one too and re-arming is harmless. */
@@ -1046,6 +1061,36 @@ void MainWindow::createChildren(HWND hwnd, HINSTANCE inst)
         } else {
             m_html->notice("No bridge is configured. "
                            "Use Configure -> Server Host... to set one.");
+        }
+    }
+    else {
+        /* THE TRANSCRIPT WILL STAY EMPTY, and this is the only chance to
+         * say why. Until stage 3 C4 a failure here meant "wait for the
+         * bridge's DOC frame", so the caller could ignore it; with no DOC
+         * there is nothing else coming, and the three ways to get here are
+         * a missing view.css, a program directory that cannot be written
+         * (a CD-ROM or a read-only network install) and a full disk.
+         *
+         * It cannot go in the transcript, for the reason the view.tpl
+         * warning above cannot: there is no document to put it in. So the
+         * status bar, the log, and -- because an empty window with a word
+         * in the status bar is what this was before and nobody noticed --
+         * a dialog naming the file. */
+        rc_log("view: %s -- the transcript cannot be shown", viewErr);
+        rc_strf(viewWarn, sizeof viewWarn,
+                "no transcript - see gaston.log");
+        {
+            /* The reason is written for the log, which is lowercase
+             * throughout; it starts a sentence here. */
+            char msg[512];
+            if (viewErr[0] >= 'a' && viewErr[0] <= 'z')
+                viewErr[0] = (char)(viewErr[0] - ('a' - 'A'));
+            rc_strf(msg, sizeof msg,
+                    "The transcript cannot be shown.\n\n%s\n\n"
+                    "VIEW.CSS, EXPORT.CSS and VIEW.TPL belong in the same "
+                    "directory as GASTON.EXE, and that directory has to be "
+                    "writable.", viewErr);
+            MessageBoxA(hwnd, msg, RC_TITLE, MB_OK | MB_ICONERROR);
         }
     }
 
@@ -1150,6 +1195,10 @@ void MainWindow::createChildren(HWND hwnd, HINSTANCE inst)
 
     m_status = rc_statusbar::create(hwnd, inst);
     check_child("status", m_status ? m_status->hwnd() : NULL);
+
+    /* Now there is somewhere to put it. See viewWarn's declaration. */
+    if (viewWarn[0] && m_status)
+        m_status->set_notice(viewWarn);
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)

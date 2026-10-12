@@ -352,6 +352,12 @@ struct rc_html_impl {
      * of taking the number now. */
     LARGE_INTEGER  perfHz;
     int            perfOk;      /* -1 unknown, 0 refused, 1 usable */
+
+    /* Why set_document gave up, for boot_local's caller to show. A member
+     * rather than a return value because the failures are five returns
+     * deep in COM setup and each knows something different; 192 bytes
+     * holds a MAX_PATH path and a sentence about it. */
+    char           bootErr[192];
     unsigned       liveCount;
     unsigned long  liveBytes;
     unsigned long  liveDomUs, liveDomMaxUs;
@@ -370,6 +376,7 @@ struct rc_html_impl {
           autoscroll(1)
     {
         path[0] = '\0';
+        bootErr[0] = '\0';
         perfHz.QuadPart = 0;
         memset(&host, 0, sizeof(Host));
         host.site.lpVtbl  = &g_site_vtbl;
@@ -547,11 +554,15 @@ static const char *acp_charset()
     }
 }
 
-int rc_html::boot_local()
+int rc_html::boot_local(char *err, unsigned errCap)
 {
     char dir[MAX_PATH], path[MAX_PATH];
     long n;
     int ok = 0;
+
+    /* Cleared first, so a caller that forgets to check the return value
+     * still reads an empty string rather than a stack frame. */
+    if (err && errCap) err[0] = '\0';
 
     GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
     { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
@@ -566,6 +577,8 @@ int rc_html::boot_local()
     File f(fopen(path, "rb"));
     if (!f.valid()) {
         rc_log("html: no stylesheet at %s", path);
+        rc_strf(err, errCap, "there is no view.css beside GASTON.EXE (%s)",
+                path);
         return 0;
     }
     fseek(f.get(), 0, SEEK_END);
@@ -602,17 +615,28 @@ int rc_html::boot_local()
                  * file, as it was before stage 3 -- but closing early is
                  * still right and is cheaper than reasoning about it.) */
                 f.reset();
-                set_document(buf.get());
-                ok = 1;
-                rc_log("html: document composed from %ld bytes of CSS, "
-                       "charset %s", n, charset);
+                if (set_document(buf.get())) {
+                    ok = 1;
+                    rc_log("html: document composed from %ld bytes of CSS, "
+                           "charset %s", n, charset);
+                } else {
+                    rc_strf(err, errCap, "%s", d->bootErr);
+                }
             } else {
                 rc_log("html: short read of %s (%u of %ld)", path,
                        (unsigned)got, n);
+                rc_strf(err, errCap, "%s could not be read in full "
+                        "(%u of %ld bytes)", path, (unsigned)got, n);
             }
+        } else {
+            rc_log("html: no room for a %ld-byte document", n);
+            rc_strf(err, errCap, "there is not enough memory free to "
+                    "compose the transcript document");
         }
     } else {
         rc_log("html: stylesheet is %ld bytes; ignored", n);
+        rc_strf(err, errCap, "%s is %ld bytes, which is not the file this "
+                "build ships", path, n);
     }
     /* Whatever path we leave by, the guard closes it. The explicit close
      * above is the one that must happen EARLY, not the one that must
@@ -687,7 +711,7 @@ static void boot_failed(rc_html_impl *d)
     d->obj.reset(NULL);
 }
 
-void rc_html::set_document(const char *doc)
+bool rc_html::set_document(const char *doc)
 {
     RECT rc;
     HRESULT hr;
@@ -695,7 +719,10 @@ void rc_html::set_document(const char *doc)
     char dir[MAX_PATH];
     unsigned len, sum;
 
-    if (!doc || !*doc) return;
+    if (!doc || !*doc) {
+        rc_strf(d->bootErr, sizeof(d->bootErr), "the document came out empty");
+        return false;
+    }
 
     /* Re-installable, where this used to be once per process.
      *
@@ -711,7 +738,7 @@ void rc_html::set_document(const char *doc)
      * what makes a CSS edit land on a reconnect. */
     doc_fingerprint(doc, &len, &sum);
     if (d->obj.valid() && len == d->doc_len && sum == d->doc_sum)
-        return;
+        return true;            /* already installed, which is a success */
     d->doc_len = len;
     d->doc_sum = sum;
 
@@ -731,14 +758,18 @@ void rc_html::set_document(const char *doc)
     File f(fopen(d->path, "wb"));
     if (!f.valid()) {
         rc_log("html: cannot write %s (%d)", d->path, errno);
+        rc_strf(d->bootErr, sizeof(d->bootErr), "cannot write %s", d->path);
         boot_failed(d);
-        return;
+        return false;
     }
     if (fputs(doc, f.get()) == EOF) {
         rc_log("html: short write to %s -- the skeleton would be truncated",
                d->path);
+        rc_strf(d->bootErr, sizeof(d->bootErr),
+                "only part of %s could be written -- is the disk full?",
+                d->path);
         boot_failed(d);
-        return;                 /* the guard closes it on the way out */
+        return false;           /* the guard closes it on the way out */
     }
     /* THE CLOSE IS CHECKED, so it cannot be left to the guard: a destructor
      * has nowhere to put the answer, and stdio reports a full disk HERE and
@@ -746,8 +777,10 @@ void rc_html::set_document(const char *doc)
      * release() hands the handle to the check, which then owns it. */
     if (fclose(f.release()) != 0) {
         rc_log("html: cannot flush %s -- out of disk?", d->path);
+        rc_strf(d->bootErr, sizeof(d->bootErr),
+                "%s could not be flushed -- is the disk full?", d->path);
         boot_failed(d);
-        return;
+        return false;
     }
 
     /* The file is rewritten above either way; if the control is already
@@ -760,12 +793,18 @@ void rc_html::set_document(const char *doc)
         d->slot_s.reset(NULL);
         renavigate();
         rc_log("html: document changed, re-navigating");
-        return;
+        return true;
     }
 
     hr = CoCreateInstance(RC_CLSID_WebBrowser, NULL, CLSCTX_INPROC_SERVER,
                           RC_IID_IOleObject, (void **)d->obj.addr());
-    if (FAILED(hr)) { rc_log("html: CoCreateInstance %08lX", (unsigned long)hr); return; }
+    if (FAILED(hr)) {
+        rc_log("html: CoCreateInstance %08lX", (unsigned long)hr);
+        rc_strf(d->bootErr, sizeof(d->bootErr),
+                "the Internet Explorer web browser control could not be "
+                "created (%08lX)", (unsigned long)hr);
+        return false;           /* obj is null, so the next attach retries */
+    }
 
     IOleObject_SetClientSite(d->obj.get(), &d->host.site);
     OleSetContainedObject((IUnknown *)d->obj.get(), TRUE);
@@ -788,16 +827,22 @@ void rc_html::set_document(const char *doc)
                            &d->host.site, 0, d->parent, &rc);
     if (FAILED(hr)) {
         rc_log("html: DoVerb %08lX", (unsigned long)hr);
+        rc_strf(d->bootErr, sizeof(d->bootErr),
+                "the web browser control refused to activate (%08lX)",
+                (unsigned long)hr);
         boot_failed(d);
-        return;
+        return false;
     }
 
     hr = IOleObject_QueryInterface(d->obj.get(), RC_IID_IWebBrowser2,
                                    (void **)d->web.addr());
     if (FAILED(hr)) {
         rc_log("html: QI IWebBrowser2 %08lX", (unsigned long)hr);
+        rc_strf(d->bootErr, sizeof(d->bootErr),
+                "the web browser control has no IWebBrowser2 (%08lX)",
+                (unsigned long)hr);
         boot_failed(d);
-        return;
+        return false;
     }
 
     renavigate();
@@ -827,6 +872,8 @@ void rc_html::set_document(const char *doc)
             rc_log("html: control has no window");
         }
     }
+
+    return true;
 }
 
 int rc_html::poll()
