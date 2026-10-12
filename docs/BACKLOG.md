@@ -3258,3 +3258,53 @@ TU in the exe with the least. Recorded rather than done.
 **What would reopen this.** Stage 3's renderer and stage 3c's per-guest state
 spending the headroom stage 2 just created, or a second client that wants the
 automation tier without the rest. Not before.
+
+---
+
+## 35. `mode=poweroff` does not power the Athlon off, and two causes fit
+
+**Status:** open, measured 2026-10-13. One run on the real machine, and the
+next one settles it -- this is written down because the evidence is cheap to
+lose and the run is not repeatable without walking over to the box.
+
+**What happened.** `gremote.reboot("poweroff")` at the end of stage 3c's
+hardware test. The call returned, the teardown ran, and gremote went: port
+7401 closed and stayed closed. The machine did NOT power off. It still
+answers ping, with 139 open and nothing else -- Windows is alive with
+networking up and our process gone, which is `win/remote/main.cpp:47-62`'s
+"a failed poweroff lands on the LOGON prompt" exactly.
+
+That also means there is **no software route left to retry from**: gremote
+exits with the session and autostarts on logon, so an unattended box in this
+state needs somebody at the keyboard. The machine was left that way.
+
+**Two causes fit the evidence and this run cannot tell them apart.**
+
+1. **The machine has no usable APM under Windows 98.** This is what
+   `win/core/app.h:87` already assumes -- "EWX_POWEROFF on a machine with no
+   power management runs the entire teardown and cannot switch the machine
+   off" -- and it was measured on the QEMU guest, which genuinely has none
+   (`docs/REMOTE.md:1185`). It has never been checked on the Athlon, whose
+   hardware is an ATX board that certainly can.
+2. **The flag is wrong for 9x.** `win/exec/system.cpp:92` passes
+   `EWX_POWEROFF` ALONE. The widely used idiom on Win9x is
+   `EWX_SHUTDOWN | EWX_POWEROFF`, and `EWX_POWEROFF` is documented as
+   "shuts down the system and turns off the power" without saying it implies
+   the shutdown bit. Every other mode here passes a single self-sufficient
+   flag (`EWX_LOGOFF`, `EWX_REBOOT`), so this one being different would not
+   have looked wrong to anyone writing it.
+
+**NOT CHANGED ON A GUESS.** Shipping an unverified platform fix is what
+`CLAUDE.md`'s "Wine proves the code, never the platform" exists to prevent,
+and the two causes want opposite work: one is a one-token change here, the
+other is a fact about that machine's BIOS and Windows configuration.
+
+**To close it, in this order, on the Athlon:**
+
+1. Shut it down from the Start menu by hand. If Windows powers the machine
+   off, APM works and cause 1 is dead -- it is the flag.
+2. If it does NOT, the box needs its power button either way and the flag is
+   innocent; say so here and in `app.h:87`, which currently states cause 1 as
+   though it were established for every machine rather than for the VM.
+3. Only then change `system.cpp:92`, and re-run `reboot("poweroff")` over
+   the wire to confirm. One run answers it.
