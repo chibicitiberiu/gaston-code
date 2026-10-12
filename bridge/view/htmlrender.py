@@ -274,3 +274,127 @@ def render(block: Block) -> str:
     if not block.payload and KINDS[block.kind][1]:
         return ""
     return fn(block)
+
+
+# --- the permission card ---------------------------------------------------
+#
+# The one composite kind, and the one whose payload ORDER matters: the
+# request puts its argument table last while the rules view puts its
+# paragraphs after the table, so a renderer that emitted by tag in a fixed
+# order would get one of the two wrong.
+#
+# `h` names WHICH head, and carries no English. An earlier draft of the plan
+# made it the head TEXT, which would have put "Permission required" and
+# "Answered" on the wire -- breaking the rule that no furniture crosses it,
+# and unable to serve rules_view anyway, whose head comes from
+# prompts.text("policy.view.head"). So the client holds the strings. Until
+# C2 the client is this file.
+#
+# The bold labels inside the card are furniture for the same reason: `w` and
+# `p` carry only their text and "Check this one:" lives here.
+#
+# Card text goes through spans() rather than esc(). For text with no marks
+# the two are identical -- spans escapes everything between marks and there
+# are none -- so this changes nothing that exists today and lets a card
+# carry emphasis where it genuinely has some. The over-budget fallback does,
+# and rendering its message as a plain paragraph was the one byte-level
+# difference the A8 conversion introduced.
+
+#: Which head. The settleable card ships BOTH and lets the stylesheet choose
+#: -- .permdone .permhead is display:none and .perm .permdonehead is too --
+#: so answering is a class flip on the container and never a DOM text
+#: rewrite. See rc_html::settle_perm.
+#:
+#: "view" ships one head and no done-head, because a rules view is never
+#: answered. Its text duplicates bridge/prompts/policy.toml's
+#: `policy.view.head` DELIBERATELY: it is card furniture like "Check this
+#: one:", so it belongs to whoever draws the card, and the test in
+#: tests/python/agent/test_permissions_gaston.py keeps the two in step the
+#: way test_guest_css.py keeps the class names in step.
+_PERM_HEAD = {
+    "ask": ('<div class="permhead">Permission required</div>'
+            '<div class="permdonehead">Answered</div>'),
+    "view": '<div class="permhead">What can run without asking</div>',
+}
+
+
+def _permission(block: Block) -> str:
+    out: list[str] = []
+    settleable = block.attrs.get("settleable", 1)
+    out.append('<div class="perm" id="perm">' if settleable
+               else '<div class="perm">')
+
+    items = block.payload
+    i = 0
+    n = len(items)
+    open_list = open_table = False
+
+    while i < n:
+        tag, text = items[i]
+        # A run ends when the tag leaves its category, not merely when a
+        # non-run tag arrives: a step list followed straight by a table
+        # would otherwise nest the table inside the <ol>.
+        if tag != "s" and open_list:
+            out.append("</ol>")
+            open_list = False
+        if tag not in ("k", "v") and open_table:
+            out.append("</table>")
+            open_table = False
+
+        if tag == "h":
+            # A head this build has not heard of is simply absent, rather
+            # than the literal word at the top of a permission prompt. A
+            # bridge newer than the client is the case, and a card missing
+            # its heading still says what it is asking.
+            out.append(_PERM_HEAD.get(text, ""))
+        elif tag == "b":
+            lead = "<p><b>" + spans(text) + "</b>"
+            if i + 1 < n and items[i + 1][0] == "d":
+                # The em dash is FURNITURE and cannot be payload: fold turns
+                # a literal one into two hyphens even though cp1252 has the
+                # character, so carrying it would change what is on screen.
+                lead += " &mdash; " + spans(items[i + 1][1])
+                i += 1
+            out.append(lead + "</p>")
+        elif tag == "d":
+            out.append("<p>" + spans(text) + "</p>")  # a stray one
+        elif tag == "w":
+            out.append('<p class="permwarn"><b>Check this one:</b> '
+                       + spans(text) + "</p>")
+        elif tag == "p":
+            out.append("<p><b>What it touches:</b> " + spans(text) + "</p>")
+        elif tag == "t":
+            out.append("<p>" + spans(text) + "</p>")
+        elif tag == "s":
+            if not open_list:
+                out.append("<ol>")
+                open_list = True
+            out.append("<li>" + spans(text) + "</li>")
+        elif tag == "k":
+            if not open_table:
+                out.append("<table>")
+                open_table = True
+            value = items[i + 1][1] if (i + 1 < n and items[i + 1][0] == "v") \
+                else ""
+            if i + 1 < n and items[i + 1][0] == "v":
+                i += 1
+            out.append("<tr><th>" + spans(text) + "</th><td>" + spans(value)
+                       + "</td></tr>")
+        i += 1
+
+    if open_list:
+        out.append("</ol>")
+    if open_table:
+        out.append("</table>")
+    out.append("</div>")
+    return "".join(out)
+
+
+_RENDER["permission"] = _permission
+_RENDER["exportheading"] = lambda b: (
+    '<div class="exporthead"><h1>'
+    + esc(next((t for tag, t in b.payload if tag == "h"), "") or "Conversation")
+    + "</h1>"
+    + "".join('<div class="notice">' + esc(t) + "</div>"
+              for tag, t in b.payload if tag == "t" and t)
+    + "</div>")

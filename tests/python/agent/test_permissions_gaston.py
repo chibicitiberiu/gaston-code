@@ -17,6 +17,8 @@ from bridge.agent.permissions import (
     summary,
     telling_argument,
 )
+from bridge.view.blocks import encode
+from bridge.view.htmlrender import render
 
 
 def test_reading_a_conflict_copy_is_allowed(tmp_path):
@@ -174,9 +176,11 @@ def test_render_request_and_summary_use_the_same_fallback_argument():
         title = None
         description = None
 
-    html = render_request("Grep", args, Ctx())
+    card = render_request("Grep", args, Ctx())
     line = summary("Grep", Ctx(), args)
-    assert "*.log" in html
+    # The payload, not the markup: from stage 3 A8 the card is structure and
+    # the argument being checked is a value in it, not a substring of a div.
+    assert any("*.log" in t for _, t in card.payload)
     assert "*.log" in line
 
 
@@ -203,8 +207,12 @@ def test_an_input_call_is_described_step_by_step():
     line = summary("mcp__machine__input", _NoCtx(), args)
     assert "keyboard and mouse" in line
     assert "bring Notepad to the front" in line
-    html = render_request("mcp__machine__input", args, _NoCtx())
-    assert "<ol>" in html and "close Notepad" in html
+    card = render_request("mcp__machine__input", args, _NoCtx())
+    steps = [t for tag, t in card.payload if tag == "s"]
+    assert steps and any("close Notepad" in s for s in steps)
+    # And that the steps still become a list on screen, which is what the
+    # <ol> assertion was really about and what C2 must keep byte-identical.
+    assert "<ol>" in render(card)
 
 
 def test_a_move_names_both_ends_and_a_launch_its_command():
@@ -245,10 +253,15 @@ def test_oversized_argument_table_is_truncated_and_logged(caplog):
     # one, to push the assembled table itself past MAX_BODY.
     args = {f"arg{i}": "x" * 400 for i in range(40)}
     with caplog.at_level(logging.WARNING, logger="bridge.permissions"):
-        html = render_request("Write", args, Ctx())
+        card = render_request("Write", args, Ctx())
 
-    assert len(html) <= MAX_BODY
-    assert "too large to display" in html
+    # MAX_BODY counts RECORD bytes from stage 3 A8. It used to count
+    # rendered HTML, and there is no rendered HTML on the bridge after C2 --
+    # the bridge cannot know how long the client's version will be and
+    # should not pretend to. The record is what crosses the wire, so the
+    # record is what is bounded.
+    assert len(encode(card)) <= MAX_BODY
+    assert any("too large to display" in t for _, t in card.payload)
     assert any("too large" in r.message for r in caplog.records), (
         "truncating the argument table must be logged, not silent")
 
@@ -343,3 +356,42 @@ def test_a_read_outside_the_folder_that_is_not_staged_is_still_refused():
     assert why is not None
     assert "outside this conversation" in why
 
+
+
+def test_the_card_heads_the_client_holds_match_the_ones_the_bridge_worded():
+    """Stage 3 A8: `h` names a head and the client holds the string.
+
+    That is a contract between two files with nothing linking them, the same
+    shape test_guest_css.py guards for class names. The "ask" head was never
+    in a .toml -- it was a literal in permissions.py -- but the rules view's
+    was, and moving it to the client without this test would let the two
+    drift silently: the TOML would still read well and the screen would say
+    something else.
+
+    After C2 the client's copy is win/resources/view.tpl and this test
+    compares the bridge's wording against that file instead.
+    """
+    from bridge.agent import prompts
+    from bridge.view.htmlrender import _PERM_HEAD
+
+    assert prompts.text("policy.view.head") in _PERM_HEAD["view"]
+    assert "Permission required" in _PERM_HEAD["ask"]
+    assert "Answered" in _PERM_HEAD["ask"]
+
+
+def test_a_rules_view_is_the_same_kind_as_a_request_and_is_not_settleable():
+    """Not a kind of its own: the same card with a different head and no
+    id. Two kinds would be two things to keep in step in view.tpl for no
+    gain -- and the id is what rc_html::settle_perm keys on, so a view
+    carrying one could be collapsed by answering an unrelated prompt."""
+    from bridge.agent import policy
+    from bridge.agent.permissions import rules_view
+
+    card = rules_view(policy.preset("manual"), None, guest_root="C:\\WORK")
+    assert card.kind == "permission"
+    assert card.attrs["settleable"] == 0
+    assert 'id="perm"' not in render(card)
+
+    ask = render_request("Grep", {"pattern": "*.log"}, _NoCtx())
+    assert ask.attrs["settleable"] == 1
+    assert 'id="perm"' in render(ask)

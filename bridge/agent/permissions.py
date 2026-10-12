@@ -26,7 +26,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..view import html as H
+from ..view.blocks import MARK_CLOSE, MARK_OPEN, Block, encode
 
 log = logging.getLogger("bridge.permissions")
 
@@ -85,9 +85,20 @@ class PendingPrompt:
     tool_name: str
     future: Any                      # asyncio.Future[PermissionResult]
     suggestions: list = field(default_factory=list)
-    # The rendered body, kept so a reconnect can re-issue the prompt without
-    # re-rendering it from a context object that is long out of scope.
-    body: str = ""
+    # The card, kept so a reconnect can re-issue the prompt without
+    # rebuilding it from a context object that is long out of scope. A
+    # `Block` from stage 3 A8 -- the "rendered" in the old wording was the
+    # whole problem this stage is about.
+    #
+    # Note for anyone reading this next to the replay path: there is NO
+    # settleable-on-replay hazard here. rc_html::settle_perm clears the id
+    # as well as swapping the class, and send_page issues PAGESTART ->
+    # clear() first, so two elements carrying id="perm" cannot coexist. An
+    # earlier draft of the stage-3 plan proposed setting settleable=0 on a
+    # replay to fix it, which would have applied to THIS field -- the live
+    # show, not a replay path -- and left an answered prompt unable to
+    # collapse.
+    body: str | Block = ""
     allows: bool = False
     # The bar's one-line STATIC text, declared as a real field so readers
     # never need a defensive getattr(prompt, "summary", prompt.tool_name).
@@ -121,8 +132,8 @@ def _rows(args: dict) -> list[tuple[str, str]]:
 
 
 def render_request(tool_name: str, args: dict, ctx,
-                   warning: str = "", note: str = "") -> str:
-    """The HTML block describing one request.
+                   warning: str = "", note: str = "") -> Block:
+    """The block describing one request.
 
     The bar itself only shows a one-line summary, because the transcript is not
     guaranteed to be visible -- a user paging back through history would get a
@@ -145,27 +156,22 @@ def render_request(tool_name: str, args: dict, ctx,
         if told:
             desc = told[1]
 
-    # Two heads, one shown at a time, and a fixed id (not tool_use_id: the
-    # desk shows one prompt at a time, so there is never more than one
-    # outstanding -- same reasoning RC_ID_PENDING uses for the echo).
-    # rc_html::settle_perm flips the container's class on answer; the CSS
-    # picks whichever head matches, so no DOM text rewrite is needed.
-    parts = ['<div class="perm" id="perm">',
-             '<div class="permhead">Permission required</div>',
-             '<div class="permdonehead">Answered</div>',
-             "<p><b>" + H.esc(_clip(title or display, 120)) + "</b>"]
+    # ONE head name on the wire, not two heads of English. `h` says WHICH
+    # head and the client holds the strings; the settleable card ships both
+    # and lets the stylesheet choose, so answering is a class flip on the
+    # container and never a DOM text rewrite (rc_html::settle_perm). The id
+    # is fixed rather than the tool_use_id: the desk shows one prompt at a
+    # time, the same reasoning RC_ID_PENDING uses for the echo.
+    payload: list[tuple[str, str]] = [("h", "ask"),
+                                      ("b", _clip(title or display, 120))]
     if desc:
-        parts.append(" &mdash; " + H.esc(_clip(desc)))
-    parts.append("</p>")
-
+        payload.append(("d", _clip(desc)))
     if warning:
-        parts.append('<p class="permwarn"><b>Check this one:</b> '
-                     + H.esc(_clip(warning, 400)) + "</p>")
+        payload.append(("w", _clip(warning, 400)))
     if isinstance(args, dict) and args.get("_preview"):
-        parts.append("<p><b>What it touches:</b> "
-                     + H.esc(_clip(args["_preview"], 600)) + "</p>")
+        payload.append(("p", _clip(args["_preview"], 600)))
     if note:
-        parts.append("<p>" + H.esc(_clip(note, 400)) + "</p>")
+        payload.append(("t", _clip(note, 400)))
 
     # A step list, as the numbered steps it will take -- the bar has room
     # for the first few words of that and this block has room for all of
@@ -176,38 +182,36 @@ def render_request(tool_name: str, args: dict, ctx,
             phrases = compile_steps(args.get("steps")).phrases
         except (StepError, TypeError, ValueError):
             phrases = []
-        if phrases:
-            parts.append("<ol>" + "".join(
-                "<li>" + H.esc(_clip(p, 200)) + "</li>" for p in phrases)
-                + "</ol>")
+        payload.extend(("s", _clip(p, 200)) for p in phrases)
 
-    rows = _rows(args)
-    if rows:
-        parts.append("<table>")
-        for key, value in rows:
-            parts.append("<tr><th>" + H.esc(key) + "</th><td>"
-                         + H.esc(value) + "</td></tr>")
-        parts.append("</table>")
-    parts.append("</div>")
+    for key, value in _rows(args):
+        payload.append(("k", key))
+        payload.append(("v", value))
 
-    html = "".join(parts)
-    if len(html) <= MAX_BODY:
-        return html
-    # Log loudly here -- the guest only ever shows the fallback text, so this
-    # is the only place an operator would see that a table got dropped.
-    log.warning("permission prompt for %s is %d bytes, over the %d byte "
-                "budget; the argument table is too large to display and "
-                "was dropped", tool_name, len(html), MAX_BODY)
-    # The guard's warning survives even though the argument table doesn't --
+    block = Block("permission", {"settleable": 1}, payload)
+    # MAX_BODY is a RECORD-byte budget from stage 3 A8. It was a count of
+    # rendered HTML, and there is no rendered HTML here any more -- the
+    # bridge does not know how long the client's version will be and should
+    # not pretend to. The record is the thing that crosses the wire, so the
+    # record is the thing worth bounding.
+    if len(encode(block)) <= MAX_BODY:
+        return block
+    # Log loudly here -- the guest only ever shows the fallback, so this is
+    # the only place an operator would see that a table got dropped.
+    log.warning("permission prompt for %s is %d record bytes, over the %d "
+                "byte budget; the argument table is too large to display "
+                "and was dropped", tool_name, len(encode(block)), MAX_BODY)
+    # The guard's warning survives even though the argument table does not --
     # it is the one sentence saying why this call is worth reading.
-    short = ('<div class="perm" id="perm">'
-             '<div class="permhead">Permission required</div>'
-             '<div class="permdonehead">Answered</div>'
-             "<p><b>" + H.esc(_clip(title or display, 120)) + "</b></p>"
-             + ('<p class="permwarn"><b>Check this one:</b> '
-                + H.esc(_clip(warning, 400)) + "</p>" if warning else "")
-             + "<p><i>(arguments too large to display)</i></p></div>")
-    return short[:MAX_BODY]
+    short: list[tuple[str, str]] = [("h", "ask"),
+                                    ("b", _clip(title or display, 120))]
+    if warning:
+        short.append(("w", _clip(warning, 400)))
+    # Emphasised, as it was when this was hand-built markup: a marked run
+    # rather than an <i>, because the element is the client's to choose.
+    short.append(("t", MARK_OPEN + "e" + "(arguments too large to display)"
+                  + MARK_CLOSE))
+    return Block("permission", {"settleable": 1}, short)
 
 
 def _machine_detail(tool_name: str, args: dict) -> str:
@@ -479,32 +483,33 @@ def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
 # already known to be false.
 
 
-def rules_view(mode, lists=None, guest_root: str = "") -> str:
+def rules_view(mode, lists=None, guest_root: str = "") -> Block:
     """A read-only answer to "what can run without asking?": the
     conversation's execution mode, its table, and the client's lists that
-    decide which row a call lands in."""
+    decide which row a call lands in.
+
+    The same `permission` kind as a request, with settleable=0. Not a kind of
+    its own: it is the same card with a different head and no id, and two
+    kinds would be two things to keep in step in view.tpl for no gain. The
+    head comes from prompts.text, which is why `h` names a head rather than
+    carrying one -- an enumeration the client holds could not serve this one.
+    """
     from . import categories as K
     from . import policy, prompts
 
     def t(key: str, **kw) -> str:
         return prompts.text("policy.view." + key, **kw)
 
-    p = ['<div class="perm">',
-         '<div class="permhead">' + H.esc(t("head")) + "</div>",
-         "<p><b>" + H.esc(mode.label) + "</b> &mdash; "
-         + H.esc(policy.summary(mode)) + "</p>",
-         "<table>"]
+    payload: list[tuple[str, str]] = [("h", "view"),
+                                      ("b", mode.label),
+                                      ("d", policy.summary(mode))]
     for cat in K.CATS:
-        p.append("<tr><th>" + H.esc(prompts.text(f"policy.cat.{cat}"))
-                 + "</th><td>" + H.esc(t("value." + mode.value(cat)))
-                 + "</td></tr>")
-    p.append("</table>")
-    p.append("<p>" + H.esc(t("work", root=guest_root or t("no_root")))
-             + "</p>")
+        payload.append(("k", prompts.text(f"policy.cat.{cat}")))
+        payload.append(("v", t("value." + mode.value(cat))))
+    payload.append(("t", t("work", root=guest_root or t("no_root"))))
     protect = tuple(getattr(lists, "protect", ()) or ())
-    p.append("<p>" + H.esc(t("protected", places=", ".join(protect))
-                           if protect else t("no_protected")) + "</p>")
-    p.append("<p>" + H.esc(t("honest")) + "</p>")
-    p.append("<p>" + H.esc(t("unseen")) + "</p>")
-    p.append("</div>")
-    return "".join(p)
+    payload.append(("t", t("protected", places=", ".join(protect))
+                    if protect else t("no_protected")))
+    payload.append(("t", t("honest")))
+    payload.append(("t", t("unseen")))
+    return Block("permission", {"settleable": 0}, payload)

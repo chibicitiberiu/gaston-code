@@ -62,8 +62,8 @@ KINDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "tool":         ((),                        ("n", "t")),
     "toolresult":   (("error", "clipped"),      ("t",)),
     "thinking":     ((),                        ("t",)),
-    "permission":   (("settleable",),           ("h", "t", "w", "p", "s",
-                                                 "k", "v")),
+    "permission":   (("settleable",),           ("h", "b", "d", "t", "w",
+                                                 "p", "s", "k", "v")),
     "clip":         (("dropped",),              ()),
     "exportheading": ((),                       ("h", "t")),
 }
@@ -90,7 +90,16 @@ class Block:
     `payload` is a list of `(tag, text)` pairs in order. A tag is one ASCII
     letter and its meaning is per-kind (see KINDS): `t` is the general text
     line, `l` is a fence's language, `r` opens a table row and `c` is a cell
-    in it, and the permission card uses six of its own.
+    in it, and the permission card uses eight of its own -- `h` which head,
+    `b` the bold lead, `d` the description after it, `w` a warning, `p` a
+    preview, `s` a numbered step, `k`/`v` a table row.
+
+    ORDER IS MEANINGFUL and not just preserved: `render_request` puts its
+    table last while `rules_view` puts its paragraphs after the table, so a
+    renderer that emitted by tag in a fixed order would get one of them
+    wrong. Consecutive `s` items form one list and consecutive `k`/`v` pairs
+    form one table, which is a loop with one open-container variable on
+    either side of the wire.
 
     A pair with empty text is REAL and load-bearing: `user_turn("a\\n\\nb")`
     has a blank line in the middle, and an empty `t` is how it survives to
