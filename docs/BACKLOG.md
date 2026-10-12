@@ -3308,3 +3308,16 @@ other is a fact about that machine's BIOS and Windows configuration.
    though it were established for every machine rather than for the VM.
 3. Only then change `system.cpp:92`, and re-run `reboot("poweroff")` over
    the wire to confirm. One run answers it.
+
+**How the 2026-10-13 run ended.** With the machine still powered, at the
+logon prompt, by the user's decision once the remote options were exhausted:
+gremote exits with the session and returns only on logon, SMB refuses a
+session on 139, and NetBIOS exposes `TIBI <00>` with no server service behind
+it, so nothing on that box can be told anything until somebody logs in. The
+alternative offered was a watcher that fires `reboot("poweroff")` the moment
+gremote reappears; it was declined, and rightly -- it would shut the machine
+down under whoever logged in next, for whatever reason they logged in.
+
+**The observation this entry is waiting for:** shut the machine down from the
+Start menu by hand, and note whether it powers off. That one fact chooses
+between the two causes above and nothing else needs to be measured.
