@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import html as _html
 
-from .blocks import MARK_CLOSE, MARK_OPEN, Block
+from .blocks import KINDS, MARK_CLOSE, MARK_OPEN, Block
 
 #: Where a tool-result line is broken if nothing else breaks it. MEASURED, in
 #: the client's default 640x480 window on the Athlon (2026-10-03): a result
@@ -265,4 +265,12 @@ def render(block: Block) -> str:
     transcript that stopped.
     """
     fn = _RENDER.get(block.kind)
-    return fn(block) if fn else ""
+    if fn is None:
+        return ""
+    # A kind that DECLARES payload tags and carries none has nothing to
+    # draw -- the old _render's `if not lines: return ""`, which the
+    # paginator's empty guard still depends on. A kind with no tags to carry
+    # is a different thing: `rule` is an <hr> and `clip` is its own sentence.
+    if not block.payload and KINDS[block.kind][1]:
+        return ""
+    return fn(block)

@@ -20,7 +20,9 @@ import asyncio
 import logging
 import time
 
+from ..view.blocks import Block
 from ..view.html import LIVE
+from ..view.htmlrender import render
 from . import fold
 from .compress import (
     ENC_DEFLATE,
@@ -108,7 +110,7 @@ class GuestLink:
                 return False
         return True
 
-    async def send_html(self, guest, html: str, mode: str,
+    async def send_html(self, guest, html: str | Block, mode: str,
                         page_no: int) -> None:
         """Fold to CP1252, compress if worthwhile, chunk under the frame cap.
 
@@ -117,7 +119,16 @@ class GuestLink:
         it replaces an element wholesale, so half of one is meaningless; an
         oversized one is simply dropped and the APPEND that follows carries the
         whole thing.
+
+        A `Block` is rendered HERE, at the one place a byte leaves the bridge
+        for a guest, rather than at each of the three TEXT producers. That is
+        the whole point of this class existing -- before it, header
+        stringification and fold.encode were decided independently at 44 call
+        sites -- and it means stage 3's C2 has one line to change rather than
+        three: render, or encode a record.
         """
+        if isinstance(html, Block):
+            html = render(html)
         data = fold.encode(html)
 
         # A NUL truncates the block in the DOM and nowhere else, which is the

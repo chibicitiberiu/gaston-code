@@ -11,7 +11,9 @@ from typing import Any
 
 from ..guest import GuestSession
 from ..view import html as H
+from ..view.blocks import Block
 from ..view.html import APPEND, LIVE
+from ..view.htmlrender import render
 from ..wire.coalesce import Coalescer
 from ..wire.protocol import Frame, error, notice, pageend, pagesealed, pagestart
 
@@ -74,12 +76,23 @@ class PresentationService:
     async def write_block(
         self,
         guest: GuestSession,
-        html: str,
+        html: str | Block,
         *,
         stream: bool = True,
         notify: bool = True,
     ) -> None:
-        """Record a finished block into the paginator, then send it."""
+        """Record a finished block into the paginator, then send it.
+
+        Takes a `Block` as well as markup from A6 onwards. The paginator
+        still holds HTML at this point, so the render happens here on the way
+        in; C2 is where the paginator starts holding records instead and this
+        line becomes an encode.
+
+        All 33 write_block call sites are untouched by that change, because
+        the constructors in blocks.py kept their names and their signatures.
+        """
+        if isinstance(html, Block):
+            html = render(html)
         if not html:
             return
 

@@ -291,3 +291,40 @@ async def test_send_html_all_nul_body_still_clears_the_live_slot(link):
 
     assert len(writer.written) > 0
     assert _body_of(writer) == b""
+
+
+@pytest.mark.asyncio
+async def test_send_html_renders_a_block_as_well_as_markup(link):
+    """A6: the one place a byte leaves the bridge renders a Block.
+
+    Here rather than at each of the three TEXT producers, which is the whole
+    reason GuestLink exists -- before it, header stringification and
+    fold.encode were decided independently at 44 call sites. It also means
+    C2 has one line to change rather than three.
+    """
+    from bridge.view import blocks as Bk
+    from bridge.view.htmlrender import render
+
+    block = Bk.Block("para", {}, [("t", Bk.runs("**a** and `b`"))])
+
+    w1 = FakeWriter()
+    link.writer = w1
+    await link.send_html(None, block, APPEND, page_no=1)
+    w2 = FakeWriter()
+    link.writer = w2
+    await link.send_html(None, render(block), APPEND, page_no=1)
+
+    assert _body_of(w1) == _body_of(w2)
+    assert _body_of(w1) == b"<p><b>a</b> and <code>b</code></p>"
+
+
+@pytest.mark.asyncio
+async def test_a_block_on_the_live_path_too(link):
+    """The LIVE producer bypasses write_block entirely (presentation.py), so
+    it is a third path and not a variation on the first."""
+    from bridge.view import blocks as Bk
+
+    writer = FakeWriter()
+    link.writer = writer
+    await link.send_html(None, Bk.Block("rule"), LIVE, page_no=1)
+    assert _body_of(writer) == b"<hr>"
