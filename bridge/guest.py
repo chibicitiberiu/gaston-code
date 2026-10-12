@@ -197,6 +197,12 @@ class GuestSession:
     #: at every handshake and on every PREFS. None until the first attach.
     prefs: Any = None
     #: The person's last few prompts, newest last, for the Auto reviewer.
+    #: CLEARED WITH THE CHAT. It was cleared nowhere at all -- not by
+    #: reset_chat_policy, not by a new session, not by a switch -- so the
+    #: reviewer judging a turn in one conversation could be reading the
+    #: last four prompts of another. With one guest that was one person's
+    #: own words in the wrong chat; keyed by machine it would have been
+    #: somebody else's.
     recent_prompts: list = field(default_factory=list)
     #: Everything about writing bytes to this guest -- the socket writer, the
     #: send lock, the persistent compressor and the measured link speed.

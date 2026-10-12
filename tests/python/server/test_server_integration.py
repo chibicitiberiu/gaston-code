@@ -2114,7 +2114,8 @@ async def test_cancelling_a_turn_tells_the_guest_to_kill_the_command(harness):
 
     task = asyncio.create_task(
         harness.bridge.guest_exec.run_on_guest("dir /s c:\\", timeout_ms=60000,
-                                    shell="", cwd=""))
+                                    shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     f = await _recv(harness, reader, "EXEC")
     exec_id = f.headers["id"]
 
@@ -2141,7 +2142,8 @@ async def test_exec_refuses_wire_overlong_cwd(harness):
     long_cwd = "C:\\" + ("\xe9" * 85)
     res = await harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="none", cwd=long_cwd
-    )
+    ,
+        guest=harness.bridge.connection.guest)
     assert res.get("isError") is True
     assert "too long to send to the machine" in res["content"][0]["text"]
     assert "258 bytes on the wire" in res["content"][0]["text"]
@@ -2163,7 +2165,8 @@ async def test_exec_is_never_re_delivered(harness):
     await _recv(harness, reader, "OPTIONSEND")
 
     task = asyncio.create_task(
-        harness.bridge.guest_exec.run_on_guest("ver", timeout_ms=5000, shell="", cwd=""))
+        harness.bridge.guest_exec.run_on_guest("ver", timeout_ms=5000, shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     await _recv(harness, reader, "EXEC")
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -2198,7 +2201,8 @@ async def test_stop_kills_a_running_command(harness):
 
     task = asyncio.create_task(
         harness.bridge.guest_exec.run_on_guest("pause", timeout_ms=90000,
-                                    shell="", cwd=""))
+                                    shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     f = await _recv(harness, reader, "EXEC")
     exec_id = f.headers["id"]
 
@@ -2224,8 +2228,9 @@ async def test_a_command_line_too_long_says_so_rather_than_spawn_failed(
     told it."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("x" * 2000, timeout_ms=5000,
-                                    shell="", cwd=""))
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
+        "x" * 2000, timeout_ms=5000, shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, reader, "EXEC")
     await harness.send(writer, Frame("EXECRESULT", {
         "id": req.headers["id"], "status": "too_long", "code": "0",
@@ -2245,7 +2250,8 @@ async def test_output_is_capped_here_too_and_says_it_was(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("dir", timeout_ms=5000,
-                                    shell="", cwd=""))
+                                    shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, reader, "EXEC")
     eid = req.headers["id"]
     for _ in range(4):
@@ -2274,7 +2280,8 @@ async def test_guest_truncation_is_attributed_to_the_guest_not_the_bridge(
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("dir", timeout_ms=5000,
-                                    shell="", cwd=""))
+                                    shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, reader, "EXEC")
     eid = req.headers["id"]
     await harness.send(writer, Frame("EXECOUT", {"id": eid}, b"A" * 100))
@@ -2296,7 +2303,8 @@ async def test_a_timed_out_command_is_reported_as_an_error(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("pause", timeout_ms=5000,
-                                    shell="", cwd=""))
+                                    shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, reader, "EXEC")
     await harness.send(writer, Frame("EXECRESULT", {
         "id": req.headers["id"], "status": "timeout", "code": "1",
@@ -2373,7 +2381,8 @@ async def test_an_overlong_cwd_is_refused_rather_than_clipped(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     got = await harness.bridge.guest_exec.run_on_guest(
-        "dir", timeout_ms=5000, shell="", cwd="C:\\" + "d" * 300)
+        "dir", timeout_ms=5000, shell="", cwd="C:\\" + "d" * 300,
+        guest=harness.bridge.connection.guest)
     text = got["content"][0]["text"]
     assert "too long" in text
     assert got["isError"] is True
@@ -2386,7 +2395,8 @@ async def test_an_ordinary_cwd_still_goes_through(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
-        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
+        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, reader, "EXEC")
     assert req.headers["cwd"] == "C:\\WORK"
     await harness.send(writer, Frame("EXECRESULT", {
@@ -2595,7 +2605,8 @@ async def test_a_command_the_wire_would_rewrite_is_refused(harness):
 
     out = await harness.bridge.guest_exec.run_on_guest(
         "type c:\\work\u2044..\u2044windows\\win.ini",
-        timeout_ms=5000, shell="", cwd="")
+        timeout_ms=5000, shell="", cwd="",
+        guest=harness.bridge.connection.guest)
 
     assert out["isError"] is True
     text = out["content"][0]["text"]
@@ -2612,7 +2623,8 @@ async def test_an_unrepresentable_cwd_is_refused(harness):
     await _recv(harness, reader, "OPTIONSEND")
 
     out = await harness.bridge.guest_exec.run_on_guest(
-        "ver", timeout_ms=5000, shell="", cwd="c:\\w\u2502rk")
+        "ver", timeout_ms=5000, shell="", cwd="c:\\w\u2502rk",
+        guest=harness.bridge.connection.guest)
 
     assert out["isError"] is True
     assert "U+2502" in out["content"][0]["text"]
@@ -2627,7 +2639,8 @@ async def test_a_cp1252_command_still_runs(harness):
     await _recv(harness, reader, "OPTIONSEND")
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
-        "type c:\\caf\u00e9.txt", timeout_ms=5000, shell="", cwd=""))
+        "type c:\\caf\u00e9.txt", timeout_ms=5000, shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     frame = await _recv(harness, reader, "EXEC")
     assert frame.body == b"type c:\\caf\xe9.txt"
     task.cancel()
@@ -3279,7 +3292,8 @@ async def test_cr_cr_lf_from_a_text_mode_program_is_one_line_break(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
-        "ping -n 2 127.0.0.1", timeout_ms=5000, shell="", cwd=""))
+        "ping -n 2 127.0.0.1", timeout_ms=5000, shell="", cwd="",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, reader, "EXEC")
     eid = req.headers["id"]
     await harness.send(writer, Frame("EXECOUT", {"id": eid},

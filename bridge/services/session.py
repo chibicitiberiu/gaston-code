@@ -255,6 +255,7 @@ class SessionService:
         and effort, when it has declared any (Options > General). Without a
         declared default a new chat keeps what is selected, as before."""
         guest.grants = set()
+        guest.recent_prompts = []
         guest.mode_before_plan = ""
         guest.mode_id = policy.default_mode(guest)
         prefs = getattr(guest, "prefs", None)

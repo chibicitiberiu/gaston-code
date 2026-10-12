@@ -57,10 +57,19 @@ class GuestExecService:
         guest: GuestSession | None = None,
     ) -> dict:
         """Body of mcp__machine__exec. Returns an MCP tool result."""
+        # NO FALLBACK. This resolved `connection.guest` when a caller passed
+        # none, which with one machine was the same thing and with two is
+        # the worst shape available: the command runs on whichever machine
+        # is attached rather than the one whose conversation asked, and the
+        # permission prompt for it appears on the right person's screen --
+        # so it looks approved, because it WAS approved, for something else.
+        # tools.build captures the guest for exactly this reason
+        # (agent/tools.py); a path that reaches here without one is a bug in
+        # the wiring and is better as a refusal than as a guess.
         if guest is None:
-            guest = getattr(self.connection, "guest", None) or getattr(
-                self.connection, "_guest", None
-            )
+            log.error("exec with no guest: a tool was built without one, "
+                      "and guessing which machine to run on is how a "
+                      "command lands on the wrong one")
 
         if guest is not None and self.pre_exec is not None:
             await self.pre_exec(guest, command)

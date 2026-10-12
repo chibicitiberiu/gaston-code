@@ -83,7 +83,13 @@ class TurnRunner:
 
     def seed_agent_notices(self, guest: GuestSession | None = None) -> None:
         """Fold whatever the baseline still owes the agent into memory."""
-        g = guest or getattr(self.connection, "guest", None)
+        # EXPLICIT OR NOTHING. These four fell back to
+        # `connection.guest` when a caller passed none, which with one
+        # machine was the same object and with two is a turn preamble built
+        # from the wrong machine's sync state. Every production caller names
+        # its guest; the parameter stays optional only because the tests
+        # build these services without a connection at all.
+        g = guest
         try:
             load_fn = getattr(self.sync, 'load_baseline', None)
             if not load_fn:
@@ -108,7 +114,13 @@ class TurnRunner:
         )
         if not delivered or not sync_dir:
             return
-        g = guest or getattr(self.connection, "guest", None)
+        # EXPLICIT OR NOTHING. These four fell back to
+        # `connection.guest` when a caller passed none, which with one
+        # machine was the same object and with two is a turn preamble built
+        # from the wrong machine's sync state. Every production caller names
+        # its guest; the parameter stays optional only because the tests
+        # build these services without a connection at all.
+        g = guest
         lock_ctx = getattr(self.sync, 'baseline_lock', None)
         if not lock_ctx:
             return
@@ -143,7 +155,13 @@ class TurnRunner:
         sync_dir = (
             getattr(self.config, 'sync_dir', None)
         )
-        g = guest or getattr(self.connection, "guest", None)
+        # EXPLICIT OR NOTHING. These four fell back to
+        # `connection.guest` when a caller passed none, which with one
+        # machine was the same object and with two is a turn preamble built
+        # from the wrong machine's sync state. Every production caller names
+        # its guest; the parameter stays optional only because the tests
+        # build these services without a connection at all.
+        g = guest
         sc = getattr(g, "synccoord", None) or getattr(
             self.connection, "synccoord", None
         )
@@ -195,7 +213,13 @@ class TurnRunner:
         `WorkspaceService.planned_guest_dir` -- so a conversation that is only
         talked to still touches nothing.
         """
-        g = guest or getattr(self.connection, "guest", None)
+        # EXPLICIT OR NOTHING. These four fell back to
+        # `connection.guest` when a caller passed none, which with one
+        # machine was the same object and with two is a turn preamble built
+        # from the wrong machine's sync state. Every production caller names
+        # its guest; the parameter stays optional only because the tests
+        # build these services without a connection at all.
+        g = guest
         if g is None or getattr(self.config, "sync_dir", None):
             return text
         if self.workspace is None:

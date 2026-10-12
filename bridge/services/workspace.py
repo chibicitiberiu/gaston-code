@@ -466,5 +466,5 @@ class WorkspaceService:
         if self.send_options:
             await self.send_options(guest)
         if self.config.sync_dir and self.spawn_sync:
-            self.spawn_sync("the work directory was set")
+            self.spawn_sync("the work directory was set", guest)
 

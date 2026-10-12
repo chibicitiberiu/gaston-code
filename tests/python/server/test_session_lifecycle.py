@@ -503,7 +503,8 @@ async def test_an_unknown_shell_is_refused_by_name(harness):
                              r"C:\WINDOWS\COMMAND.COM", True)]
 
     out = await harness.bridge.guest_exec.run_on_guest(
-        "dir", timeout_ms=5000, shell="bash", cwd="C:\\WORK")
+        "dir", timeout_ms=5000, shell="bash", cwd="C:\\WORK",
+        guest=harness.bridge.connection.guest)
     assert out["isError"] is True
     text = out["content"][0]["text"]
     assert "bash" in text and "command.com" in text
@@ -523,7 +524,8 @@ async def test_the_named_shell_becomes_the_invocation_prefix(harness):
                              r"C:\WINDOWS\COMMAND.COM", True)]
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
-        "dir", timeout_ms=5000, shell="command.com", cwd="C:\\WORK"))
+        "dir", timeout_ms=5000, shell="command.com", cwd="C:\\WORK",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == r"C:\WINDOWS\COMMAND.COM /c"
     task.cancel()
@@ -539,7 +541,8 @@ async def test_none_means_spawn_the_program_directly(harness):
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
-        "hello.exe", timeout_ms=5000, shell="none", cwd="C:\\WORK"))
+        "hello.exe", timeout_ms=5000, shell="none", cwd="C:\\WORK",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == ""
     task.cancel()
@@ -560,7 +563,8 @@ async def test_naming_nothing_uses_the_first_shell_the_machine_reported(
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
-        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
+        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == r"C:\WINDOWS\COMMAND.COM /c"
     task.cancel()
@@ -577,7 +581,8 @@ async def test_a_machine_that_reported_no_shell_runs_directly(harness):
     assert not harness.bridge.connection.guest.tools
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
-        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
+        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK",
+        guest=harness.bridge.connection.guest))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == ""
     task.cancel()
@@ -763,3 +768,36 @@ async def test_each_guest_is_folded_through_its_own_codepage(harness):
         "whichever attached first was answering for both")
     await harness.close(w2)
     await harness.close(w1)
+
+
+async def test_exec_refuses_rather_than_guessing_which_machine(harness):
+    """`run_on_guest` resolved `connection.guest` when a caller passed no
+    guest. With one machine that was the same object; with two it is the
+    worst shape available, and tools.py:241's own comment says why: the
+    command runs on whichever machine is attached rather than the one whose
+    conversation asked, and the permission prompt for it appears on the
+    right person's screen -- so it looks approved, because it WAS approved,
+    for something else.
+
+    Every tool captures its guest at build time. A path that reaches here
+    without one is a bug in the wiring, and a refusal names it where a
+    guess would not."""
+    r, w = await harness.connect(hdrs={"machine": "BOX-A"})
+    await _recv(harness, r, "OPTIONSEND")
+    out = await harness.bridge.guest_exec.run_on_guest(
+        "dir", timeout_ms=5000, shell="", cwd="")
+    assert out["isError"] is True
+    await harness.close(w)
+
+
+async def test_the_reviewers_memory_does_not_cross_conversations(harness):
+    """`recent_prompts` was cleared nowhere: not by reset_chat_policy, not
+    by a new session, not by a switch. The Auto reviewer judging a turn in
+    one conversation read the last four prompts of another."""
+    r, w = await harness.connect(hdrs={"machine": "BOX-A"})
+    await _recv(harness, r, "OPTIONSEND")
+    g = harness.bridge.connection.guest
+    g.recent_prompts = ["something from the last chat"]
+    harness.bridge.session.reset_chat_policy(g)
+    assert g.recent_prompts == []
+    await harness.close(w)

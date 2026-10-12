@@ -149,7 +149,8 @@ class Bridge:
             conv=self.conv,
             write_block=self.presentation.write_block,
             send_options=self.options.send_options,
-            spawn_sync=lambda reason: self._spawn(self.sync.run_sync(reason)),
+            spawn_sync=lambda reason, guest: self._spawn(
+                self.sync.run_sync(reason, guest=guest)),
         )
         self.ui = UiService(connection=self.connection)
         self.proc = ProcService(connection=self.connection)
@@ -447,8 +448,9 @@ class Bridge:
         # the guest with no root ("no_root") and waited out a retry
         # (2026-10-03). Sent after, the guest has applied the folder first.
         if self.config.sync_dir:
-            self.turn_runner.seed_agent_notices()
-            self._spawn(self.sync.run_sync("the machine reconnected"))
+            self.turn_runner.seed_agent_notices(guest)
+            self._spawn(self.sync.run_sync("the machine reconnected",
+                                          guest=guest))
 
 
     # --- the conversation's own folder -------------------------------------
