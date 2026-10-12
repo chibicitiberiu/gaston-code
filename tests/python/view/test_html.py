@@ -9,7 +9,16 @@ it is finished, or streaming reads as a stall.
 import re
 
 from bridge.view import html as H
-from bridge.view.html import APPEND, LIVE, HtmlStream, document, esc, inline, user_turn
+from bridge.view.html import (
+    APPEND,
+    LIVE,
+    HtmlStream,
+    document,
+    esc,
+    inline,
+    render,
+    user_turn,
+)
 
 
 def appended(updates):
@@ -51,7 +60,7 @@ def test_escaping_happens_inside_fenced_blocks():
 
 
 def test_user_text_is_escaped():
-    assert "<img" not in user_turn('<img src=x onerror=1>')
+    assert "<img" not in render(user_turn('<img src=x onerror=1>'))
 
 
 # --- blocks -----------------------------------------------------------------
@@ -255,7 +264,7 @@ def test_a_long_tool_result_line_is_broken_by_the_bridge():
     long_line = ("/home/tibi/gaston-work/WRITEMEA/hello.c is outside this "
                  "conversation's folder, and only that folder reaches the "
                  "user's machine. Write to /home/tibi/gaston-work/X instead.")
-    out = H.tool_result(long_line)
+    out = render(H.tool_result(long_line))
     body = out[out.index("<pre>") + 5:out.index("</pre>")]
     lines = body.split("\n")
     assert len(lines) > 1, "it must actually break"
@@ -271,7 +280,7 @@ def test_an_unbreakable_run_is_broken_anyway():
     wrapper that only breaks at spaces would leave it exactly as it was."""
     from bridge.view import html as H
 
-    out = H.tool_result("x" * 200)
+    out = render(H.tool_result("x" * 200))
     body = out[out.index("<pre>") + 5:out.index("</pre>")]
     lines = body.split("\n")
     assert max(len(line) for line in lines) <= H._TOOL_WRAP_COL
@@ -281,7 +290,7 @@ def test_an_unbreakable_run_is_broken_anyway():
 def test_short_output_is_left_exactly_alone():
     from bridge.view import html as H
 
-    out = H.tool_result("Volume in drive C is WIN98")
+    out = render(H.tool_result("Volume in drive C is WIN98"))
     assert "<pre>Volume in drive C is WIN98</pre>" in out
 
 

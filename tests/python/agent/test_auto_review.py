@@ -49,6 +49,15 @@ def _desk(guest, blocks, sent):
                           preview=preview)
 
 
+def _texts(block):
+    """The prose inside whatever write_block was handed.
+
+    From stage 3 A7 the constructors return a Block, and a few call sites
+    still pass finished markup until C2 converts them, so this takes either.
+    """
+    return [block] if isinstance(block, str) else block.texts()
+
+
 def _run(mode, verdict, monkeypatch):
     seen = {}
 
@@ -79,7 +88,7 @@ def test_safe_in_auto_goes_ahead_without_a_bar(monkeypatch):
         "auto", (True, "the person asked for it"), monkeypatch)
     assert isinstance(result, PermissionResultAllow)
     assert not sent                       # no PERMREQ reached the machine
-    assert any("not by you" in b for b in blocks)
+    assert any("not by you" in t for b in blocks for t in _texts(b))
     assert seen["preview"] == "a folder of 3 files, 2 KB"
 
 

@@ -16,6 +16,7 @@ import logging
 from claude_agent_sdk import get_session_messages, list_sessions
 
 from ..view import html as H
+from ..view.blocks import Block
 from ..view.html import APPEND, HtmlStream
 from . import permissions as _perms
 
@@ -213,8 +214,14 @@ def _text_of(message) -> list[tuple[str, str]]:
     return runs
 
 
-def history_html(session_id: str, limit: int = 2000) -> list[str]:
-    """Replay a stored session as HTML blocks, for repopulating the pages.
+def history_html(session_id: str, limit: int = 2000) -> list[str | Block]:
+    """Replay a stored session as blocks, for repopulating the pages.
+
+    MIXED, from stage 3 A7 until A9: the constructors return a Block and the
+    two hand-built branches below still return markup. write_block takes
+    either, so the mixture is safe rather than merely tolerated -- but it is
+    a mixture, and saying so in the type is what stops the next reader
+    assuming one or the other. A9 makes it uniform and renames this.
 
     Deliberately the same renderer the live path uses. Replaying stored text
     through a different one is exactly how an old conversation ended up flat
@@ -226,7 +233,7 @@ def history_html(session_id: str, limit: int = 2000) -> list[str]:
         log.exception("get_session_messages failed for %s", session_id)
         return []
 
-    blocks: list[str] = []
+    blocks: list[str | Block] = []
     for m in msgs:
         msg = getattr(m, "message", None)
 

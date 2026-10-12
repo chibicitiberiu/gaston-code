@@ -2186,7 +2186,14 @@ def test_a_tool_result_is_clipped_for_the_screen_not_the_model():
     person on a 640x480 screen with 32MB does not need it, and the guest
     should not spend memory holding it."""
     from bridge.view import html as H
-    out = H.tool_result("x" * 50_000)
+    from bridge.view.htmlrender import render
+    block = H.tool_result("x" * 50_000)
+    # The count is an attribute now rather than a sentence, which is the
+    # point of the move: the bridge says how much it dropped and the client
+    # words it. Both halves are checked, because C2 has to keep the wording
+    # byte-identical and only the rendered form can say so.
+    assert block.attrs["clipped"] == 50_000 - H._TOOL_RESULT_MAX
+    out = render(block)
     assert len(out) < 4000
     assert "more characters were sent to the model" in out
 
@@ -2194,8 +2201,8 @@ def test_a_tool_result_is_clipped_for_the_screen_not_the_model():
 def test_an_empty_tool_result_still_says_something():
     """Silence is indistinguishable from a bug, which is how this was found."""
     from bridge.view import html as H
-    assert "(no output)" in H.tool_result("")
-    assert "(no output)" in H.tool_result("   \n ")
+    assert "(no output)" in H.tool_result("").texts()
+    assert "(no output)" in H.tool_result("   \n ").texts()
 
 
 async def test_an_overlong_cwd_is_refused_rather_than_clipped(harness):

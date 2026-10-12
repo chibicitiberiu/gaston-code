@@ -51,9 +51,14 @@ def test_the_guest_and_the_bridge_agree_on_what_each_class_means():
     """Not just that the name exists, but that both sides use it for the same
     kind of block -- otherwise an error would render as a notice."""
     names = guest_classes()
-    assert names["RC_CSS_NOTICE"] in H.notice("x")
-    assert names["RC_CSS_ERROR"] in H.error("x")
-    assert names["RC_CSS_USER"] in H.user_turn("x")
+    # Through the renderer, because the constructors return structure now and
+    # the class name is the renderer's business. Stage 3 A7; at C2 the
+    # renderer is the guest's and this half of the test becomes a check
+    # against view.tpl instead.
+    from bridge.view.htmlrender import render
+    assert names["RC_CSS_NOTICE"] in render(H.notice("x"))
+    assert names["RC_CSS_ERROR"] in render(H.error("x"))
+    assert names["RC_CSS_USER"] in render(H.user_turn("x"))
 
 
 def guest_slots() -> dict:

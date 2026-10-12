@@ -54,8 +54,11 @@ def test_the_rate_limit_notice_says_what_to_do():
     note = H.notice(
         "The model provider is rate limiting this account. "
         "The request may not have run -- try again shortly.")
-    assert "rate limiting" in note
-    assert "may not have run" in note
+    # The constructors return structure from A7, so this reads the prose
+    # rather than the markup -- which is what it was always checking.
+    text = " ".join(note.texts())
+    assert "rate limiting" in text
+    assert "may not have run" in text
 
 
 # --- what the status bar says when the SDK contradicts itself ---------------

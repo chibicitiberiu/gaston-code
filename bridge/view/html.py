@@ -80,24 +80,24 @@ def _table(lines: list[str]) -> str:
     return _render.render(_blocks.table_block(lines))
 
 
-def user_turn(text: str) -> str:
-    return _render.render(_blocks.user_turn(text))
-
-
-def notice(text: str) -> str:
-    return _render.render(_blocks.notice(text))
-
-
-def error(text: str) -> str:
-    return _render.render(_blocks.error(text))
-
-
-def tool_call(name: str, summary: str) -> str:
-    return _render.render(_blocks.tool_call(name, summary))
-
-
-def tool_result(body: str, *, error: bool = False) -> str:
-    return _render.render(_blocks.tool_result(body, error=error))
+# The one-shot constructors. A7 changed WHAT they return -- a Block rather
+# than finished markup -- and nothing else: same names, same signatures, and
+# so all 33 write_block call sites across eight services are untouched. That
+# is the whole design of the conversion: the type moves, the call graph does
+# not.
+#
+# Nine CONSUMERS did break, every one of them something doing string work on
+# a return value, and "the goldens are unchanged" covers none of them. They
+# are listed in the commit for A7 because a reader looking at this line later
+# will want to know where the blast radius actually was.
+user_turn = _blocks.user_turn
+notice = _blocks.notice
+error = _blocks.error
+tool_call = _blocks.tool_call
+tool_result = _blocks.tool_result
+code_block = _blocks.code_block
+para = _blocks.para
+thinking = _blocks.thinking
 
 
 class HtmlStream:

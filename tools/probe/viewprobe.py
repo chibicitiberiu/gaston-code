@@ -37,6 +37,7 @@ import toolkit
 toolkit.on_path()
 
 from bridge.view import html as H  # noqa: E402
+from bridge.view.htmlrender import render  # noqa: E402
 from bridge.wire import protocol as PR  # noqa: E402
 from bridge.wire.compress import ENC_RAW  # noqa: E402
 from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
@@ -234,16 +235,22 @@ def main() -> int:
                                  "**bold with `code` inside**, and "
                                  "<escaping> & \"quotes\" to check")),
     ]
-    for name, markup in checks:
+    # render() explicitly, rather than letting send_html do it: this probe
+    # IS the check that the bridge's markup reaches MSHTML intact, so the
+    # step being checked should be visible in the probe rather than hidden
+    # in the transport. From stage 3 A7 the constructors return structure.
+    for name, item in checks:
+        markup = item if isinstance(item, str) else render(item)
         send(PR.text_frame("append", ENC_RAW, 1, markup.encode("cp1252",
                                                               "replace")))
         print(f"  sent {name}")
         time.sleep(0.2)
 
     send(PR.text_frame("append", ENC_RAW, 1,
-                       H.notice("if you can read every line above, the "
-                                "MSHTML host and the view class both work"
-                                ).encode("cp1252", "replace")))
+                       render(H.notice(
+                           "if you can read every line above, the MSHTML "
+                           "host and the view class both work"
+                       )).encode("cp1252", "replace")))
 
     print(f"\nall frames sent. holding the link for {a.hold:.0f}s -- "
           f"look at the guest window now.")
