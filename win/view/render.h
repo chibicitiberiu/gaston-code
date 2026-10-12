@@ -33,11 +33,19 @@
 #ifndef RC_VIEW_RENDER_H
 #define RC_VIEW_RENDER_H
 
-#ifndef __cplusplus
-#error "view/render.h is C++"
-#endif
-
-#include "core/bytesink.h"
+/* --- the constants, which are language-neutral --------------------------
+ *
+ * BEFORE the C++ guard, deliberately. win/net/caps.h needs
+ * RC_BLOCKS_VERSION for the HELLO key it declares, and caps.h is included
+ * by win/checks/capscheck.c, which is C -- the agreement check that
+ * compares every RC_* capability constant against bridge/files/caps.py.
+ *
+ * Putting the guard at the top of this file broke that build, and only
+ * `make wine-smoke` caught it: `make -C win gaston` does not compile the
+ * check binaries. The alternative was a second copy of the version number
+ * in caps.h with a test to keep the two in step, which is one more thing
+ * to keep in step for no gain.
+ */
 
 /* The block vocabulary this build understands. Declared at the handshake as
  * `blocks`; the bridge refuses a value it does not know rather than
@@ -53,6 +61,14 @@
  * rc_html::settle_perm finds it, swaps the class and CLEARS the id, so the
  * next request's card is the only one holding it. */
 #define RC_ID_PERM "perm"
+
+#ifndef __cplusplus
+/* Everything below is the C++ API: ByteSink is a class and these take a
+ * reference to one. A C translation unit gets the constants above and
+ * stops here. */
+#else
+
+#include "core/bytesink.h"
 
 /* The deepest inline nesting a record can contain. Three, structurally:
  * **X** and *X* exclude * from X, __X__ and _X_ exclude _, so a chain uses
@@ -171,5 +187,7 @@ int rc_tpl_version();
  * compared byte for byte against the repo file ON THE GUEST before the
  * equality proof is trusted. */
 bool rc_tpl_dump(ByteSink &out);
+
+#endif  /* __cplusplus */
 
 #endif

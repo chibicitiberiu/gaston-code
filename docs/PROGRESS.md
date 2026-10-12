@@ -4398,7 +4398,7 @@ MSAA returning real roles from the box's own oleacc.
 
 ## Stage 3 -- the markup moves to the client (2026-10-12)
 
-`ROADMAP.md` stage 3, planned in `docs/stage3-plan.md`. Twenty-four commits,
+`ROADMAP.md` stage 3, planned in `docs/stage3-plan.md`. Twenty-three commits,
 `1c49270..`, each gated with `make -C win check`, `make lint`,
 `make test-fast` and, where the image moved, the committed number in the
 message.

@@ -1,6 +1,6 @@
 # Stage 3 — the markup moves to the client
 
-## STATUS, 2026-10-12: COMPLETE — twenty-four commits, `1c49270..`
+## STATUS, 2026-10-12: COMPLETE — twenty-three commits, `1c49270..`
 
 `docs/PROGRESS.md` has the outcome and the numbers; `ROADMAP.md` stage 3 has
 the summary. The plan below is what was intended, kept as written so the two
@@ -21,7 +21,9 @@ real bugs before it was a test, and the guest measurement for the template
 round trip was not optional. Neither would have been done without the plan
 saying so.
 
-Nineteen commits in three phases. `ROADMAP.md` stage 3. Planned 2026-10-12 and
+Nineteen commits in three phases were planned; twenty-three landed.
+A11 folded into C2 as the plan expected, and five of the planned commits
+needed a sibling the plan had not foreseen. `ROADMAP.md` stage 3. Planned 2026-10-12 and
 reviewed three times before any code: a design pass that argued four of the
 decisions below back to the user, and two adversarial passes that found 104
 defects between them. Four of those killed a design choice outright -- the flat

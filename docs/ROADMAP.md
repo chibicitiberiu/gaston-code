@@ -221,7 +221,7 @@ citations; the short version:
 ## Stage 3 — the markup moves to the client — DONE 2026-10-12
 
 **`docs/stage3-plan.md` is the plan and `docs/PROGRESS.md` is the outcome.**
-Twenty-four commits. The exit condition is a test now, not a sentence:
+Twenty-three commits. The exit condition is a test now, not a sentence:
 `tests/python/meta/test_no_markup_on_the_bridge.py` walks every file under
 `bridge/` for a markup literal and allows exactly one, the oracle.
 
