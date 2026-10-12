@@ -1,0 +1,228 @@
+"""Blocks to HTML, written to IE5's constraints. The oracle.
+
+This is the half of the old `html.py` that stage 3 MOVES TO THE CLIENT, kept
+here for the length of the stage for one reason: it is the thing the guest's
+renderer is proved against. B2 feeds the same records to both and compares the
+output byte for byte, which is what turns "the guest emits the same HTML
+MSHTML gets today" from an intention into a fact -- and what makes
+regenerating the frame goldens safe.
+
+It is deleted when pagination lands (stage 3c), not here. Deleting it in this
+stage would mean trusting a new renderer on a platform that cannot be
+debugged, with no second opinion.
+
+NOTHING ELSE MAY IMPORT THIS once C2 lands. `test_no_markup_on_the_bridge.py`
+walks the bridge for angle-bracket literals and allowlists exactly this file;
+C5 deletes the test and the allowlist together.
+
+THE THREE ESCAPE MODES, because getting this wrong is the likeliest
+regression in the stage and the least visible:
+
+  record prose    & < >        `<br>` between t lines   everything but code
+  record literal  & < >        newlines kept in <pre>   code, toolresult
+  local text      & < > "      the guest composes it    win/app/htmlview.cpp
+
+`esc` does NOT escape a double quote -- it is html.escape(quote=False), and
+user_turn('say "hi"') emits a raw quote today. The guest's esc_into escapes
+four. A renderer that escaped `"` in record content would put &quot; where
+this puts `"`, in the one place none of the five escaping tests looks.
+"""
+
+from __future__ import annotations
+
+import html as _html
+
+from .blocks import _INLINE, Block
+
+#: Where a tool-result line is broken if nothing else breaks it. MEASURED, in
+#: the client's default 640x480 window on the Athlon (2026-10-03): a result
+#: box shows 57 characters of 8pt Courier New before its right edge. The
+#: column was 75 -- taken from a 470px pane -- and then 64 from arithmetic,
+#: and both scrolled. 56 leaves one to spare. A narrower window still
+#: scrolls, and the stylesheet's height expression keeps that readable.
+#:
+#: This LEAVES with the renderer at C2: the client knows its own window width
+#: at runtime and this one was measured against a default that a resize makes
+#: wrong. It is not declared at the handshake either -- the bridge has no use
+#: for a number it no longer wraps with.
+TOOL_WRAP_COL = 56
+
+
+def esc(text: str) -> str:
+    """Escape for HTML. Everything the model emits goes through this.
+
+    Not optional and not only about tidiness: a transcript that renders
+    ``<script>`` from model output would be executing it.
+    """
+    return _html.escape(text, quote=False)
+
+
+def inline(text: str) -> str:
+    """Inline spans within one line."""
+    out = []
+    pos = 0
+    for m in _INLINE.finditer(text):
+        if m.start() > pos:
+            out.append(esc(text[pos:m.start()]))
+        if m.group("code"):
+            out.append("<code>" + esc(m.group("code")[1:-1]) + "</code>")
+        elif m.group("bold"):
+            # Recurse: `code` inside **bold** is common, and escaping the inner
+            # span instead of parsing it puts literal backticks on screen.
+            # The delimiters are stripped first, so this cannot re-match the
+            # span it is already inside.
+            out.append("<b>" + inline(m.group("bold")[2:-2]) + "</b>")
+        else:
+            out.append("<i>" + inline(m.group("em")[1:-1]) + "</i>")
+        pos = m.end()
+    if pos < len(text):
+        out.append(esc(text[pos:]))
+    return "".join(out)
+
+
+def fold_long_lines(text: str, width: int = TOOL_WRAP_COL) -> str:
+    """Break lines too long for the column, HERE, because the guest cannot.
+
+    IE5 has neither `pre-wrap` nor `word-wrap`, so a `pre` holding one long
+    line cannot wrap at all -- and `overflow: auto` on the box around it then
+    draws a horizontal scrollbar INSIDE a box whose height is exactly one
+    line, so the scrollbar sits on top of the only text there is. Observed:
+    a block that was nothing but a scrollbar.
+
+    The `pre-wrap`/`word-wrap` pair stays in the stylesheet for a guest new
+    enough to honour it, but it cannot be relied on and this does not rely on
+    it.
+
+    Breaks at a space when there is one in the last third of the line, so
+    prose reads normally; hard-breaks otherwise, because a 300-character path
+    with no spaces in it is the case that started this.
+
+    `width` of 0 or less is REFUSED rather than looped on: rfind(" ", 0, 0)
+    is -1, cut becomes 0, and `line = line[0:]` never advances -- so the
+    obvious guard-free version hangs on the first long line. The guest's
+    renderer takes a wrapcol parameter from its window, so zero is reachable
+    there in a way it never was here.
+    """
+    if width <= 0:
+        return text
+    out = []
+    for line in text.split("\n"):
+        while len(line) > width:
+            cut = line.rfind(" ", width * 2 // 3, width)
+            if cut <= 0:
+                cut = width
+                out.append(line[:cut])
+            else:
+                out.append(line[:cut])
+                cut += 1            # the space itself is consumed by the break
+            line = line[cut:]
+        out.append(line)
+    return "\n".join(out)
+
+
+def _prose(block: Block, joiner: str = "<br>") -> str:
+    return joiner.join(inline(t) for t in block.texts())
+
+
+def _clip(dropped: int) -> str:
+    return ('<div class="clip">-- shown to you in full; ' + str(dropped)
+            + " more characters were sent to the model --</div>")
+
+
+def _code(block: Block) -> str:
+    lang = next((t for tag, t in block.payload if tag == "l"), "")
+    body = esc("\n".join(block.texts()))
+    label = f'<div class="lang">{esc(lang)}</div>' if lang else ""
+    return f'<div class="codewrap">{label}<pre>{body}</pre></div>'
+
+
+def _table(block: Block) -> str:
+    header = block.attrs.get("header", 0)
+    rows: list[list[str]] = []
+    for tag, text in block.payload:
+        if tag == "r":
+            rows.append([])
+        elif tag == "c" and rows:
+            rows[-1].append(text)
+
+    out = ["<table>"]
+    for i, r in enumerate(rows):
+        cell = "th" if (header and i == 0) else "td"
+        out.append("<tr>" + "".join(f"<{cell}>{inline(c)}</{cell}>"
+                                    for c in r) + "</tr>")
+    out.append("</table>")
+    return "".join(out)
+
+
+def _toolresult(block: Block) -> str:
+    err = " err" if block.attrs.get("error") else ""
+    body = fold_long_lines("\n".join(block.texts()))
+    out = f'<div class="toolresult{err}"><pre>{esc(body)}</pre>'
+    dropped = block.attrs.get("clipped", 0)
+    if dropped:
+        out += _clip(dropped)
+    return out + "</div>"
+
+
+def _heading(block: Block) -> str:
+    level = block.attrs.get("level", 3)
+    return f"<h{level}>{_prose(block)}</h{level}>"
+
+
+def _tool(block: Block) -> str:
+    # esc, not inline. A tool summary is an argument list -- a path, a glob, a
+    # command -- and running markdown over it would turn `*.c` into the start
+    # of an emphasis run. This is what the old tool_call did and the division
+    # is worth stating, because it is not obvious from the kind names which
+    # side of it a kind falls on:
+    #
+    #   inline()  para, quote, heading, bullet, numbered, table cells
+    #   esc()     user, notice, error, tool, toolresult, code, thinking
+    #
+    # The first group is text a person wrote prose in. The second is text that
+    # is already literal, or that something else composed.
+    name = next((t for tag, t in block.payload if tag == "n"), "")
+    return ('<div class="tool"><span class="toolname">' + esc(name)
+            + "</span> " + esc("\n".join(block.texts())) + "</div>")
+
+
+#: One entry per kind in `blocks.KINDS`, which the vocabulary test asserts.
+#: A dispatch table rather than a chain of ifs because the guest's renderer is
+#: one too -- a function-pointer table keyed by kind -- and the two being the
+#: same shape is what makes B2's comparison a comparison of behaviour rather
+#: than of structure.
+_RENDER = {
+    "para":          lambda b: "<p>" + _prose(b) + "</p>",
+    "code":          _code,
+    "heading":       _heading,
+    "bullet":        lambda b: "<ul>" + "".join(f"<li>{inline(x)}</li>"
+                                                for x in b.texts()) + "</ul>",
+    "numbered":      lambda b: "<ol>" + "".join(f"<li>{inline(x)}</li>"
+                                                for x in b.texts()) + "</ol>",
+    "quote":         lambda b: "<blockquote>" + _prose(b) + "</blockquote>",
+    "rule":          lambda b: "<hr>",
+    "table":         _table,
+    "user":          lambda b: '<div class="you">' + "<br>".join(
+                         esc(t) for t in b.texts()) + "</div>",
+    "notice":        lambda b: '<div class="notice">' + esc(
+                         "\n".join(b.texts())) + "</div>",
+    "error":         lambda b: '<div class="err">' + esc(
+                         "\n".join(b.texts())) + "</div>",
+    "tool":          _tool,
+    "toolresult":    _toolresult,
+    "thinking":      lambda b: '<div class="thinking">' + esc(
+                         "\n".join(b.texts())) + "</div>",
+    "clip":          lambda b: _clip(b.attrs.get("dropped", 0)),
+}
+
+
+def render(block: Block) -> str:
+    """One block, as the HTML MSHTML gets today.
+
+    An unknown kind renders as nothing rather than raising. The guest does the
+    same, for the same reason: a kind this build has not heard of is a bridge
+    newer than the client, and a transcript missing one block beats a
+    transcript that stopped.
+    """
+    fn = _RENDER.get(block.kind)
+    return fn(block) if fn else ""

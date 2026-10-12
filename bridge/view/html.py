@@ -1,36 +1,65 @@
-"""Markdown -> HTML, incrementally, for the MSHTML transcript.
+"""The shim over the split, and the stylesheet that has not moved yet.
 
-The guest hosts the HTML engine and does nothing else with the text: it takes
-finished fragments and puts them in the document. All parsing, escaping and
-styling happens here, which is the same division of labour the styled-run
-renderer had -- only now the wire carries HTML instead of (style, text) pairs,
-and the guest gets padding, borders, background tints and real lists for free.
+WHAT HAPPENED HERE. This file was the whole transcript renderer: the markdown
+parser, the HTML emitter and the stylesheet in one place. Stage 3 moves the
+emitter to the client, so the parser and the emitter had to stop being the
+same object first. They are now:
 
-Two shapes of update, because a transcript is both a log and a live thing:
+  * `bridge/view/blocks.py`      what the model said, as structure. No markup.
+  * `bridge/view/htmlrender.py`  blocks to HTML. The oracle the guest's
+                                 renderer is proved against, byte for byte.
 
-  * ``append`` -- a finished block. It is inserted at the end of the
-    transcript and never touched again.
-  * ``live``   -- the block currently being written, re-rendered in place as
-    more of it arrives. Without this a paragraph would only appear once it
-    was complete, which reads as a stall rather than as streaming.
+and this file is what is left plus a re-export of everything its importers
+already name. Nothing here is new behaviour; `tests/python/view/test_html.py`
+passes unchanged, all 42 of it, which is the point of doing the split as its
+own commit.
 
-The incremental rule is the one that made the run renderer tractable and it
-carries over unchanged: **only complete lines are classified.** Anything after
-the last newline is held, because a line starting ``*`` might be a bullet or
-might be the start of ``**bold**`` and you cannot tell yet.
+WHAT IS STILL REALLY HERE: `STYLESHEET`, `WIRE_CSS`, `EXPORT_CSS`, `SKELETON`,
+`document` and `export_document`. Those leave at C3 and C4, when the guest
+composes its own document from files beside the exe. They are not moved into
+either new module because both of their destinations are off this machine.
+
+The incremental rule that made the parser tractable is in `blocks.py` now, but
+it is worth repeating where people will look for it: **only complete lines are
+classified.** Anything after the last newline is held, because a line starting
+``*`` might be a bullet or might be the start of ``**bold**`` and you cannot
+tell yet.
 """
 
 from __future__ import annotations
 
-import html as _html
 import re
 from dataclasses import dataclass
 
 from ..files import caps as C
 from ..wire import fold
+from . import blocks as _blocks
+from . import htmlrender as _render
+from .blocks import (  # noqa: F401  -- re-exported for importers
+    _BULLET,
+    _FENCE,
+    _HEADING,
+    _INLINE,
+    _QUOTE,
+    _ROW,
+    _RULE,
+    _SEP,
+    APPEND,
+    LIVE,
+    Block,
+    BlockStream,
+    BlockUpdate,
+)
+from .htmlrender import esc, inline, render  # noqa: F401
 
-APPEND = "append"
-LIVE = "live"
+#: The old private names, kept because tests and probes import them by these
+#: spellings and A4 is a split, not a rename. They go as their callers do:
+#: `_TOOL_WRAP_COL` and `_fold_long_lines` with the wrap at C2, when the
+#: client takes over wrapping; `_TOOL_RESULT_MAX` stays on the bridge.
+_TOOL_WRAP_COL = _render.TOOL_WRAP_COL
+_TOOL_RESULT_MAX = _blocks.TOOL_RESULT_MAX
+_fold_long_lines = _render.fold_long_lines
+_cells = _blocks.cells
 
 
 @dataclass
@@ -42,394 +71,63 @@ class Update:
         return f"Update({self.mode}, {self.html!r})"
 
 
-_FENCE = re.compile(r"^\s*(```|~~~)\s*([A-Za-z0-9_+-]*)\s*$")
-_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-_BULLET = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
-_QUOTE = re.compile(r"^\s*>\s?(.*)$")
-_RULE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
-_ROW = re.compile(r"^\s*\|.*\|\s*$")
-_SEP = re.compile(r"^\s*:?-{2,}:?\s*$")
+def _table(lines: list[str]) -> str:
+    """Kept as a string-in, string-out helper for the importers that call it.
 
-# Longest delimiter first, so ** beats *.
-# Underscore emphasis only counts at a word boundary. Without the lookarounds,
-# `BPB_RsvdSecCnt ... BPB_NumFATs` becomes one italic run from the first
-# underscore to the last, which mangles exactly the identifiers this project
-# talks about all day. Asterisk emphasis has no such restriction, which matches
-# how every markdown implementation behaves.
-_INLINE = re.compile(
-    r"(?P<code>`[^`\n]+`)"
-    r"|(?P<bold>\*\*[^*\n]+\*\*|(?<![A-Za-z0-9_])__[^_\n]+__(?![A-Za-z0-9_]))"
-    r"|(?P<em>\*[^*\n]+\*|(?<![A-Za-z0-9_])_[^_\n]+_(?![A-Za-z0-9_]))"
-)
-
-
-def esc(text: str) -> str:
-    """Escape for HTML. Everything the model emits goes through this.
-
-    Not optional and not only about tidiness: a transcript that renders
-    ``<script>`` from model output would be executing it.
+    The real work is a parse (blocks.table_block) followed by a render
+    (htmlrender), which is the whole shape of the stage in one function.
     """
-    return _html.escape(text, quote=False)
-
-
-def inline(text: str) -> str:
-    """Inline spans within one line."""
-    out = []
-    pos = 0
-    for m in _INLINE.finditer(text):
-        if m.start() > pos:
-            out.append(esc(text[pos:m.start()]))
-        if m.group("code"):
-            out.append("<code>" + esc(m.group("code")[1:-1]) + "</code>")
-        elif m.group("bold"):
-            # Recurse: `code` inside **bold** is common, and escaping the inner
-            # span instead of parsing it puts literal backticks on screen.
-            # The delimiters are stripped first, so this cannot re-match the
-            # span it is already inside.
-            out.append("<b>" + inline(m.group("bold")[2:-2]) + "</b>")
-        else:
-            out.append("<i>" + inline(m.group("em")[1:-1]) + "</i>")
-        pos = m.end()
-    if pos < len(text):
-        out.append(esc(text[pos:]))
-    return "".join(out)
+    return _render.render(_blocks.table_block(lines))
 
 
 def user_turn(text: str) -> str:
-    """One user message, as its own block.
-
-    The styled-run version drew a row of dashes and a ``>`` prefix because that
-    was the most a bitmap-font transcript could manage. Here it is a tinted box
-    with a rule down the side, which is what the dashes were imitating.
-    """
-    lines = text.strip().splitlines() or [""]
-    return ('<div class="you">'
-            + "<br>".join(esc(ln) for ln in lines)
-            + "</div>")
-
-
-#: A tool result is for the person watching, not for the model -- it already
-#: has the whole thing. Long enough to be useful on a 640x480 screen and
-#: short enough not to spend the guest's memory on a `dir /s`.
-_TOOL_RESULT_MAX = 1200
-
-
-def tool_call(name: str, summary: str) -> str:
-    return ('<div class="tool"><span class="toolname">' + esc(name)
-            + "</span> " + esc(summary) + "</div>")
-
-
-def tool_result(body: str, *, error: bool = False) -> str:
-    """What a tool actually returned, as a finished block.
-
-    Rendered here, not sent as a raw TOOLRESULT frame, for the reason
-    everything else is: the guest transforms nothing. Going through
-    _write_block also puts it in the paginator, so it survives a reconnect
-    and is still there paging back.
-
-    Capped, because a tool can return a great deal more than a 640x480 screen
-    or a 32MB machine wants, and the model already has the full text.
-    """
-    body = (body or "").strip()
-    if not body:
-        body = "(no output)"
-    clipped = _fold_long_lines(body[:_TOOL_RESULT_MAX])
-    out = ('<div class="toolresult' + (' err' if error else '') + '"><pre>'
-           + esc(clipped) + "</pre>")
-    if len(body) > _TOOL_RESULT_MAX:
-        out += ('<div class="clip">-- shown to you in full; '
-                + str(len(body) - _TOOL_RESULT_MAX)
-                + " more characters were sent to the model --</div>")
-    return out + "</div>"
-
-
-#: Where a tool-result line is broken if nothing else breaks it. MEASURED, in
-#: the client's default 640x480 window on the Athlon (2026-10-03): a result
-#: box shows 57 characters of 8pt Courier New before its right edge. The
-#: column was 75 -- taken from a 470px pane -- and then 64 from arithmetic,
-#: and both scrolled. 56 leaves one to spare. A narrower window still
-#: scrolls, and the stylesheet's height expression keeps that readable.
-_TOOL_WRAP_COL = 56
-
-
-def _fold_long_lines(text: str, width: int = _TOOL_WRAP_COL) -> str:
-    """Break lines too long for the column, HERE, because the guest cannot.
-
-    IE5 has neither `pre-wrap` nor `word-wrap`, so a `pre` holding one long
-    line cannot wrap at all -- and `overflow: auto` on the box around it then
-    draws a horizontal scrollbar INSIDE a box whose height is exactly one
-    line, so the scrollbar sits on top of the only text there is. Observed:
-    a block that was nothing but a scrollbar.
-
-    The `pre-wrap`/`word-wrap` pair stays in the stylesheet for a guest new
-    enough to honour it, but it cannot be relied on and this does not rely on
-    it. THE GUEST TRANSFORMS NOTHING -- wrapping is the bridge's job in
-    exactly the way markdown and pagination already are.
-
-    Breaks at a space when there is one in the last third of the line, so
-    prose reads normally; hard-breaks otherwise, because a 300-character path
-    with no spaces in it is the case that started this.
-    """
-    out = []
-    for line in text.split("\n"):
-        while len(line) > width:
-            cut = line.rfind(" ", width * 2 // 3, width)
-            if cut <= 0:
-                cut = width
-                out.append(line[:cut])
-            else:
-                out.append(line[:cut])
-                cut += 1            # the space itself is consumed by the break
-            line = line[cut:]
-        out.append(line)
-    return "\n".join(out)
+    return _render.render(_blocks.user_turn(text))
 
 
 def notice(text: str) -> str:
-    return '<div class="notice">' + esc(text) + "</div>"
+    return _render.render(_blocks.notice(text))
 
 
 def error(text: str) -> str:
-    return '<div class="err">' + esc(text) + "</div>"
+    return _render.render(_blocks.error(text))
 
 
-def _cells(row: str) -> list[str]:
-    row = row.strip()
-    if row.startswith("|"):
-        row = row[1:]
-    if row.endswith("|"):
-        row = row[:-1]
-    return [c.strip() for c in row.split("|")]
+def tool_call(name: str, summary: str) -> str:
+    return _render.render(_blocks.tool_call(name, summary))
 
 
-def _table(lines: list[str]) -> str:
-    """Render a markdown table.
-
-    The separator row (|---|---|) is what marks the row above it as a header;
-    without one every row is a body row, which is what a model emitting a
-    pipe-delimited list without a header expects.
-    """
-    rows = [_cells(line) for line in lines]
-    header = None
-    body = rows
-    if len(rows) >= 2 and all(_SEP.match(c) for c in rows[1] if c):
-        header, body = rows[0], rows[2:]
-
-    out = ["<table>"]
-    if header:
-        out.append("<tr>" + "".join(f"<th>{inline(c)}</th>" for c in header)
-                   + "</tr>")
-    for r in body:
-        out.append("<tr>" + "".join(f"<td>{inline(c)}</td>" for c in r) + "</tr>")
-    out.append("</table>")
-    return "".join(out)
+def tool_result(body: str, *, error: bool = False) -> str:
+    return _render.render(_blocks.tool_result(body, error=error))
 
 
 class HtmlStream:
-    """Feed model text in, get HTML updates out."""
+    """Feed model text in, get HTML updates out.
+
+    A `BlockStream` with the renderer bolted on, which is exactly what the
+    bridge stops being at C2: the guest will take the records and run the
+    renderer itself. Until then this keeps every caller and every golden
+    working, and `htmlrender` keeps being exercised by the whole test suite
+    rather than only by the new tests -- which is what makes it a trustworthy
+    oracle for B2.
+    """
+
+    #: Here as well as on BlockStream because `html.py:368` is cited in four
+    #: places and imported by name in two.
+    LIVE_CAP = _blocks.BlockStream.LIVE_CAP
 
     def __init__(self) -> None:
-        self._pending = ""          # after the last newline, not yet classified
-        self._lines: list[str] = []  # lines of the block being built
-        self._kind: str | None = None
-        self._lang = ""
-
-    # --- public ------------------------------------------------------------
+        self._s = _blocks.BlockStream()
 
     def feed(self, text: str) -> list[Update]:
-        self._pending += text
-        if "\n" not in self._pending:
-            return self._live_only()
-        head, _, self._pending = self._pending.rpartition("\n")
-        out: list[Update] = []
-        for line in (head + "\n").splitlines():
-            out.extend(self._line(line))
-        out.extend(self._live_only())
-        return out
+        return [self._as_update(u) for u in self._s.feed(text)]
 
     def flush(self) -> list[Update]:
-        """The turn is over: close whatever is open."""
-        out: list[Update] = []
-        if self._pending:
-            rest, self._pending = self._pending, ""
-            out.extend(self._line(rest))
-        closed = self._close()
-        if closed:
-            out.append(Update(APPEND, closed))
-        out.append(Update(LIVE, ""))
-        return out
+        return [self._as_update(u) for u in self._s.flush()]
 
-    # --- internals ---------------------------------------------------------
-
-    def _live_only(self) -> list[Update]:
-        return [Update(LIVE, self._render(partial=True))]
-
-    def _start(self, kind: str, lang: str = "") -> list[Update]:
-        """Close the open block and begin a new one."""
-        out: list[Update] = []
-        closed = self._close()
-        if closed:
-            out.append(Update(APPEND, closed))
-        self._kind = kind
-        self._lang = lang
-        self._lines = []
-        return out
-
-    def _close(self) -> str:
-        if self._kind is None:
-            return ""
-        rendered = self._render(partial=False)
-        self._kind = None
-        self._lines = []
-        return rendered
-
-    def _line(self, raw: str) -> list[Update]:
-        line = raw.rstrip("\n")
-
-        m = _FENCE.match(line)
-        if m:
-            if self._kind == "pre":
-                out = []
-                closed = self._close()
-                if closed:
-                    out.append(Update(APPEND, closed))
-                return out
-            return self._start("pre", m.group(2))
-
-        # Inside a fence everything is literal, which is why fence state has to
-        # survive across feeds.
-        if self._kind == "pre":
-            self._lines.append(line)
-            return []
-
-        if not line.strip():
-            out = []
-            closed = self._close()
-            if closed:
-                out.append(Update(APPEND, closed))
-            return out
-
-        m = _RULE.match(line)
-        if m:
-            out = self._start("hr")
-            out.append(Update(APPEND, "<hr>"))
-            self._kind = None
-            return out
-
-        m = _HEADING.match(line)
-        if m:
-            out = self._start("h")
-            level = min(len(m.group(1)) + 2, 6)
-            out.append(Update(APPEND, f"<h{level}>{inline(m.group(2))}</h{level}>"))
-            self._kind = None
-            return out
-
-        m = _ROW.match(line)
-        if m:
-            # A markdown table. Worth having now that the transcript can
-            # actually draw one; the styled-run renderer could only ever have
-            # shown the pipes.
-            out = [] if self._kind == "table" else self._start("table")
-            self._lines.append(line)
-            return out
-
-        m = _BULLET.match(line)
-        if m:
-            # Numbered markers get <ol>, so "1." does not silently become a
-            # bullet and lose the numbering the model meant.
-            kind = "ol" if m.group(2)[:1].isdigit() else "ul"
-            out = [] if self._kind == kind else self._start(kind)
-            self._lines.append(m.group(3))
-            return out
-
-        m = _QUOTE.match(line)
-        if m:
-            out = [] if self._kind == "quote" else self._start("quote")
-            self._lines.append(m.group(1))
-            return out
-
-        out = [] if self._kind == "p" else self._start("p")
-        self._lines.append(line)
-        return out
-
-    #: How much of an open block a LIVE update may carry. 02.17.
-    #:
-    #: A LIVE update replaces the whole open element and `_render` returned
-    #: all of it every coalescer flush (100-600ms), so a 60 KB fenced file
-    #: went out as ~65 frames averaging 30 KB -- about two MEGABYTES on the
-    #: wire for 60 KB of content, on a link measured in single-digit KB/s.
-    #: Worse, past `MAX_FRAME - 1024` `send_html` drops LIVE frames without a
-    #: word (link.py), so live updating just stopped partway through with no
-    #: way to tell.
-    #:
-    #: Capping the TAIL, not the head: the newest lines are what a reader
-    #: watching a long code block wants to see, and the finished block still
-    #: arrives whole as an APPEND -- only the intermediate copies are bounded.
-    LIVE_CAP = 4096
-
-    def _tail(self, lines: list[str]) -> list[str]:
-        """The last `LIVE_CAP` bytes' worth of an open block, newest first.
-
-        Returned in original order with an elision marker in front when
-        anything was dropped, so the reader can see that the block is longer
-        than what is on screen rather than silently reading a fragment as the
-        whole thing.
-        """
-        if self._kind == "table":
-            # NOT capped. Dropping leading rows drops the header row and the
-            # separator under it, so `_table` would re-read the table as
-            # headerless and the live view would disagree with the sealed one
-            # about what the columns are. A table long enough to matter here
-            # is rare; a table that changes shape while you watch it is not
-            # something to ship to fix a bandwidth problem.
-            return lines
-        total = 0
-        keep: list[str] = []
-        for line in reversed(lines):
-            total += len(line) + 1
-            if keep and total > self.LIVE_CAP:
-                break
-            keep.append(line)
-        keep.reverse()
-        if len(keep) == len(lines):
-            return lines
-        # Plain "...", not an entity: everything but a fence goes through
-        # `inline`, which escapes, so "&hellip;" would appear literally.
-        # Inside a fence everything is literal anyway.
-        return ["...", *keep]
-
-    def _render(self, *, partial: bool) -> str:
-        lines = list(self._lines)
-        if partial and self._pending:
-            lines.append(self._pending)
-        if not lines:
-            return ""
-        if partial:
-            lines = self._tail(lines)
-
-        if self._kind is None:
-            # Text arrived before any complete line, so no block is open yet.
-            # Show it as a paragraph anyway: this is the first thing the reader
-            # sees of a turn, and holding it back until a newline arrives is
-            # exactly the stall the live block exists to avoid.
-            return "<p>" + "<br>".join(inline(x) for x in lines) + "</p>"
-
-        if self._kind == "pre":
-            body = esc("\n".join(lines))
-            label = (f'<div class="lang">{esc(self._lang)}</div>'
-                     if self._lang else "")
-            return f'<div class="codewrap">{label}<pre>{body}</pre></div>'
-        if self._kind in ("ul", "ol"):
-            tag = self._kind
-            return (f"<{tag}>" + "".join(f"<li>{inline(x)}</li>" for x in lines)
-                    + f"</{tag}>")
-        if self._kind == "table":
-            return _table(lines)
-        if self._kind == "quote":
-            return "<blockquote>" + "<br>".join(inline(x) for x in lines) + "</blockquote>"
-        if self._kind == "p":
-            return "<p>" + "<br>".join(inline(x) for x in lines) + "</p>"
-        return ""
+    @staticmethod
+    def _as_update(u: BlockUpdate) -> Update:
+        return Update(u.mode,
+                      _render.render(u.block) if u.block is not None else "")
 
 
 # --- the document the guest hosts ------------------------------------------

@@ -32,6 +32,9 @@ ROOT = pathlib.Path(conftest.REPO) / "bridge"
 
 #: Not the product, or not prose. See the docstring.
 SKIP_DIRS = {"profiles", "prompts", "devtools", "__pycache__"}
+#: html.py holds the stylesheet, which is 9KB of CSS and not a sentence. The
+#: skip goes when the stylesheet does -- stage 3 C4, when the guest composes
+#: its own document from win/resources/view.css.
 SKIP_FILES = {"html.py"}
 
 #: A literal shorter than this is a word or a token, not a sentence.
@@ -54,6 +57,14 @@ BUDGET = {
     "files/attrs.py": 151,
     "agent/cmdguard.py": 139,
     "files/sync.py": 136,
+    #: Not prose: one regular expression. `_INLINE` is the inline-markup
+    #: grammar (code, bold, em) and its 153 bytes are mostly the two
+    #: lookarounds that stop BPB_RsvdSecCnt becoming one italic run. It was
+    #: inside html.py, which this file skips wholesale for the stylesheet,
+    #: and became visible when stage 3 split the parser out. Moving a grammar
+    #: into a .toml would put it further from the code that compiles it, not
+    #: nearer the person who reads it.
+    "view/blocks.py": 153,
 }
 
 
