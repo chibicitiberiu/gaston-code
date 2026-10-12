@@ -1,6 +1,25 @@
 # Stage 3 — the markup moves to the client
 
-## STATUS, 2026-10-12: IN PROGRESS — A0
+## STATUS, 2026-10-12: COMPLETE — twenty-four commits, `1c49270..`
+
+`docs/PROGRESS.md` has the outcome and the numbers; `ROADMAP.md` stage 3 has
+the summary. The plan below is what was intended, kept as written so the two
+can be compared.
+
+**Where it was wrong, and the corrections are in the commits rather than
+here:** A3 cost 1,024 bytes and not ~200; the payload sanitiser cannot live
+in the encoder, because by then the payload is full of the marks it would
+strip; A1's strip could not come out at A5, because three producers still
+hand-built markup; `test_html.py`'s 42 tests were NOT split four ways,
+because B2 compares the two renderers to each other and only those
+assertions pin the oracle to what MSHTML was given before; and the plan's
+instruction to re-point `doc_fingerprint` at `view.css` was a no-op, since
+the composed document contains the CSS already.
+
+**Two things it got right that mattered most:** the equality proof found two
+real bugs before it was a test, and the guest measurement for the template
+round trip was not optional. Neither would have been done without the plan
+saying so.
 
 Nineteen commits in three phases. `ROADMAP.md` stage 3. Planned 2026-10-12 and
 reviewed three times before any code: a design pass that argued four of the

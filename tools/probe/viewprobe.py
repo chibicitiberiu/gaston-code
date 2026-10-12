@@ -238,8 +238,10 @@ def main() -> int:
     # anything appended before the document arrives and flushes on poll(), so
     # getting this order wrong would still LOOK right -- which is exactly the
     # kind of thing that should be exercised rather than reasoned about.
+    # No DOC: stage 3 C4 deleted the frame. The client composes its own
+    # document from win/resources/view.css before it connects, so there is
+    # nothing for a bridge -- or a stub -- to send it.
     send(PR.ready("viewprobe", "none", 1, 1, 1))
-    send(PR.doc(H.document()))
     send(Frame("OPTIONSEND", {}))
 
     if a.replay_fence:

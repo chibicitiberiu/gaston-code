@@ -99,8 +99,8 @@ def main() -> int:
         return 2
     print(f"guest connected, mem_kb={hello.headers.get('mem_kb')}")
 
+    # No DOC: stage 3 C4 deleted the frame (see viewprobe).
     conn.sendall(PR.ready("barprobe", "none", 1, 1, 1).encode())
-    conn.sendall(PR.doc(H.document()).encode())
     conn.sendall(Frame("OPTIONSEND", {}).encode())
     conn.sendall(PR.text_frame("append", ENC_RAW, 1,
                                render(H.notice("barprobe: driving the bar "

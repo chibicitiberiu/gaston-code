@@ -32,8 +32,9 @@ in stage 1 for that reason.
 |---|---|---|
 | 1 | Fruit, the decisions that gate stage 3, and the injection harness — **DONE 2026-10-11** | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
 | 2 | Size: the flag decision and the gremote trim — **DONE 2026-10-11** | a measured before/after, and room in the caps for stage 3 |
-| 3 | The markup moves to the client | a second client could be written without touching the bridge |
-| 3b | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
+| 3 | The markup moves to the client — **DONE 2026-10-12** | a second client could be written without touching the bridge |
+| 3b | Pagination: the bridge stops dividing the transcript | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
+| 3c | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
@@ -142,12 +143,23 @@ between 3 and 4.
   becomes its own stage between 3 and 4, and `client_id` as an unauthenticated
   assertion is accepted. Note while implementing: two guests already exist (the
   VM and the Athlon, `machine=TIBI`), so `rebind` needs no new hardware.
-- **Export: the guest renders it.** One renderer, no drift, and
-  `win/app/cache.cpp` already holds rendered pages.
+- **Export: the guest renders it.** One renderer, no drift. *Built in stage 3
+  C3, and the second half of that sentence -- "`win/app/cache.cpp` already
+  holds rendered pages" -- turned out to be the wrong mechanism: ranges are
+  served on demand and the cache holds only what arrived, so an export
+  assembled from it silently omits whatever the reader never paged to. It
+  streams from the bridge instead. See `BACKLOG.md` 13.*
 - **The vocabulary capability** is one `HELLO` key, a small integer version, with
-  the bridge refusing an unknown value.
+  the bridge refusing an unknown value. *Built in C1, and it is four keys
+  rather than one: `markup`, `blocks`, `toolmax`, `maxblock`. Packing them
+  would have cost the ability to refuse one value and accept another.*
 - **The cache keeps rendered markup**, not blocks, with a format bump so pages
-  written by an older renderer are discarded.
+  written by an older renderer are discarded. *Built in C2, and it keeps
+  RECORDS rather than markup -- which is better, since a cached page
+  re-renders to the current window width -- with the version in the FILENAME
+  rather than a FORMAT file. Discarding the directory would have deleted the
+  cached conversation on the first launch after an upgrade with no bridge
+  reachable, before the notice saying why.*
 - **0.15d: the reboot run plus the harness.** Foreign-process GDI capture stays
   deferred with its reason restated.
 - **The P200 bring-up is out of this stage** by decision; the floppy kit gains
@@ -206,52 +218,110 @@ citations; the short version:
 
 ---
 
-## Stage 3 — the markup moves to the client
+## Stage 3 — the markup moves to the client — DONE 2026-10-12
 
-**Planned 2026-10-12; `docs/stage3-plan.md` is the detailed plan and carries the
-citations, the seven decisions and the commit order.** Nineteen commits in three
-phases: everything bridge-side lands first with no wire change, the renderer is
-proved under Wine against the bridge's own emitter before it is linked, the cap
-moves once with the number measured, and the cutover is one commit because it
-cannot be two.
+**`docs/stage3-plan.md` is the plan and `docs/PROGRESS.md` is the outcome.**
+Twenty-four commits. The exit condition is a test now, not a sentence:
+`tests/python/meta/test_no_markup_on_the_bridge.py` walks every file under
+`bridge/` for a markup literal and allows exactly one, the oracle.
 
-Two things that section below does not say, both decided while planning. The
-appearance leaves the wire as **files beside the exe** -- `view.css`,
-`export.css` and a macro-substituted `view.tpl` -- so the markup and the style
-are editable without a rebuild. And **pagination is a stage of its own, after
-this one**, which is what lets this stage keep the bridge's emitter as a
-verified oracle rather than deleting it and trusting the new renderer. It takes
-the 3b slot and R7 becomes 3c; that renumbering lands with stage 3's own closing
-commit, not here, so the table above still reads as it did until then.
+What it did, in one paragraph each.
 
-`BACKLOG.md` 31, with 13 first because 13 is smaller and builds the handshake
-capability and the export answer that 31 also needs.
+**The wire carries records.** `<kind> [attr=value]*` then tagged payload
+lines then `.`, in the frame BODY -- frame headers did not change. The bridge
+decides what a block IS and the client decides what it looks like; a client
+writing to a teletype consumes the vocabulary without discarding or parsing
+anything, which is the test `kind=pre` fails and `kind=code` passes. Inline
+runs are a stack of marks, not three bits of state, because `code` is
+specified with the `font:` shorthand and so the nesting order is visible,
+because nesting reaches depth three, and because `**a****b**` is two spans a
+flat run list cannot tell from one.
 
-What it is: the bridge keeps the markdown parse (lookahead, fence state across
-feeds, escaping, the encoding fold) and stops emitting markup. It sends blocks
-and inline runs; each client renders them. The guest's renderer emits the same
-HTML MSHTML gets today. "No markdown parser in C" holds, and so does **the guest
-transforms nothing** -- by 13's own distinction this is decoration.
+**The appearance is three files beside the exe.** `view.css`, `export.css`
+and `view.tpl`, CRLF-converted by the kit. Changing how a block looks is an
+edit and a restart rather than a rebuild. A missing or malformed `view.tpl`
+degrades to escaped paragraphs and says so in the status bar and the log --
+never in the transcript, which in that state is indistinguishable from model
+prose.
 
-Why it matters beyond tidiness: three bridge-side numbers are calibrated to
-MSHTML rather than to text -- the page's block cap (`bridge/view/pages.py:39`, 90,
-measured: a 200-element page took the 32MB guest to 48 KB free), the tool-output
-wrap column (`bridge/view/html.py:152`) and the tool-result truncation (`:114`).
-A terminal client inherits all three and can use none of them.
+**Three MSHTML-shaped numbers moved.** The page cap and the block cap are the
+client's, declared at the handshake; the wrap column is taken from the window
+at render time and is not declared at all, because the bridge does not wrap
+and a column sent once would be wrong after the first resize. The
+tool-result cap stayed, because truncating on the client means the bytes
+already crossed a 5 KB/s link -- bandwidth, not appearance.
 
-Three things in here are larger than they look, and each is named in 31:
+**DOC is gone.** 9,557 bytes uncompressed, once per connect and again on
+every reconnect, on a link measured in single digits of KB/s.
 
-- **`live` mode, not `append`.** A partial block is re-sent whole as it grows, so
-  with rendering client-side the guest re-renders the open block on every update.
-  Same bytes, but the work moves onto a 1998 CPU. That makes it a repaint-budget
-  question, and therefore a question stage 5 has a bearing on.
-- **Export**, decided in stage 1 and built here.
-- **The goldens are the thing being rewritten**, so they cannot be the oracle.
-  `tests/python/server/test_frame_goldens.py` pins `TEXT` and `DOC` and gets
-  regenerated wholesale. Capture a before screenshot of the transcript on the
-  guest, and an agreement test on the vocabulary in the shape
-  `test_guest_css.py` and `test_uirec_agreement.py` already use: both sides'
-  tables compared, with a count asserted so a dropped case fails loudly.
+### The numbers
+
+| | before | after |
+|---|---|---|
+| `gaston.exe` committed | 478,249 | 495,865 of 498,425 |
+| live DOM write, Athlon | 1,064 µs | 986 µs |
+| live render, Athlon | — | 142 µs (14.4% of the DOM write) |
+| live DOM write, 32MB VM | 3,799 µs | 3,710 µs |
+| live render, 32MB VM | — | 478 µs (12.9%) |
+| DOC per connect | 9,557 bytes | 0 |
+
+One page of image, measured and attributed in `win/Makefile`'s ladder. Half
+of what the stage adds is not image at all: 9,375 bytes of stylesheet and
+~5,400 of templates are files. `docs/measurements/live-before-20261012.txt`
+and `live-after-20261012.txt` have the timings;
+`template-roundtrip-20261012.txt` has the one platform risk that had to be
+measured rather than reasoned about.
+
+### What is worth knowing afterwards
+
+- **The equality proof is the load-bearing test.** `rendercheck --render`
+  against the bridge's emitter, byte for byte, ~75 blocks including the live
+  path. It found two real bugs before it was even a test -- text-mode stdout
+  turning every `\n` into `\r\n`, and a newline inside a payload line, which
+  is a wire-format violation no amount of reading either side would show.
+  The bridge's emitter stays until 3b for exactly this reason.
+- **The screenshot caught what no test could.** Every test passed while the
+  guest rendered the whole transcript as plain paragraphs, because nothing
+  called `rc_tpl_load` -- both test paths pass `--template` and the client
+  never did.
+- **A bug the rewrite exposed and did not introduce**: a block that forced a
+  page seal was never streamed to a reader following LIVE. Survivable only
+  while a run could be split; 02.17 made splitting rare and so made the hole
+  the common case.
+- **One property is lost.** A CSS edit used to land on a RECONNECT, because
+  `set_document` fingerprinted the incoming DOC. It lands on the next START
+  now. The right trade, and a real regression against `PROGRESS.md:955`.
+- **Two of §8's three throttle thresholds are the same measurement with
+  inconsistent limits**, which the after-measurement records. Nothing is
+  throttled; the thresholds want rewriting before stage 5 uses them.
+
+---
+
+## Stage 3b — pagination: the bridge stops dividing the transcript
+
+Everything `pages.py` does exists to cut a stream of HTML into MSHTML-sized
+chunks at boundaries safe for MSHTML. After stage 3 every boundary is safe --
+a record is indivisible -- and the client picks the size, so nearly all of it
+is deletion: `Page`, `_seal`, `continued` (already always false), `MAX_BYTES`,
+`MAX_LINES`, `HARD_*`, the three `over_*` predicates, `message_boundary`,
+`limits_for`, `PAGESEALED`, the four page frames, `pagebar.cpp`'s arithmetic
+and the anchors. `pages.py` is 272 lines today and should end around 90 as an
+append-only `Transcript`.
+
+What replaces it is the thing stage 3 made possible and deliberately did not
+build: **the guest asks for blocks by range.** `offset` and `limit`, nothing
+else -- the server has no opinion about what a page is, which is the whole
+point of the client declaring its own caps.
+
+Two things stage 3 was forced into that belong here:
+
+- `link.py` keeps a chunk loop for the export and nothing else.
+- The bridge's emitter (`bridge/view/htmlrender.py`) and the `HtmlStream`
+  shim die here, with the allowlist entry in
+  `test_no_markup_on_the_bridge.py` and the two tests that guard it. The
+  equality proof becomes a checked-in fixture at the same moment, which is
+  what keeps the guest's renderer pinned once the thing it was compared
+  against is gone.
 
 ---
 

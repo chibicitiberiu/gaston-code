@@ -1396,7 +1396,25 @@ the bottleneck.
 
 ## 13. Decoration ships from the bridge, so only one client can ever look right
 
-**Status:** deferred by decision, 2026-09-25. The seam is named; nothing moved.
+**Status:** CLOSED 2026-10-12, stage 3. `docs/stage3-plan.md` is the plan,
+`docs/ROADMAP.md` stage 3 the outcome.
+
+The stylesheet is `win/resources/view.css`, beside the exe. The DOC frame
+that carried it is gone -- 9,557 bytes uncompressed, once per connect and
+again on every reconnect, on a link measured in single digits of KB/s. The
+client composes its own document at boot and derives the charset from its
+own `GetACP()`.
+
+Three things this entry got wrong, each corrected where it appears below:
+the export cannot be assembled from the cache; the comment-strip figures
+were two measurements 21 bytes apart being quoted as one; and "a second
+client would have to reverse the HTML" understated it, because half the
+transcript was never markdown in the first place. See §31.
+
+The seam is a test now rather than a claim:
+`tests/python/meta/test_no_markup_on_the_bridge.py`.
+
+*The original entry follows, unchanged except where a line was wrong.*
 
 This is not a challenge to **the guest transforms nothing** (`CLAUDE.md`). That rule
 is right and it stays. The problem is that "how a block looks" turns out to be two
@@ -2802,8 +2820,34 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 
 ## 31. The bridge renders the markup, so the wire is IE4/5-shaped
 
-**Status:** open, asked for 2026-10-10. Nothing moved. §13 is the stylesheet;
-this is the markup itself, and it is the larger half of the same problem.
+**Status:** CLOSED 2026-10-12, stage 3, in twenty-four commits.
+`docs/stage3-plan.md` is the plan and `docs/ROADMAP.md` stage 3 the outcome.
+
+The wire carries records -- `<kind> [attr=value]*`, tagged payload lines, a
+dot -- in the frame body; frame headers did not change. The guest renders
+them through `win/resources/view.tpl`, and
+`tests/python/guest/test_render_equivalence.py` proves it emits the same
+bytes the bridge used to, which is what let the goldens be regenerated
+safely.
+
+**NOT MARKDOWN ON THE WIRE, and the reason is this codebase rather than a
+rule.** It was asked twice while planning and the answer is in
+`stage3-plan.md` §1: markdown deltas are mutually exclusive with the client
+declaring `offset`/`limit`, because something has to know where block 120
+begins and only the parser does; half the transcript was never markdown
+anyway (tool results, permission cards, notices, the user echo); the parse
+is ~180 lines against ~81 of emit, and moving it would put cross-feed fence
+state and lookbehind-free underscore rules into C on a 32MB machine; and
+there is no pass-through regardless, since everything is folded through a
+28-codepage table before it reaches a wire. Markdown stays reachable later
+as a VOCABULARY VALUE rather than a reversal -- the handshake's shape adds
+one without a flag day -- and for a terminal client that already links a
+renderer it would be the better wire.
+
+**This entry's inline set named a `link` run that has never existed.**
+Corrected below.
+
+*The original entry follows, unchanged except where a line was wrong.*
 
 §13 split "how a block looks" in two: *structure* (markdown to blocks -- a
 transform, needs lookahead and a parser, belongs on the bridge) and *decoration*

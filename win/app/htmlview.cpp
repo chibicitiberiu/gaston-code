@@ -1182,52 +1182,6 @@ void rc_html::records(const char *rec, unsigned len, unsigned wrapcol)
     settle(bottom);
 }
 
-void rc_html::live_records(const char *rec, unsigned len, unsigned wrapcol)
-{
-    HtmlBuf out;
-
-    /* An EMPTY body is not nothing to do: it is what clears #l at the end
-     * of a turn, and live("") is how that has always been said. */
-    if (!rec || !len) { live(""); return; }
-    if (!rc_render(rec, len, wrapcol, out)) {
-        rc_log("html: live record refused; leaving what is on screen");
-        return;
-    }
-    live(out.str());
-}
-
-void rc_html::set_autoscroll(int on) { d->autoscroll = on; }
-
-void rc_html::append(const char *frag)
-{
-    HRESULT hr;
-
-    if (!frag || !*frag) return;
-    if (!d->ready) { queue_add(d, frag); return; }
-    Bstr where(to_bstr("beforeEnd"));
-    Bstr html(to_bstr(frag));
-    /* to_bstr returns NULL when it could not widen the fragment. Refuse
-     * rather than insert, so the block is missing WITH a log line instead of
-     * missing silently. */
-    if (!where.get() || !html.get()) {
-        rc_log("html: append refused, could not widen %u bytes",
-               (unsigned)strlen(frag));
-        return;
-    }
-    hr = IHTMLElement_insertAdjacentHTML(d->slot_t.get(), where.get(), html.get());
-
-    /* Quiet unless something goes wrong. A failed insert is invisible by
-     * definition: the call returns, nothing appears, and the window looks
-     * like a layout problem rather than a DOM one. */
-    if (FAILED(hr))
-        rc_log("html: append FAILED hr=%08lX len=%u [%.48s]",
-               (unsigned long)hr, (unsigned)strlen(frag), frag);
-    else if (!d->diag) {
-        d->diag = 1;
-        rc_log("html: first append ok, %u bytes", (unsigned)strlen(frag));
-    }
-}
-
 /* Non-zero if QPC can resolve a 5ms step on this machine.
  *
  * Asked once and remembered, because QueryPerformanceFrequency is a syscall
@@ -1264,6 +1218,64 @@ static unsigned long perf_us(rc_html_impl *d, const LARGE_INTEGER &t0)
     if (!QueryPerformanceCounter(&t1)) return 0;
     return (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000ULL) /
                            d->perfHz.QuadPart);
+}
+
+void rc_html::live_records(const char *rec, unsigned len, unsigned wrapcol)
+{
+    HtmlBuf out;
+    int timed;
+    LARGE_INTEGER t0;
+
+    /* An EMPTY body is not nothing to do: it is what clears #l at the end
+     * of a turn, and live("") is how that has always been said. */
+    if (!rec || !len) { live(""); return; }
+
+    /* TIMED, because this is the number stage 3 exists to be able to
+     * answer: the bridge re-sends the whole open block every flush, so
+     * this runs ten times a second for the length of an answer and the
+     * work it does moved onto a 1998 CPU. A3 measured the DOM half with
+     * nothing to compare it against; this is the other half. */
+    timed = perf_usable(d);
+    if (timed) timed = QueryPerformanceCounter(&t0) ? 1 : 0;
+
+    if (!rc_render(rec, len, wrapcol, out)) {
+        rc_log("html: live record refused; leaving what is on screen");
+        return;
+    }
+    if (timed) live_cost(perf_us(d, t0));
+    live(out.str());
+}
+
+void rc_html::set_autoscroll(int on) { d->autoscroll = on; }
+
+void rc_html::append(const char *frag)
+{
+    HRESULT hr;
+
+    if (!frag || !*frag) return;
+    if (!d->ready) { queue_add(d, frag); return; }
+    Bstr where(to_bstr("beforeEnd"));
+    Bstr html(to_bstr(frag));
+    /* to_bstr returns NULL when it could not widen the fragment. Refuse
+     * rather than insert, so the block is missing WITH a log line instead of
+     * missing silently. */
+    if (!where.get() || !html.get()) {
+        rc_log("html: append refused, could not widen %u bytes",
+               (unsigned)strlen(frag));
+        return;
+    }
+    hr = IHTMLElement_insertAdjacentHTML(d->slot_t.get(), where.get(), html.get());
+
+    /* Quiet unless something goes wrong. A failed insert is invisible by
+     * definition: the call returns, nothing appears, and the window looks
+     * like a layout problem rather than a DOM one. */
+    if (FAILED(hr))
+        rc_log("html: append FAILED hr=%08lX len=%u [%.48s]",
+               (unsigned long)hr, (unsigned)strlen(frag), frag);
+    else if (!d->diag) {
+        d->diag = 1;
+        rc_log("html: first append ok, %u bytes", (unsigned)strlen(frag));
+    }
 }
 
 void rc_html::live_cost(unsigned long renderUs)

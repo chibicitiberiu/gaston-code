@@ -4393,3 +4393,110 @@ rendered in MSHTML and the wire reporting 2.43:1. That turn is also the proof
 for the GUID commit -- every one of the thirteen is exercised by that window
 existing. On the Athlon: self_update, uilaneprobe 15/15, clipprobe 8/8, and
 MSAA returning real roles from the box's own oleacc.
+
+---
+
+## Stage 3 -- the markup moves to the client (2026-10-12)
+
+`ROADMAP.md` stage 3, planned in `docs/stage3-plan.md`. Twenty-four commits,
+`1c49270..`, each gated with `make -C win check`, `make lint`,
+`make test-fast` and, where the image moved, the committed number in the
+message.
+
+| | |
+|---|---|
+| `gaston.exe` | 478,249 -> **495,865** of a cap raised once, 482,345 -> 498,425 |
+| DOC frame, per connect and per reconnect | 9,557 bytes -> **0** |
+| live DOM write / render, Athlon | 1,064 µs -> 986 µs / **142 µs** |
+| live DOM write / render, 32MB VM | 3,799 µs -> 3,710 µs / **478 µs** |
+| `bridge/view/html.py` | 704 lines -> **123** |
+| `make test-fast` | 4,352 passed |
+| the whole suite | 4,741 passed |
+
+**What moved.** The bridge sends what a block IS -- `<kind> [attr=value]*`,
+tagged payload lines, a dot -- in the frame body, and the client decides what
+it looks like. The test for where the line falls is the exit condition
+itself: a client writing to a teletype consumes this vocabulary without
+discarding or parsing anything, which `kind=pre` fails and `kind=code`
+passes. The stylesheet and the markup templates are three files beside the
+exe; three MSHTML-shaped numbers became the client's; DOC is gone.
+
+### The three things that earned their place
+
+**The equality proof.** `rendercheck --render` against the bridge's emitter,
+byte for byte, ~75 blocks including the live path. It found two real bugs
+*before it was a test*: the C runtime's text-mode stdout turning every `\n`
+into `\r\n`, and -- the better find -- a newline inside a payload line. The
+line separator cannot be inside a line, the guest read the tail as a second
+line with tag `y`, and half an `error("x\ny")` vanished. That is a
+wire-format violation no amount of reading either side would have shown. It
+is also why the bridge's emitter is NOT deleted in this stage: it is the
+oracle, and deleting it would mean trusting a new renderer on a platform
+that cannot be debugged.
+
+**The screenshot.** Every test passed while the guest rendered the entire
+transcript as plain paragraphs, because nothing called `rc_tpl_load` --
+`rendercheck` and the equality proof both pass `--template`, and the client
+never did. Nothing automated could see it: both renderers agreed, and they
+agreed on the wrong thing because one of them was in its fallback.
+
+**The guest measurement for the template layer.** `inifile.cpp:50-107` spends
+58 lines on `GetPrivateProfileStringA` and ends *"'Wine proves the code,
+never the platform', and this is what that rule costs when the thing being
+proved is a round trip through somebody else's parser."* A template file is
+that round trip. 40 keys in, 40 back, 0 differences, on the VM and on the
+Athlon -- `docs/measurements/template-roundtrip-20261012.txt`. It also
+records what the result does *not* settle: no template holds a control
+character, which is the one thing that provably cannot survive, and the
+inline marks live in the record for exactly that reason.
+
+### Bugs found on the way, in the shipping code
+
+- **A block that forced a page seal was never streamed** to a reader
+  following LIVE. `write_block` captured the page number before the write
+  and matched chunks against it, so a block that landed on the NEXT page
+  matched nothing. Survivable only while a run could be split; 02.17 made
+  splitting rare and so made the hole the common case. Verified against the
+  shipping code before changing it.
+- **`.thinking` was emitted for the whole life of the feature with no rule
+  anywhere.** `presentation.py` built `<div class="{style}">` from the style
+  NAME, so there was no literal to grep and no `RC_CSS_*` to sweep. Extended
+  thinking rendered as ordinary model prose and nothing could notice.
+- **A `\x00` in model text truncated the block on screen and nowhere else**,
+  because the guest NUL-terminates every body and hands the cache
+  `(body, len)` but the view a `const char *`. The same transcript rendered
+  two ways depending on whether it arrived live or was redrawn on reconnect.
+- **audit-2 03.17 said PARTIAL while its own ledger line said Fixed**, and
+  nothing checks that those agree. It was cited twice as live justification
+  while planning.
+
+### What the stage costs, said plainly
+
+One page of image, attributed in `win/Makefile`'s ladder. **Half of what the
+stage adds is not image at all** -- 9,375 bytes of stylesheet and ~5,400 of
+templates are files -- and compiled in it would have been four pages.
+Against that: 9,557 bytes off every connect and every reconnect, which on a
+5 KB/s link is close to two seconds a user waits twice.
+
+**One property is lost.** A CSS edit used to land on a RECONNECT, because
+`set_document` fingerprinted the incoming DOC. There is no DOC, so an edit
+lands on the next START. The right trade now the files are the client's own,
+and a real regression against the "4-minute iteration into a 30-second one"
+recorded above.
+
+**And two of the three throttle thresholds this stage set for itself are the
+same measurement with inconsistent limits** -- "total up more than 10%" and
+"render > 0.2 × DOM" differ only by which run's DOM figure they divide by,
+so a renderer at 15% passes one and fails the other on any machine. Nothing
+is throttled: the renderer is 14.4% of the DOM write on the Athlon and 12.9%
+on the VM, and adds 0.43 s to a 107-second turn. The thresholds want
+rewriting before stage 5 uses them.
+
+### Verified
+
+Under Wine (the 76-case `rendercheck`, the equality proof, the whole Python
+suite), on the QEMU guest and on the Athlon XP. On the guest: every kind
+rendered and screenshotted, the template round trip, a cold start with no
+bridge reachable, and a real export driven through the modal Save dialog and
+opened in IE5 on the same machine. On the Athlon: the template round trip,
+the 76 cases, and the live timings.

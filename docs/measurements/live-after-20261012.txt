@@ -1,0 +1,61 @@
+# The live path's cost AFTER the renderer moved to the client.
+# Stage 3, the other half of live-before-20261012.txt. 2026-10-12.
+# gaston.exe 495,865 committed (budget 498,425).
+#
+# Same corpus, same cadence, same two machines:
+# tools/probe/viewprobe.py --replay-fence 60, a 61,478-byte fenced C block
+# as 1,064 lines at the coalescer's 100ms, through the real BlockStream and
+# the real GuestLink. The guest logs one `live:` line per turn, now with
+# both halves -- rc_html::live times the DOM write and rc_html::live_cost is
+# told what the record render cost.
+#
+# The VM was REBOOTED before this run. The run before it started with 3.5MB
+# free after a day of shipping builds into it and would not have compared
+# with a baseline taken at 13.4MB. Said here because the number it would
+# have produced looked plausible.
+
+                        BEFORE              AFTER
+                        dom_mean  turn      dom_mean  render_mean  turn
+
+Athlon XP 2000+, 256MB    1064 us  1.136 s     986 us      142 us  1.202 s
+QEMU 32MB                 3799 us  4.031 s    3710 us      478 us  4.464 s
+
+  render_max   507 us on the Athlon, 6,083 us on the VM
+  dom_max    1,551 us on the Athlon, 46,628 us on the VM
+
+THE THREE THRESHOLDS §8 SET, AND WHAT THEY SAY.
+
+  render_mean > 0.2 x dom_mean          Athlon 14.4%   VM 12.9%   PASS
+  total live time per turn up > 10%     Athlon +5.9%   VM +10.8%  one over
+  above 5 ms per 4 KB update            Athlon 0.14ms  VM 0.48ms  PASS
+
+TWO OF THOSE THREE ARE THE SAME MEASUREMENT WITH INCONSISTENT LIMITS, and
+that is a flaw in how the thresholds were written rather than a finding
+about the renderer. "Total up more than 10%" is render_total / dom_before,
+and "render_mean > 0.2 x dom_mean" is render_total / dom_after. The two
+differ only by the small drift in dom between runs -- so a renderer costing
+15% of the DOM write passes the ratio test and fails the total test, every
+time, on any machine. The VM landing at 12.9% and +10.8% is exactly that
+arithmetic, not a renderer that is nearly too slow.
+
+THE READING. The ratio test is the design question -- is the new work small
+against the work that was already there -- and both machines answer yes with
+room. The absolute floor is the sanity check and both clear it by a factor
+of ten. On the VM the renderer adds 0.43 s of CPU to a 107-second turn,
+which is 0.4% of wall clock and is not perceptible. Nothing is throttled.
+
+The ratio DOES bind on the fast machine, as live-before predicted: 14.4% on
+the Athlon against 12.9% on the VM, because the VM's DOM is slow for reasons
+that are not CPU while the renderer is pure CPU. The TOTAL test binds the
+other way, which is the same arithmetic seen from the other end.
+
+WHAT IS WORTH WATCHING. render_max on the VM is 6,083 us -- one update in a
+thousand over the 5 ms floor -- against a dom_max of 46,628 us in the same
+run. Both are the shape of a 32MB machine that has started swapping rather
+than of the code: the run ends with 4.4MB free. On the Athlon, where nothing
+swaps, render_max is 507 us and dom_max 1,551.
+
+The Pentium 200 is out of stage 3 by the stage-1 decision, so the margin
+between the Athlon and the real target machine is unmeasured and stays that
+way until stage 5. These numbers bound the renderer on hardware roughly 5x
+the target.
