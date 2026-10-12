@@ -210,7 +210,7 @@ async def test_a_bulk_transfer_counts_as_the_guest_being_alive(harness):
     does not read the socket again until the handler it is awaiting returns.
     At --link-bps 5000 a 450 KB export is 90 seconds of inbound silence, and
     the reaper read that as a dead guest: it denied whatever prompt was on
-    screen and closed the writer, and `send_export` then tried to report the
+    screen and closed the writer, and `send_export_records` then tried to report the
     failure down the socket it had just lost."""
     r, _w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")

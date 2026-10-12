@@ -36,9 +36,7 @@ class DummyGuest:
         # Composed like the real GuestSession: the view owns the paginator.
         self.view = MagicMock()
         self.view.pages.count = 2
-        self.view.pages.all_text.return_value = "Turn 1\nHello World\n"
         self.link = MagicMock()
-        self.link.send_export = AsyncMock()
         self.link.send_export_records = AsyncMock()
 
 

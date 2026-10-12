@@ -5,7 +5,7 @@ Covers failure paths and invariants called out in Audit 04.13:
 - Disconnected or closing writer returns False without attempting to write.
 - ConnectionResetError / BrokenPipeError resets writer to None and returns False.
 - Successful send writes payload and awaits drain.
-- send_html / send_export chunking and failure handling.
+- send_export_records chunking and failure handling.
 - send_raw ignores writer exceptions.
 """
 
@@ -205,9 +205,9 @@ async def test_an_oversized_append_body_is_refused_and_logged(link, caplog):
 async def test_send_export_lifecycle_success(link):
     writer = FakeWriter()
     link.writer = writer
-    data = b"export file content"
+    data = [b"para\nt export file content\n.\n"]
 
-    await link.send_export(None, data)
+    await link.send_export_records(None, data)
     written = bytes(writer.written)
     assert b"EXPORTSTART" in written
     assert b"EXPORTDAT" in written
@@ -228,7 +228,7 @@ async def test_send_export_failure_aborts_with_error(link):
         orig_write(data)
     writer.write = write_hook
 
-    await link.send_export(None, b"some content")
+    await link.send_export_records(None, [b"para\nt some content\n.\n"])
     # Writer will be set to None when EXPORTDAT fails, and export_end(False) will return False
     assert link.writer is None
 

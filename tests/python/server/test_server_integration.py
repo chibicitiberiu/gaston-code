@@ -2614,9 +2614,18 @@ async def test_the_warning_is_readable_in_the_transcript_not_just_the_bar(
         {"command": "deltree /y c:\\windows", "cwd": "C:\\"})
     await _recv(harness, reader, "PERMREQ")
 
-    blocks = "".join(harness.bridge.connection.guest.view.pages.all_text())
-    assert "permwarn" in blocks
-    assert "outside the work folder" in blocks
+    # THE RECORD, not the markup. This asserted `"permwarn" in html` until
+    # stage 3b deleted the bridge's emitter -- and `permwarn` was a CSS class
+    # from win/resources/view.tpl, so the assertion was reaching across the
+    # seam stage 3 closed to check the client's appearance from the bridge.
+    # What the bridge is responsible for is that the block SAYS there is a
+    # warning and what it says: a `permission` record with a `w` line.
+    recs = harness.bridge.connection.guest.view.pages.all_records()
+    warnings = [line for rec in recs for b in blocks.decode(rec)
+                if b.kind == "permission"
+                for tag, line in b.payload if tag == "w"]
+    assert warnings, f"no permission warning in {len(recs)} records"
+    assert any("outside the work folder" in w for w in warnings), warnings
     task.cancel()
     await harness.close(writer)
 

@@ -211,38 +211,6 @@ class GuestLink:
         await self.wire_yield(guest)
         return True
 
-    async def send_export(self, guest, data: bytes) -> None:
-        """Stream an export to the guest, chunked, with a START and an END.
-
-        Unlike `send_html` this never truncates and never drops. An export is
-        a file the user asked for; a shortened one with a marker in the middle
-        is not a smaller export, it is a broken file. If a chunk cannot be
-        sent the transfer ends with `status=error` and the guest throws away
-        what it had.
-        """
-        budget = MAX_FRAME - 1024
-        total = len(data)
-        if not await self.send(guest, export_start(total)):
-            return
-        sent = 0
-        for i in range(0, total, budget):
-            chunk = data[i:i + budget]
-            if not await self.send(guest, export_data(i, total, ENC_RAW, chunk),
-                                   compress=True):
-                log.warning("export: the link went away at %d/%d bytes",
-                            i, total)
-                await self.send(guest, export_end(
-                    False, bytes_=sent,
-                    reason="The connection dropped during the export."))
-                return
-            sent = i + len(data[i:i + budget])
-            # Between chunks, for the same reason send_html yields: a
-            # multi-hundred-KB export would otherwise hold the event loop for
-            # its whole duration and a Stop press would wait it out.
-            if i + budget < total:
-                await self.wire_yield(guest)
-        await self.send(guest, export_end(True, bytes_=sent))
-
     async def wire_yield(self, guest=None) -> None:
         """Give everything else a turn on the wire, and count as liveness.
 
@@ -253,7 +221,7 @@ class GuestLink:
         otherwise only set in `ConnectionService.handle` -- so at
         `--link-bps 5000` a 450 KB export is 90 seconds of inbound
         silence, and the reaper read that as a dead guest: it denied whatever
-        prompt was on screen, closed the writer, and `send_export` then tried
+        prompt was on screen, closed the writer, and `send_export_records` then tried
         to report the failure down the socket it had just lost. The user
         asked for a file and the bridge tore its own connection down to
         deliver it.

@@ -395,7 +395,7 @@ async def test_fakegui_writes_a_real_export_to_a_file(harness, monkeypatch):
 
 async def test_fakegui_throws_away_an_export_that_did_not_finish(harness):
     """A shortened export is not a smaller export, it is a broken file --
-    which is what `send_export` refuses to produce and what the guest
+    which is what `send_export_records` refuses to produce and what the guest
     refuses to keep. The fake client has to refuse it too, or the tool would
     report success for the one failure the END frame exists to signal."""
     gui = FakeGui("127.0.0.1", harness.port, "s")

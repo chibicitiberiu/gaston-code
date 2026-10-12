@@ -235,25 +235,6 @@ class Paginator:
         """
         return self._transcript.all_records()
 
-    def all_text(self) -> str:
-        """Every page's HTML, in order, as one string.
-
-        For Export, which is the one caller that wants the whole transcript
-        rather than a page of it. Built here rather than by reaching into
-        `_pages` from outside, because "in order" is this class's business --
-        the live page is the last one, and that is not obvious from the API.
-
-        It RENDERS, from stage 3 C2, because the pages hold records now.
-        That is a decode and a render per block and it is deliberately
-        temporary: C3 moves the export to the guest, this goes, and
-        all_records() is what is left. Keeping it for one commit is what
-        lets C2 be about the live path alone.
-        """
-        from .blocks import decode
-        from .htmlrender import render
-        return "".join(render(b) for rec in self.all_records()
-                       for b in decode(rec))
-
     def page(self, number: int) -> Page | None:
         if 1 <= number <= len(self._pages):
             return self._pages[number - 1]
