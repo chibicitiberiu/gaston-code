@@ -161,6 +161,28 @@ public:
 
     void live(const char *frag);           /* replaces #l */
 
+    /* --- what the live path costs, per turn -------------------------------
+     *
+     * Stage 3 moves rendering from the bridge onto this machine, and the live
+     * path is where that is expensive: the bridge re-sends the whole open
+     * block on every flush (see above), so the guest redoes the work ten
+     * times a second for the length of an answer. Whether that fits is a
+     * measurement, not an argument, and these two are the instrument.
+     *
+     * `live_cost` is told what the render half cost; `live` times the DOM
+     * half itself; `live_report` logs both and resets, and is called at turn
+     * end. The split matters because the question is the RATIO -- a renderer
+     * costing a fifth of the DOM write it feeds is free in practice, and one
+     * total figure cannot say that.
+     *
+     * Timing is QueryPerformanceCounter and REFUSES rather than degrading: a
+     * 55ms GetTickCount tick cannot resolve the 5ms-per-update floor these
+     * numbers are compared against, and a number that cannot see the
+     * difference still reads like data. A machine with no usable counter
+     * gets the update and byte counts and says it was not timed. */
+    void live_cost(unsigned long renderUs);
+    void live_report();
+
     /* Replaces #s, the status line under the transcript. HTML, not text --
      * it carries the spinner's <img>. Pass "" to clear it.
      *

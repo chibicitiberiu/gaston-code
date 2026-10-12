@@ -331,15 +331,45 @@ struct rc_html_impl {
      * it is a did-anything-change test on a machine with 28KB free. */
     unsigned       doc_len, doc_sum;
 
+    /* --- the live path's cost, per turn -----------------------------------
+     *
+     * Stage 3 moves rendering onto this machine, so "can a 1998 CPU re-render
+     * the open block ten times a second" stops being rhetorical. This is the
+     * instrument that answers it, and it is permanent rather than scaffolding
+     * because stage 5 wants the same number off the P200.
+     *
+     * QueryPerformanceCounter, for the reason win/wire/connection.cpp:664-667
+     * already records: GetTickCount's tick is 55ms on 9x, and the threshold
+     * being tested is 5ms per update. So the fallback here REFUSES rather
+     * than degrades -- a measurement that cannot resolve the thing it is
+     * measuring is worse than none, because it reads like data.
+     * docs/PROGRESS.md:87 is the standing rule ("Do not budget against
+     * them").
+     *
+     * `liveRenderUs` is zero until stage 3's C2 gives this path something to
+     * render; until then the DOM half is the whole cost, which is the point
+     * of taking the number now. */
+    LARGE_INTEGER  perfHz;
+    int            perfOk;      /* -1 unknown, 0 refused, 1 usable */
+    unsigned       liveCount;
+    unsigned long  liveBytes;
+    unsigned long  liveDomUs, liveDomMaxUs;
+    unsigned long  liveRenderUs, liveRenderMaxUs;
+
     explicit rc_html_impl(HWND p)
         : parent(p), ready(0), diag(0),
           doc_len(0), doc_sum(0),
+          perfOk(-1),
+          liveCount(0), liveBytes(0),
+          liveDomUs(0), liveDomMaxUs(0),
+          liveRenderUs(0), liveRenderMaxUs(0),
           /* On unless the user says otherwise -- the same default
            * ConfigStore::load uses. The struct is zero-filled, so without this
            * the setting would be off by accident on the very first run. */
           autoscroll(1)
     {
         path[0] = '\0';
+        perfHz.QuadPart = 0;
         memset(&host, 0, sizeof(Host));
         host.site.lpVtbl  = &g_site_vtbl;
         host.place.lpVtbl = &g_place_vtbl;
@@ -1015,6 +1045,80 @@ void rc_html::append(const char *frag)
     }
 }
 
+/* Non-zero if QPC can resolve a 5ms step on this machine.
+ *
+ * Asked once and remembered, because QueryPerformanceFrequency is a syscall
+ * and this sits on a path that runs ten times a second. Refusing is a real
+ * outcome: on a box where QPC is absent or has a tick coarser than the
+ * threshold, every number below would be a rounded-up lie, so there are no
+ * numbers at all and the log says which machine it was. */
+static int perf_usable(rc_html_impl *d)
+{
+    if (d->perfOk >= 0) return d->perfOk;
+
+    d->perfOk = 0;
+    if (!QueryPerformanceFrequency(&d->perfHz) || d->perfHz.QuadPart <= 0) {
+        rc_log("html: live timing off, no performance counter");
+        return 0;
+    }
+    /* One tick must be well under the 5ms-per-update floor stage 3 budgets
+     * against. 1MHz on the PIT, 3.5MHz-plus on anything later; a counter
+     * slower than 20kHz (50us a tick) cannot see a 5ms difference with any
+     * confidence, so it is declined by the same argument as GetTickCount. */
+    if (d->perfHz.QuadPart < 20000) {
+        rc_log("html: live timing off, counter is only %lu Hz",
+               (unsigned long)d->perfHz.QuadPart);
+        return 0;
+    }
+    d->perfOk = 1;
+    return 1;
+}
+
+static unsigned long perf_us(rc_html_impl *d, const LARGE_INTEGER &t0)
+{
+    LARGE_INTEGER t1;
+
+    if (!QueryPerformanceCounter(&t1)) return 0;
+    return (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000ULL) /
+                           d->perfHz.QuadPart);
+}
+
+void rc_html::live_cost(unsigned long renderUs)
+{
+    /* Stage 3's C2 calls this with what the record render cost, just before
+     * handing the markup to live(). Separate from live() itself so the two
+     * halves can be told apart in the log -- the whole question is the ratio
+     * between them, and connection.cpp already learned that a single total
+     * answers nothing. */
+    d->liveRenderUs += renderUs;
+    if (renderUs > d->liveRenderMaxUs) d->liveRenderMaxUs = renderUs;
+}
+
+void rc_html::live_report()
+{
+    unsigned n = d->liveCount;
+
+    if (!n) return;             /* a turn with no streamed text */
+
+    /* Totals and a count, not means. The arithmetic belongs wherever the
+     * log is read -- it costs nothing there and two divides plus two more
+     * arguments is 60-odd bytes of image here, on a build with 3KB of slack.
+     * Max is kept because it is not derivable from a total. */
+    if (d->perfOk == 1)
+        rc_log("live: n=%u bytes=%lu dom_us=%lu dom_max=%lu "
+               "render_us=%lu render_max=%lu",
+               n, d->liveBytes,
+               d->liveDomUs, d->liveDomMaxUs,
+               d->liveRenderUs, d->liveRenderMaxUs);
+    else
+        rc_log("live: n=%u bytes=%lu untimed", n, d->liveBytes);
+
+    d->liveCount = 0;
+    d->liveBytes = 0;
+    d->liveDomUs = d->liveDomMaxUs = 0;
+    d->liveRenderUs = d->liveRenderMaxUs = 0;
+}
+
 void rc_html::live(const char *frag)
 {
     int bottom;
@@ -1039,6 +1143,19 @@ void rc_html::live(const char *frag)
      * the user every time they scrolled up to read. */
     bottom = at_bottom();
     {
+        /* Timed from here, deliberately: the widen to UTF-16 is part of what
+         * the DOM step costs on this machine. to_bstr allocates twice the
+         * RENDERED length, which is the figure stage 3's memory note cares
+         * about, so measuring around it and not just around put_innerHTML is
+         * what makes the two comparable. at_bottom() is outside, because it
+         * is scroll policy rather than the write, and it has been there since
+         * before this measurement existed. */
+        int timed = perf_usable(d);
+        LARGE_INTEGER t0;
+        unsigned long us;
+
+        if (timed) timed = QueryPerformanceCounter(&t0) ? 1 : 0;
+
         Bstr html(to_bstr(frag ? frag : ""));
         HRESULT hr;
         /* CHECKED EXPLICITLY, because put_innerHTML(NULL) does not fail --
@@ -1054,6 +1171,17 @@ void rc_html::live(const char *frag)
         if (FAILED(hr)) {
             rc_log("html: live FAILED hr=%08lX", (unsigned long)hr);
             return;             /* nothing moved, so nothing to follow */
+        }
+
+        /* Only a completed update counts. A refused or failed one did not do
+         * the work, and averaging it in would drag the mean toward whatever
+         * the failure path costs. */
+        d->liveCount++;
+        d->liveBytes += (unsigned long)(frag ? strlen(frag) : 0);
+        if (timed) {
+            us = perf_us(d, t0);
+            d->liveDomUs += us;
+            if (us > d->liveDomMaxUs) d->liveDomMaxUs = us;
         }
     }
     settle(bottom);

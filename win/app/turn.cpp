@@ -54,7 +54,13 @@ void Turn::turnDone()
     /* The status line is a statement about right now, so it goes when "right
      * now" stops being true. Leaving "receiving... 41s" under a finished
      * answer made it look as if Claude was still generating. */
-    if (m_html) m_html->status("");
+    if (m_html) {
+        m_html->status("");
+        /* Per TURN, which is the unit the budget is written in: "total live
+         * time per turn up more than 10%" is stage 3's throttle test. A turn
+         * with no streamed text logs nothing. */
+        m_html->live_report();
+    }
 }
 
 void Turn::noteInput()

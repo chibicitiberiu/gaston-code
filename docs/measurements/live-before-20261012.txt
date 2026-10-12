@@ -1,0 +1,73 @@
+# The live path's cost BEFORE the renderer moves to the client.
+# Stage 3 A3. 2026-10-12. gaston.exe 479,273 committed (budget 482,345).
+#
+# WHY THIS EXISTS. Stage 3 moves markup rendering from the bridge onto the
+# guest. The live path is where that lands hardest: the bridge re-sends the
+# WHOLE open block on every flush (win/app/htmlview.h, HtmlStream.LIVE_CAP =
+# 4096), so the guest redoes the work ten times a second for the length of an
+# answer. Whether a 1998 CPU can absorb that is a measurement, and this is the
+# before half of it. The after half goes in the same file at C2.
+#
+# HOW. tools/probe/viewprobe.py --replay-fence 60, which streams a 61,478-byte
+# fenced C block as 1,064 lines at the coalescer's 100ms cadence through the
+# real HtmlStream and the real GuestLink -- so _tail's elision, the deflate
+# decision and send_html's budget are all production's, not the probe's. The
+# sealing APPEND is 65,788 bytes and so also exercises link.py's clip marker,
+# which is visible at the bottom of live-before-vm-20261012.png.
+#
+# The guest logs one `live:` line per TURN from rc_html::live_report.
+# QueryPerformanceCounter, and it REFUSES rather than falling back to
+# GetTickCount: the tick is 55ms on 9x and the threshold being tested is 5ms.
+#
+#   live: n=<updates> bytes=<sum of fragment lengths> dom_us=<total>
+#         dom_max=<worst single update> render_us=0 render_max=0
+#
+# render_us is structurally zero here: nothing is rendered on the guest yet.
+# That is the point -- it is the column the after run fills.
+
+AMD Athlon XP 2000+, 256MB, Win98 SE 4.10.2222 A, 10.0.0.125
+
+  run 1  n=1062  bytes=4,531,425  dom_us=1,114,231  dom_max=16,510
+  run 2  n=1067  bytes=4,531,717  dom_us=1,135,792  dom_max= 9,573
+
+  mean payload   4,247-4,267 bytes per update
+  mean DOM cost  1,049 and 1,064 us        <- 1.05 ms
+  per turn       1.114 s and 1.136 s of DOM time across a 107 s turn, ~1%
+
+  Two runs because the first probe crashed after the stream (it framed the
+  sealing APPEND itself and hit the 65,536 cap); the numbers agreeing to 1.4%
+  across a restart is worth more than one run was.
+
+QEMU, 32MB, Pentium-class, Win98 SE 4.10.2222 A, the 32MB platform
+
+  run 1  n=1061  bytes=4,530,567  dom_us=4,030,814  dom_max=31,212
+
+  mean DOM cost  3,799 us                  <- 3.80 ms
+  per turn       4.031 s across a 107 s turn, ~3.8%
+  free memory    13,364 KB before the turn, 3,984 KB after
+
+WHAT THESE SAY, and one of them is not what was expected.
+
+1. The DOM write alone is 1.05 ms on the Athlon and 3.80 ms on the 32MB VM.
+   Stage 3's absolute floor -- "above 5 ms per 4 KB update the renderer is
+   defective" -- is about the renderer alone, so it still has room, but on the
+   VM the headroom above the EXISTING cost is 1.2 ms, not 5.
+
+2. THE RATIO TEST BINDS ON THE FAST MACHINE, NOT THE SLOW ONE. The throttle
+   rule is render_mean > 0.2 x dom_mean, and dom_mean is 3.6x larger on the
+   VM than on the Athlon, so the budget it allows is 760 us there against
+   213 us on the Athlon. The plan assumed the slowest machine was the
+   constraint and it is the opposite: the DOM is slow on the VM for reasons
+   that are not CPU -- MSHTML on 32MB with the working set above -- while a
+   record parser is pure CPU and will scale the other way. Evaluate the ratio
+   on the Athlon.
+
+3. 9.4 MB of free memory goes into one 60 KB answer on the 32MB box, and
+   dom_max of 31 ms against a 3.8 ms mean is the shape of a machine that
+   started swapping. That is the existing cost, before the guest holds a
+   record parser's working set as well.
+
+NOT MEASURED HERE. The Pentium 200 is out of stage 3 by the stage-1 decision,
+so the margin between the Athlon and the real target machine is unmeasured and
+stays that way until stage 5. Say so rather than leaving it implicit: the
+numbers above bound the renderer on hardware that is roughly 5x the target.

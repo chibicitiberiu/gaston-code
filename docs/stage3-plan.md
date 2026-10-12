@@ -468,8 +468,19 @@ caller, and a test re-point lands with the change that breaks it** — never ear
    (`:298-313`, `:669-671`) — a bare call would be the only unguarded one — and **the fallback
    refuses rather than degrades**, because §8's threshold is 5 ms and a 55 ms tick cannot resolve
    it (`PROGRESS.md:87`: *"Do not budget against them"*). `viewprobe --replay-fence` streams a
-   canned 60 KB fence at the real 100 ms cadence. **First commit that moves the image**, ~200
-   bytes, built as a permanent facility because stage 5 wants the same measurement.
+   canned 60 KB fence at the real 100 ms cadence. **First commit that moves the image**, built as
+   a permanent facility because stage 5 wants the same measurement.
+   **MEASURED: it cost 1,024 bytes committed, not the ~200 estimated** — 672 of code and 192 of
+   literals, rounded up by section alignment — taking the slack from 4,096 to 3,072, which is
+   C0's to carry. The estimate counted the two log format strings and not the 64-bit counter
+   arithmetic at each site; `live_report` alone was 210 bytes until its computed means were
+   dropped, on the argument that totals and a count are the data and a mean is analysis the
+   reader can do for free.
+   **And `--replay-fence` has to push through `GuestLink.send_html`, not bare `text_frame`:** the
+   sealing APPEND of a 60 KB fence is 65,821 bytes on the wire against a 65,536 cap, so a probe
+   that frames its own sends crashes on the last one — found by running it. Going through the real
+   path also means the measurement sees production's deflate decision and clip marker instead of
+   a second copy of that policy.
 4. **A4 — split `html.py`, behaviour-identical.** `blocks.py` gets `Block`, the grammar,
    `BlockStream` and `KINDS`/`ATTRS`/`VERSION`; `htmlrender.py` gets `render(Block) -> str`;
    `html.py` becomes a shim.
@@ -859,6 +870,17 @@ decision, so **write that margin into the measurement file** rather than leaving
 **What would mean "throttle it":** `render_mean > 0.2 × dom_mean`; total live time per turn up
 more than 10% against A3's baseline; and an absolute floor — above **5 ms per 4 KB update** the
 renderer is defective, not the platform.
+
+**A3's baseline is measured and it corrects this section on one point.**
+`docs/measurements/live-before-20261012.txt`: the DOM write alone is **1.05 ms** per 4.25 KB
+update on the Athlon and **3.80 ms** on the 32 MB VM, with the VM losing 9.4 MB of free memory
+to one 60 KB answer and a `dom_max` of 31 ms against its own 3.8 ms mean — the shape of a box
+that has started swapping. So **the ratio test binds on the FAST machine, not the slow one**,
+which is the opposite of what this section assumed when it sent the measurement to three
+places. `dom_mean` is 3.6× larger on the VM, so 0.2× allows 760 µs there against **213 µs on
+the Athlon**, and the renderer is pure CPU while the VM's DOM is slow for reasons that are not
+CPU. Evaluate the ratio on the Athlon and the memory on the VM. The 5 ms floor still has room,
+but on the VM the headroom above the existing cost is 1.2 ms rather than 5.
 
 **Fallbacks, in order:** skip the render when the body is identical to the last one (one
 `memcmp`, no wire change — the bridge re-sends the whole open block, so a whitespace-only delta
