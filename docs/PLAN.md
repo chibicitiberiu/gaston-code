@@ -1986,7 +1986,7 @@ is case-insensitive, has no symlinks, and 8.3 aliasing means a path can arrive
 spelled two ways. Line endings are already a decided policy: CRLF for files the
 guest consumes.
 
-### R7 — the bridge should take multiple clients  *(IN, 2026-10-10: several guest machines, `ROADMAP.md` stage 3b)*
+### R7 — the bridge should take multiple clients  *(IN, 2026-10-10: several guest machines, `ROADMAP.md` stage 3c)*
 
 Today `self._guest` is singular and a second client is rejected. That rejection
 was right for one guest and is wrong as a permanent design.

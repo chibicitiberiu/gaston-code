@@ -3,8 +3,8 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 3 — the markup moves to the client.**
-Stages 1 and 2 closed 2026-10-11. Phase 5 (Attach) shipped; 5.1 is
+**Current goal: `ROADMAP.md` stage 3b — pagination.**
+Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12. Phase 5 (Attach) shipped; 5.1 is
 below, and 5.2/5.3 went in without a write-up of their own. Phase 6 is
 part-built: `ui`, `input`, `shot`, `focus`, `launch`, `ps`, `kill` and the
 clipboard pair are live and measured on real hardware, while `ocr` and the
@@ -15,7 +15,7 @@ since 2026-10-01 the Athlon XP box over `gremote`; Phase 1.9's **Pentium 200**
 hardware gate remains open in `BACKLOG.md` §1b, and it is a different machine
 from the Athlon whatever the `*-p200-*.txt` filenames suggest). Phase 4's own
 list is closed except for R7 (multiple clients) -- **and R7 is now IN**, as
-`ROADMAP.md` stage 3b, taking `BACKLOG.md` §7's implementation list with it.
+`ROADMAP.md` stage 3c, taking `BACKLOG.md` §7's implementation list with it.
 
 ---
 
@@ -4199,7 +4199,7 @@ injection gates moved to the end of `TEST.BAT` behind their own prompt, and
 `tools/vm/vmsnap.sh` is the rollback that was eight hand-made `.bak` files.
 
 **Four decisions recorded** where stage 3 will look for them: R7 is in, as
-stage 3b, several guest machines; export is rendered by the guest; the
+stage 3c, several guest machines; export is rendered by the guest; the
 block vocabulary is one versioned HELLO key; the transcript cache keeps
 rendered markup with a format bump.
 

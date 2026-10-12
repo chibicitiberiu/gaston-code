@@ -605,8 +605,10 @@ the reason:
   `paths.check`'s existing arithmetic is unchanged.
 
 **[R -- 2026-10-10] R7 IS IN, and it is the larger reading: several guest
-machines against one bridge.** `docs/ROADMAP.md` gives it stage 3b, after the
-markup moves to the client and before the recorded-decisions stage. Two things
+machines against one bridge.** `docs/ROADMAP.md` gives it stage 3c, after the
+markup moves to the client and after pagination, and before the
+recorded-decisions stage. (It was 3b until stage 3 inserted pagination ahead
+of it; the number moved, the work did not.) Two things
 settled with it:
 
 - **`client_id` is an unauthenticated assertion**, accepted as such. A client
@@ -617,7 +619,7 @@ settled with it:
   The QEMU guest and the Athlon (`machine=TIBI`) are two machines with two ids,
   both reachable today, so the one item here that looked blocked on hardware is
   not. Whether the machine id and this section's baseline identity are the same
-  id is still §21's open question, and stage 3b is where it gets answered.
+  id is still §21's open question, and stage 3c is where it gets answered.
 
 What this section's own decision does NOT give, stated plainly: two guests still
 share one mirror and one baseline, so it is not R7 and does not make multiple
@@ -3200,6 +3202,6 @@ not pay here:
 So the saving is 928 bytes in the exe with the most headroom, paid for with a
 TU in the exe with the least. Recorded rather than done.
 
-**What would reopen this.** Stage 3's renderer and stage 3b's per-guest state
+**What would reopen this.** Stage 3's renderer and stage 3c's per-guest state
 spending the headroom stage 2 just created, or a second client that wants the
 automation tier without the rest. Not before.
