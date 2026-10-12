@@ -1,0 +1,71 @@
+# Does a template file survive GetPrivateProfileStringA on real Windows 98?
+# Stage 3 B3. 2026-10-12.
+#
+# WHY THIS IS NOT OPTIONAL, and why it is a measurement rather than a
+# paragraph. win/core/inifile.cpp:50-107 spends 58 lines on this exact API:
+#
+#   "GetPrivateProfileStringA on Windows 98 will neither hand a
+#    control-character default BACK nor READ one out of a file... WINE HANDS
+#    IT BACK INTACT, which is why every test passed on three machines and
+#    the guest fell over on the first one."
+#
+# and ends: "'Wine proves the code, never the platform', and this is what
+# that rule costs when the thing being proved is a round trip through
+# somebody else's parser."
+#
+# win/resources/view.tpl is exactly that round trip, and it carries
+# everything the API is fussy about: double quotes, semicolons inside
+# values, equals signs, angle brackets, braces, an HTML entity, and
+# significant internal spaces. inifilecheck.cpp's longest string case is
+# seven bytes. docs/measurements/inifile-absent-key-p200-20261001.txt is
+# what skipping this kind of check cost the last time -- a real Pentium 200
+# that would not start, gremote refusing, gupdate rolling the image back,
+# and no record but a .PRV rotation from hours earlier.
+#
+# HOW. rendercheck.exe --dump-templates prints key<TAB>value for every
+# template as the profile API handed it back. The file pushed to each
+# machine is the SHIPPED one -- vm/tools-stage/VIEW.TPL, CRLF-converted by
+# mktools-iso.sh -- not the LF copy in the repo, because the line endings
+# are part of what is being tested. The comparison strips whitespace from
+# both ends of each value, which is what the API does and therefore what
+# the file is written against.
+
+QEMU, 32MB, Pentium-class, Windows 98 SE 4.10.2222 A
+
+  --dump-templates     40 keys in the file, 40 came back, 0 differences
+  full case suite      76 cases, 0 failures
+
+AMD Athlon XP 2000+, 256MB, Windows 98 SE 4.10.2222 A, 10.0.0.125
+
+  --dump-templates     40 keys in the file, 40 came back, 0 differences
+  full case suite      76 cases, 0 failures
+
+Wine (wine-ge-8-26), for comparison
+
+  full case suite      76 cases, 0 failures
+
+WHAT THIS SETTLES. The template layer survives the platform. Every value
+comes back byte-identical, including:
+
+  status      <div class="status"><img src="spin.gif" width="16" ...>{}</div>
+              -- double quotes, an equals sign inside a value, and internal
+              spaces that must not collapse
+  clip        -- shown to you in full; {dropped} more characters ...
+              -- a value beginning with punctuation and holding a run of
+              ordinary prose, which is where a parser doing its own
+              tokenising would go wrong
+  permlead_desc  <p><b>{lead}</b> &mdash; {}</p>
+              -- an HTML entity and the one space that cannot be at either
+              end of a value, which is why it lives inside this key rather
+              than as a suffix on the one before
+
+WHAT IT DOES NOT SETTLE. No value here contains a control character, and
+that is deliberate rather than lucky: the one thing inifile.cpp proves
+cannot survive the round trip is exactly what the format avoids. The inline
+marks are \x01 and \x02 and they are in the RECORD, never in the template.
+A future template that needed one would be the case this file says not to
+write.
+
+The Pentium 200 is out of stage 3 by the stage-1 decision, so the margin
+between the Athlon and the real target machine is unmeasured here and stays
+that way until stage 5.

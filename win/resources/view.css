@@ -1,0 +1,196 @@
+/* The transcript's appearance. Edit this, restart the client, see it.
+ *
+ * SHIPPED BESIDE THE EXE, not sent over the wire. Until stage 3 this was
+ * STYLESHEET in bridge/view/html.py and arrived in a DOC frame on every
+ * connect -- 9,557 bytes uncompressed, because doc() carries no enc header
+ * -- which meant the guest could not change how the guest looks by
+ * rebuilding the guest. win/app/htmlview.h argued the point by accident
+ * when it made the status slot optional BECAUSE "the bridge's DOC is
+ * authoritative and may be an older build than this guest".
+ *
+ * The comments are kept. They are the only record of why several of these
+ * rules exist, and three of them are measurements taken on the real
+ * machine. They were stripped on the way to the wire; there is no wire now.
+ *
+ * `version` must match RC_VIEW_VERSION in win/view/render.h. A mismatch is
+ * a status line and a log line, loud and non-fatal: a stale appearance
+ * beats no transcript. It is in a comment rather than a rule because CSS
+ * has nowhere else to put it and a bogus property would be one more thing
+ * for IE5 to ignore inconsistently.
+ *
+ * view-version: 1
+ */
+/* Verdana, not MS Sans Serif, and the reason is italics.
+   MS Sans Serif is a bitmap .FON with no italic face, so GDI fakes one by
+   shearing the glyph grid -- which is what made emphasis look broken. It is
+   not a smoothing problem, and smoothing is unavailable at 8bpp anyway.
+   Measured on the guest: its FONTS directory carries VERDANA, VERDANAB,
+   VERDANAI and VERDANAZ, so the italic and bold-italic faces are real ones.
+   Verdana was drawn for small unsmoothed screen type, which is exactly this.
+   (Tahoma would not do: it ships bold only, same defect.)
+   MS Sans Serif stays as the fallback for a guest without IE's font set. */
+body { font: 8pt Verdana, 'MS Sans Serif', sans-serif; background: #ffffff;
+       color: #000000; margin: 0; padding: 6px 9px 24px 9px; }
+p  { margin: 0 0 7px 0; line-height: 1.35; }
+h3, h4, h5, h6 { font-size: 9pt; margin: 12px 0 5px 0; padding-bottom: 2px;
+       border-bottom: 1px solid #c0c0c0; }
+b { font-weight: bold; }
+i { font-style: italic; }
+
+/* A user turn. The styled-run transcript drew a row of dashes and a '>' to
+   imitate exactly this, because it had no other way to box anything. */
+.you { background: #e8e8f0; border-left: 3px solid #000080;
+       padding: 5px 7px; margin: 12px 0 9px 0; color: #000080;
+       font-weight: bold; }
+
+/* A message the guest has echoed but the bridge has not yet acknowledged by
+   starting a turn. Drawn back: hollow left rule, grey text, no bold. On a
+   LAN that state lasts a moment; on the 5 KB/s dialup link this project also
+   targets it is seconds, and "did that send?" is the question it answers.
+   The class is dropped in place when TURN state=start arrives, so the block
+   does not move or re-render -- it just stops looking provisional. */
+.you.pending { background: #f4f4f8; border-left-color: #a0a0b8;
+               color: #606078; font-weight: normal; }
+
+/* Code. The label sits on the block rather than floating above it as the
+   bracketed "[c]" used to. */
+.codewrap { margin: 7px 0; border: 1px solid #c0c0c0; background: #f4f4f4;
+             overflow: auto; width: 100%;
+             height: expression(this.scrollWidth > this.clientWidth
+                                ? this.scrollHeight + 18 : 'auto'); }
+/* THE HEIGHT EXPRESSION, on this box and on .toolresult below. IE 5.0 sizes
+   an `overflow: auto` box to its content and then draws the horizontal
+   scrollbar INSIDE that height, on top of the only line there is -- with
+   this stylesheet, not in a bare test page (measured on the Athlon,
+   2026-10-03, MSIE 5.0: a code block and a tool result that were nothing
+   but a scrollbar). The expression adds the scrollbar's height only when
+   the box actually scrolls, so a short block keeps its own size. Tried
+   and rejected there: overflow-x/-y alone, `width: auto` (the whole
+   transcript scrolls), and a fixed padding-bottom (every block grows). */
+.lang { font-size: 7pt; color: #808080; background: #ececec;
+        border-bottom: 1px solid #d8d8d8; padding: 1px 5px; }
+/* The code block scrolls inside its own box. Without `overflow: auto` on the
+   wrapper a single long line gives the whole transcript a horizontal
+   scrollbar, and then every paragraph is being panned to read one line of C.
+   IE5 has no pre-wrap and no word-wrap, so scrolling the box is the option
+   that exists. */
+pre { font: 8pt 'Courier New', monospace; color: #000080;
+      margin: 0; padding: 5px 6px; white-space: pre; }
+code { font: 8pt 'Courier New', monospace; color: #000080;
+       background: #f4f4f4; padding: 0 2px; }
+
+table { border-collapse: collapse; margin: 8px 0; font-size: 8pt; }
+th, td { border: 1px solid #c0c0c0; padding: 2px 6px; text-align: left;
+         vertical-align: top; }
+th { background: #e8e8f0; font-weight: bold; }
+
+ul, ol { margin: 5px 0 8px 0; padding-left: 22px; }
+li { margin: 2px 0; line-height: 1.3; }
+blockquote { margin: 7px 0; padding: 3px 8px; border-left: 2px solid #c0c0c0;
+             color: #505050; }
+hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
+
+.tool { font: 8pt 'Courier New', monospace; color: #006000;
+        background: #f2f7f2; border-left: 2px solid #008000;
+        padding: 3px 6px; margin: 6px 0; }
+.toolname { font-weight: bold; }
+/* `overflow: auto` AND `width: 100%`, the same pair as .codewrap above and
+   for the same reason -- PROGRESS.md records that the width was required, not
+   decorative. This block used to have neither, while its `pre` asked for
+   `pre-wrap` and `word-wrap`, which the comment twenty lines up says IE5 does
+   not have. So command output could not wrap and had no box to scroll inside,
+   and the whole TRANSCRIPT got the horizontal scrollbar -- which then stayed
+   for the rest of the conversation. The first line of a capped result reads
+   "Output was capped at 32KB by the connected machine and trun", cut off at
+   the right edge: the most important line in the block was the one you could
+   not read.
+
+   The two wrapping declarations are kept and are NOT relied on.
+   `word-wrap: break-word` is a Microsoft extension that shipped in IE 5.5
+   and the guest's mshtml version is not pinned anywhere in this repo, so on
+   5.0 both are ignored -- `pre-wrap` is not a value it knows, which drops
+   the declaration and leaves the `pre` on plain `white-space: pre`.
+
+   That is not a cosmetic difference. A `pre` that cannot wrap holds one
+   enormous line, `overflow: auto` gives the box a horizontal scrollbar, and
+   IE draws that scrollbar INSIDE a box whose height is exactly one line --
+   so it sits on top of the only text there is. Observed on the guest: a
+   block that was nothing but a scrollbar.
+
+   So the lines are broken on the BRIDGE now, by `_fold_long_lines`, which
+   is where every other transformation already happens. These two stay for a
+   newer guest and as a second line of defence; nothing depends on them. */
+.toolresult { font: 8pt 'Courier New', monospace; color: #303030;
+              background: #f4f4f4; border-left: 3px solid #b0b0b0;
+              padding: 2px 6px; margin: 2px 0 6px 0;
+              overflow: auto; width: 100%;
+              height: expression(this.scrollWidth > this.clientWidth
+                                 ? this.scrollHeight + 18 : 'auto'); }
+.toolresult pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; }
+.toolresult.err { color: #a00000; background: #fff0f0;
+                  border-left-color: #a00000; }
+.clip { color: #808080; font-style: normal; margin-top: 2px; }
+.notice { color: #808080; margin: 6px 0; }
+
+/* The thinking stream. EMITTED SINCE THE CLASS EXISTED AND NEVER STYLED --
+   presentation.py wrote <div class="thinking"> and there was no rule, so
+   extended thinking has always rendered as ordinary model prose and nobody
+   could tell the two apart. test_guest_css.py could not see it because it
+   walks the classes the GUEST names, and this one the bridge invents; the
+   mirror of that test now walks the renderer and would have caught it.
+
+   Italic and grey rather than a box: it is a lot of text, it is not the
+   answer, and a tinted panel the length of a page is worse on an 8bpp
+   display than restraint is. Same grey as a notice, for the same reason --
+   this is the machine talking about itself. */
+.thinking { color: #707070; font-style: italic; margin: 6px 0; }
+
+/* The status line, under everything. Grey like a notice because it is the
+   same kind of thing -- the app talking about itself -- but it does not
+   scroll away, it is replaced. The spinner is a real .gif file beside the
+   document: IE5 animates GIFs but has no data: URI support, so it cannot be
+   inlined. If the file is missing the alt text is empty and the line still
+   reads correctly, which is why the wording never depends on it. */
+.status { color: #808080; margin: 6px 0; }
+.status img { vertical-align: middle; margin-right: 5px; }
+.err { color: #a00000; background: #fff0f0; border-left: 3px solid #a00000;
+       padding: 4px 6px; margin: 7px 0; font-weight: bold; }
+
+/* A permission request. Amber rather than red: this is a question, not a
+   failure, and the guest is asking rather than reporting. */
+.perm { background: #fffbe6; border: 1px solid #e0c060; border-left: 3px solid #c08000;
+        padding: 5px 7px; margin: 9px 0; }
+.permhead { font-weight: bold; color: #805000; font-size: 7pt;
+            text-transform: uppercase; margin-bottom: 3px; }
+.perm table { margin: 4px 0 0 0; }
+/* The command guard's finding, in the one place there is room to read it.
+   The bar is a single clipped line; this is not. See 02.4. */
+.permwarn { margin: 4px 0 0 0; color: #803000; }
+.permdone .permwarn { color: #706050; }
+.perm th { background: #f6eccc; font-weight: normal; color: #604000;
+           white-space: nowrap; vertical-align: top; }
+.perm td { font-family: 'Courier New', monospace; }
+
+/* The same request, once it has been answered. A long session used to be
+   mostly amber: every approval stayed a full argument table forever, and on
+   a 640x480 screen a handful of them is the whole page.
+
+   A DIFFERENT CLASS, not `.perm.done`. IE5 and IE6 read a compound class
+   selector as its LAST class only, so `.perm.done` would style every `.perm`
+   -- which is the kind of bug that looks like the rule not working and is
+   actually the rule working on everything.
+
+   The table is hidden rather than removed, and the block keeps its place in
+   the transcript: what was asked and what was answered is a record, and a
+   record that deletes itself once it stops being urgent is not one. Clicking
+   is not needed to see it again -- paging back to a sealed page re-renders
+   the original, because the paginator holds what was written and nothing
+   rewrites history there. */
+.permdone { background: #fbfbf4; border: 1px solid #d8d8c8;
+            border-left: 3px solid #b0b090; padding: 3px 7px; margin: 6px 0; }
+.permdone table { display: none; }
+.permdone .permhead { display: none; }
+.perm .permdonehead { display: none; }
+.permdonehead { font-weight: bold; color: #707060; font-size: 7pt;
+                text-transform: uppercase; margin-bottom: 2px; }
+.permdone p { margin: 0; color: #606050; }

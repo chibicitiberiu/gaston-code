@@ -1,0 +1,11 @@
+/* Only what the live view has no use for. Kept separate so the shared
+ * stylesheet stays exactly what the guest is running.
+ *
+ * Loaded by rc_export in addition to view.css, never instead of it: an
+ * export that looks different from what was on screen invites the question
+ * of which one is right.
+ *
+ * view-version: 1
+ */
+.exporthead { border-bottom: 1px solid #808080; margin-bottom: 12px; }
+.exporthead h1 { font-size: 12pt; margin: 0 0 2px 0; }

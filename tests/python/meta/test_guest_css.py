@@ -186,3 +186,58 @@ def test_the_two_sweeps_overlap_where_they_should():
     shared = {c for c in guest_classes().values() for c in c.split()}
     assert {"notice", "err", "you"} <= shared
     assert {"notice", "err", "you"} <= rendered_classes()
+
+
+# --- two copies, briefly ----------------------------------------------------
+#
+# Stage 3 B3 ships win/resources/view.css and export.css beside the exe, and
+# the bridge keeps STYLESHEET and EXPORT_CSS until C4 deletes DOC. So there
+# ARE two copies of the stylesheet for the length of four commits -- exactly
+# the drift the generator in mktools-iso.sh existed to prevent, and its
+# comment said so: "two copies of a stylesheet drift".
+#
+# The generator could not survive, because after C4 the bridge has no
+# stylesheet to generate from. This test is what stands in its place, and it
+# DIES WITH THE BRIDGE'S COPY at C4 rather than being carried forward: once
+# there is one copy there is nothing to compare.
+
+def repo_css(name: str) -> str:
+    path = os.path.join(HERE, "win", "resources", name)
+    with open(path, encoding="cp1252") as f:
+        return f.read()
+
+
+def rules_of(css: str) -> list:
+    """The rules, normalised. Comments go, because the two copies differ in
+    them ON PURPOSE -- the file beside the exe explains itself to whoever is
+    editing it, the bridge's to whoever maintains the bridge -- and so does
+    whitespace between and inside rules, which CSS does not treat as
+    content and which a reformatted copy would otherwise fail on.
+
+    What is left is the thing that must not drift: the selectors and the
+    declarations, in order."""
+    out = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    out = re.sub(r"\s+", " ", out)
+    return [r.strip() + "}" for r in out.split("}") if r.strip()]
+
+
+def test_the_shipped_stylesheet_is_the_bridge_s_modulo_comments():
+    assert rules_of(repo_css("view.css")) == rules_of(H.STYLESHEET)
+
+
+def test_the_shipped_export_sheet_is_the_bridge_s_too():
+    assert rules_of(repo_css("export.css")) == rules_of(H.EXPORT_CSS)
+
+
+def test_the_shipped_sheets_declare_the_version_the_code_expects():
+    """A stale view.css against a newer client is the state a hand-updated
+    box gets into, so the client says so. The marker has to be where the
+    client reads it."""
+    src = open(os.path.join(HERE, "win", "view", "render.h"),
+               encoding="utf-8").read()
+    want = re.search(r"#define RC_VIEW_VERSION\s+(\d+)", src)
+    assert want, "RC_VIEW_VERSION moved"
+    for name in ("view.css", "export.css"):
+        got = re.search(r"view-version:\s*(\d+)", repo_css(name))
+        assert got, f"{name} carries no view-version marker"
+        assert got.group(1) == want.group(1), name

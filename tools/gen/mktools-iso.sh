@@ -151,27 +151,35 @@ need "$HERE/win/tools_detect.ini" "TOOLSDET.INI"
 # The guest needs a document before it has a connection -- otherwise the
 # transcript area is bare grey until a bridge answers, and anything the app
 # wants to say in the meantime ("configure a host") has nowhere to appear.
-# Shipping a hand-maintained copy of the CSS would be the obvious way and the
-# wrong one: two copies of a stylesheet drift, which is the bug rc_html::user
-# carries a long comment about -- the guest stripped whitespace differently
-# from the bridge and one message rendered two ways.
 #
-# So it is emitted from bridge/view/html.py at package time. The bridge's DOC
-# frame still wins at runtime: set_document compares and re-installs when the
-# two differ, which is also what makes a CSS change reach the guest on a
-# reconnect rather than a reinstall.
+# UNTIL STAGE 3 this was GENERATED here, from bridge/view/html.py, and the
+# reason was a good one: "two copies of a stylesheet drift", which is the
+# bug rc_html::user carries a long comment about -- the guest stripped
+# whitespace differently from the bridge and one message rendered two ways.
+#
+# That argument was right while the bridge was authoritative and it stops
+# applying the moment the client is. After stage 3 C4 the bridge has no
+# stylesheet to generate from, so the three files below ARE the appearance:
+# the client composes view.htm at boot from view.css, and renders every
+# block through view.tpl.
+#
+# The generator's warn-and-continue is gone with it, and that is not just
+# tidying: with no DOC frame to fall back on, a failed generation would
+# have shipped a kit whose transcript was permanently blank. `need`, so a
+# missing file stops the build here instead of on the guest.
+#
+# CRLF-converted, like every other text file the kit ships. `need` is a
+# bare cp, and an LF file into a Win9x profile parser is not a risk worth
+# taking for the sake of three sed lines -- view.tpl in particular is read
+# by GetPrivateProfileStringA, which is the one API this tree has already
+# been burned by (win/core/inifile.cpp:50-107).
 # The transcript's spinner. A real file because IE5 animates GIFs but has no
 # data: URI support, so it cannot be inlined into the document.
 need "$HERE/win/resources/spin.gif" "SPIN.GIF"
-
-if ! python3 -c "
-import sys; sys.path.insert(0, '$HERE')
-from bridge.view.html import document
-open('$STAGE/VIEW.HTM', 'w', encoding='cp1252').write(document())
-" 2>/dev/null; then
-    echo "  WARNING: could not generate VIEW.HTM from bridge/view/html.py;" >&2
-    echo "           the guest will start with no document until DOC arrives" >&2
-fi
+need "$HERE/win/resources/view.css" "VIEW.CSS"
+need "$HERE/win/resources/export.css" "EXPORT.CSS"
+need "$HERE/win/resources/view.tpl" "VIEW.TPL"
+sed -i 's/$/\r/' "$STAGE/VIEW.CSS" "$STAGE/EXPORT.CSS" "$STAGE/VIEW.TPL"
 
 # PROBE SCAFFOLDING (Phase 6 gate 0.13c) -- delete with the probe section.
 #
@@ -216,9 +224,12 @@ REM destination's form (directory, named file, *.*) makes no difference to
 REM overwriting. A copy that seems to keep an old file right after a CD swap
 REM is Win98 still reading the previous disc: re-copy and check contents.
 COPY /Y D:\GASTON.INI C:\GASTON\gaston.ini > NUL
-REM The cold-start transcript document. Without it the app shows a bare grey
-REM rectangle until a bridge answers, which is also when it most needs to say
-REM something. Long name deliberately: the app opens view.htm beside itself.
+REM The transcript's appearance: the stylesheet, the export-only rules and
+REM the markup templates. The client composes view.htm from view.css at
+REM boot; without them it shows a bare grey rectangle until a bridge
+REM answers, which is also when it most needs to say something. Long names
+REM deliberately: the client opens view.css, export.css and view.tpl beside
+REM itself, and ISO level 1 can only carry the 8.3 spellings.
 REM Long name deliberately, for the reason given above: the
 REM detector opens tools_detect.ini beside the exe, and ISO level 1 can only
 REM carry TOOLSDET.INI. TOOLS.INI is the user's and is NEVER shipped -- it is
@@ -247,7 +258,9 @@ REM wildcard source and C:\DIR\*.* all replace an existing file, measured.
 IF EXIST D:\GREMOTE.INI COPY /Y D:\GREMOTE.INI C:\GASTON\gremote.ini > NUL
 IF EXIST D:\GREMOTE.REG COPY /Y D:\GREMOTE.REG C:\GASTON\GREMOTE.REG > NUL
 IF EXIST D:\TOOLSDET.INI COPY /Y D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL
-IF EXIST D:\VIEW.HTM COPY /Y D:\VIEW.HTM C:\GASTON\view.htm > NUL
+IF EXIST D:\VIEW.CSS COPY /Y D:\VIEW.CSS C:\GASTON\view.css > NUL
+IF EXIST D:\EXPORT.CSS COPY /Y D:\EXPORT.CSS C:\GASTON\export.css > NUL
+IF EXIST D:\VIEW.TPL COPY /Y D:\VIEW.TPL C:\GASTON\view.tpl > NUL
 IF EXIST D:\SPIN.GIF COPY /Y D:\SPIN.GIF C:\GASTON\spin.gif > NUL
 C:
 CD \GASTON
@@ -288,6 +301,20 @@ TOOLSDET.INI  what to look for when reporting which tools this machine has.
               Installed as tools_detect.ini and REPLACED on every install.
               To add something of your own, put it in TOOLS.INI beside it:
               that file is never shipped and is read second, so it wins.
+
+VIEW.CSS      how the transcript looks: colours, spacing, type. Installed
+VIEW.TPL      as view.css and view.tpl. Edit either, restart the client,
+              see the change -- no rebuild. Until stage 3 both lived inside
+              the program and arrived over the wire, which meant you could
+              not change how the client looks by changing the client.
+              EXPORT.CSS is the handful of extra rules a saved transcript
+              needs and the live view has no use for.
+
+              All three are versioned against the client. A mismatch is a
+              line in the status bar and in GASTON.LOG, never a refusal: a
+              stale appearance beats no transcript. If view.tpl is missing
+              or malformed the client says so and falls back to plain
+              paragraphs, which is ugly and legible.
 
 Copy these to C:\GASTON before running, so they can write their log files.
 TXT
