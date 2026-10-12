@@ -52,9 +52,17 @@ PARAM_TO_SERVICE = {
 }
 
 INSTANCE_ATTR_ALLOWLIST = {
-    # The connection registry, and the state that exists before a guest
-    # does. R7 turns `guest` into a dict and takes both with it.
-    "ConnectionService.guest",
+    # THE CONNECTION REGISTRY. A service holding state is the thing this
+    # test exists to refuse, and this is the one place it is right: the set
+    # of attached guests is not state ABOUT a guest, it is the index of
+    # them, and it has nowhere else to live. Stage 3c turned the single
+    # `guest` slot into a dict keyed on the machine id.
+    "ConnectionService._guests",
+    # Attachment order, so the temporary `guest` property has a defined
+    # answer with more than one. It goes when the property does, in D6.
+    "ConnectionService._order",
+    "ConnectionService._warned_ambiguous",
+    # What exists before a guest does. D5 deletes it.
     "ConnectionService._preattach_synccoord",
 }
 

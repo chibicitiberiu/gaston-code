@@ -235,6 +235,86 @@ async def test_unknown_frame_type_gets_an_error_not_a_drop(harness):
 # --- reconnect ----------------------------------------------------------
 
 
+async def test_a_second_machine_does_not_inherit_the_first_ones_session(harness):
+    """Stage 3c D1, and this was a live bug on a bridge both of this
+    project's machines talk to.
+
+    `is_reconnect` asked whether a GuestSession existed, never WHOSE it
+    was. So machine B attaching after machine A had gone was a reconnect:
+    attach replaced the link, caps, prefs and tools and left `claude` --
+    the live conversation -- along with work_dir, grants, mode_id, perms,
+    sess_id and the whole transcript belonging to A. The person at B got
+    A's chat, and nothing anywhere said so.
+    """
+    r1, w1 = await harness.connect(hdrs={"machine": "BOX-A"})
+    await harness.recv_until(r1, {"READY"})
+    a = harness.bridge.connection.guest
+    a.view.pages.add(_rec("a's transcript"))
+    a.work_guest = "C:\\WORK\\AAA"
+    await harness.close(w1)
+
+    r2, w2 = await harness.connect(hdrs={"machine": "BOX-B"})
+    await harness.recv_until(r2, {"READY"})
+    b = harness.bridge.connection.guest
+
+    assert b is not a, "B was handed A's GuestSession"
+    assert b.machine == "BOX-B"
+    assert b.view.pages.count == 0, (
+        "B is looking at A's transcript")
+    assert b.work_guest != "C:\\WORK\\AAA", (
+        "B inherited A's work folder")
+    # And A is still there, not replaced.
+    assert harness.bridge.connection._guests["BOX-A"] is a
+    assert a.view.pages.count == 1
+    await harness.close(w2)
+
+
+async def test_the_same_machine_coming_back_is_still_a_reconnect(harness):
+    """The other half, and the one that must not regress: keying on the
+    machine is only correct if a machine still finds its own session."""
+    r1, w1 = await harness.connect(hdrs={"machine": "BOX-A"})
+    await harness.recv_until(r1, {"READY"})
+    a = harness.bridge.connection.guest
+    a.view.pages.add(_rec("still here"))
+    await harness.close(w1)
+
+    r2, w2 = await harness.connect(hdrs={"machine": "BOX-A"})
+    await harness.recv_until(r2, {"READY"})
+    assert harness.bridge.connection.guest is a
+    assert a.view.pages.count == 1, "a reconnect lost the transcript"
+    await harness.close(w2)
+
+
+async def test_a_second_window_on_one_machine_is_still_refused(harness):
+    """Reject, don't evict -- narrowed to the machine rather than dropped.
+    The client's own single-instance mutex enforces this at the other end;
+    the bridge saying so is what makes a broken mutex visible."""
+    r1, w1 = await harness.connect(hdrs={"machine": "BOX-A"})
+    await harness.recv_until(r1, {"READY"})
+    r2, w2 = await harness.connect(hdrs={"machine": "BOX-A"})
+    frames = await harness.recv_until(r2, {"ERROR"})
+    assert frames[-1].headers["code"] == "busy"
+    await harness.close(w2)
+    await harness.close(w1)
+
+
+async def test_two_machines_hold_two_sessions_at_once(harness):
+    """The stage's exit condition, in the smallest form that is still it.
+    A second SIMULTANEOUS machine was refused process-wide before this."""
+    r1, w1 = await harness.connect(hdrs={"machine": "BOX-A"})
+    await harness.recv_until(r1, {"READY"})
+    r2, w2 = await harness.connect(hdrs={"machine": "BOX-B"})
+    await harness.recv_until(r2, {"READY"})
+
+    guests = harness.bridge.connection._guests
+    assert set(guests) == {"BOX-A", "BOX-B"}
+    assert guests["BOX-A"] is not guests["BOX-B"]
+    assert guests["BOX-A"].link.connected and guests["BOX-B"].link.connected
+    await harness.close(w2)
+    await harness.close(w1)
+
+
+
 async def test_a_reconnect_resets_the_compressor_and_keeps_the_session(
         harness):
     """The guest will crash. The session must outlive it, and the compressor

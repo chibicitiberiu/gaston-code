@@ -53,12 +53,78 @@ class ConnectionService:
         self.on_lost = on_lost
         self.ensure_background_tasks = ensure_background_tasks
         self.spawn = spawn
-        self.guest: GuestSession | None = None
+        self._warned_ambiguous = False
+        #: EVERY GUEST, keyed by the machine id it declared in HELLO.
+        #:
+        #: This was one slot, and one slot is why a second machine
+        #: connecting after the first had gone silently inherited its
+        #: session: `is_reconnect` asked whether a GuestSession existed,
+        #: never whose it was, so attach replaced the link, caps, prefs and
+        #: tools and left the live conversation, work folder, grants,
+        #: permission desk and transcript belonging to the previous
+        #: machine. Both of this project's machines talk to one bridge, so
+        #: that was reachable rather than theoretical.
+        #:
+        #: The key is `machine`, which is an UNAUTHENTICATED ASSERTION and
+        #: is accepted as one -- `docs/BACKLOG.md` §7 and audit 04.21 asked
+        #: for that in writing rather than a per-client secret bolted on
+        #: later. There is one shared secret and it already grants
+        #: everything; a client claiming another's id inherits its
+        #: transcript and its pending prompts, exactly as before.
+        self._guests: dict[str, GuestSession] = {}
+        #: The order they last attached in, so `guest` has a defined answer
+        #: when there is more than one. See the property.
+        self._order: list[str] = []
         #: Where the halt bar and the agent-notice queue live until a guest
         #: attaches and brings its own. A forward, not storage -- see the
-        #: `synccoord` property below; R7 deletes this once there can be
-        #: more than one guest.
+        #: `synccoord` property below; D5 deletes this.
         self._preattach_synccoord = SyncCoordinator()
+
+    # --- the one-guest view, which is temporary -----------------------------
+    #
+    # Nearly two hundred call sites across the bridge and the suite reach for
+    # `connection.guest`, and turning them all into explicit guests in the
+    # same commit as the dict would be one unreviewable change. So the
+    # property stays until D6 and has a DEFINED answer for more than one:
+    # the guest that attached most recently.
+    #
+    # That answer is right for nothing in particular. It is right for the
+    # single-guest case, which is every case until a second machine connects,
+    # and it is wrong in a way that is at least deterministic for the four
+    # paths that still use it -- reap_idle, synccoord, Bridge.close and
+    # SyncService._get_guest. D2 makes the loops iterate and D6 deletes the
+    # property; until then, a bridge with two guests logs which one it
+    # guessed the first time it has to guess.
+
+    @property
+    def guest(self) -> GuestSession | None:
+        if not self._order:
+            return None
+        if len(self._order) > 1 and not self._warned_ambiguous:
+            self._warned_ambiguous = True
+            log.warning(
+                "%d guests attached and something asked for `the` guest; "
+                "answering with the most recent (%s). Until D6 removes this "
+                "property, that is a guess with a defined value rather than "
+                "a correct answer.",
+                len(self._order), self._order[-1] or "(no id)")
+        return self._guests.get(self._order[-1])
+
+    @guest.setter
+    def guest(self, g: GuestSession | None) -> None:
+        """Only the tests assign this, and only to install or clear one."""
+        self._guests.clear()
+        self._order.clear()
+        if g is not None:
+            key = g.machine
+            self._guests[key] = g
+            self._order.append(key)
+
+    def _remember(self, key: str, g: GuestSession) -> None:
+        self._guests[key] = g
+        if key in self._order:
+            self._order.remove(key)
+        self._order.append(key)
 
     @property
     def synccoord(self) -> SyncCoordinator:
@@ -205,9 +271,33 @@ class ConnectionService:
                                         error("bad_prefs", str(exc)[:200]))
                 return None
 
-        if self.guest and self.guest.link.connected:
+        # WHICH MACHINE IS CONNECTING. "" is a client from before
+        # 2026-10-01 and means "do not narrow" for the CHAT LIST -- but it
+        # cannot identify a connection, so here it is a key like any other
+        # and two id-less clients collide on it deliberately. The second one
+        # is refused below, because the bridge cannot tell them apart and
+        # the thing it would otherwise do is hand the second one the first
+        # one's conversation, which is the bug this keying exists to close.
+        machine = (hello.headers.get("machine") or "").strip()
+
+        # REJECT, DON'T EVICT -- narrowed from "a guest is connected" to
+        # "THIS MACHINE is connected" (audit 04.21). A second machine is now
+        # a second guest rather than a refusal; a second window on the same
+        # machine is still refused, which is what the client's own
+        # single-instance mutex already enforces at the other end.
+        held = self._guests.get(machine)
+        if held is not None and held.link.connected:
             await self.try_send_raw(
                 writer, error("busy", "another client holds this session")
+            )
+            return None
+        if not machine and self._guests and machine not in self._guests:
+            # Unreachable while "" is a key like any other; kept because the
+            # two branches say different things and a future key scheme that
+            # makes them differ should fail loudly here.
+            await self.try_send_raw(
+                writer, error("busy", "a client with no machine id is "
+                                      "already attached")
             )
             return None
 
@@ -272,24 +362,29 @@ class ConnectionService:
                 "it. Pass --sync-dir if the two were meant to agree.",
                 declared)
 
-        is_reconnect = self.guest is not None
-        if self.guest is not None:
-            self.guest.link.zip_out.reset()
-            self.guest.link.zip_in.reset()
-
-        if self.guest is None:
+        # A RECONNECT IS THIS MACHINE COMING BACK, not "a GuestSession
+        # exists". That distinction is the whole of the bug: with one slot,
+        # a different machine attaching after the first had gone was a
+        # reconnect, so it kept `claude`, work_dir, grants, mode_id, perms,
+        # sess_id and the transcript of a conversation it had never had.
+        guest = self._guests.get(machine)
+        is_reconnect = guest is not None
+        if guest is not None:
+            guest.link.zip_out.reset()
+            guest.link.zip_in.reset()
+        else:
             if self.create_guest:
-                self.guest = self.create_guest()
+                guest = self.create_guest()
             else:
                 mod = sys.modules.get("bridge.server")
                 guest_cls = getattr(mod, "GuestSession", None) if mod else None
                 if guest_cls:
-                    self.guest = guest_cls(view=TranscriptView())
+                    guest = guest_cls(view=TranscriptView())
 
-        guest = self.guest
         if guest is None:
             log.error("cannot attach: no GuestSession could be instantiated")
             return None
+        self._remember(machine, guest)
 
         guest.link.writer = writer
         # HERE, and not alongside the page limits in options.py, which is the
