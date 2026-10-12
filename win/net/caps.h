@@ -31,6 +31,7 @@
  * does not invert anything -- it just lets a compile-time check reach the
  * other header instead of trusting the prose cross-reference to stay true. */
 #include "sync/sync.h"
+#include "view/render.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -123,6 +124,58 @@ extern "C" {
  * added: the bridge refuses a key it does not know rather than half-apply
  * a setting. */
 #define RC_CAP_PREFS 1
+
+/* --- what this client does with the transcript (stage 3) ----------------
+ *
+ * Four keys, not one packed field, and not bit flags. "Client rules are
+ * declared at handshake, never assumed": twenty bytes once per connection
+ * buys the ability to add an option without a flag day, and the bridge
+ * refuses an unknown value rather than guessing.
+ *
+ * These are the stage's whole point. Until now the bridge decided all four
+ * -- it rendered the markup, it owned the stylesheet, and three of its
+ * numbers were calibrated to MSHTML rather than to text. A terminal client
+ * inherited every one and could use none of them. */
+
+/* Whether this client renders blocks itself. 1 means send records, not
+ * HTML. There is no 0: there is one client and it is this one, and a
+ * fallback nothing exercises is a second renderer that rots. The key
+ * exists so a bridge can refuse a client it cannot speak to, not so this
+ * client can ask for the old behaviour. */
+#define RC_CAP_MARKUP 1
+
+/* Which block vocabulary this build understands (view/render.h
+ * RC_BLOCKS_VERSION). Bumped when a kind, an attribute or a payload tag
+ * changes meaning; the bridge refuses a version it does not know rather
+ * than sending records this client would render as nothing. */
+#define RC_CAP_BLOCKS RC_BLOCKS_VERSION
+
+/* How much of a tool result to send. The ONE appearance number that stays
+ * the bridge's business, because truncating here would mean the bytes had
+ * already crossed a 5 KB/s link -- it is bandwidth, not appearance.
+ *
+ * Declared anyway, because what a 640x480 screen can use is this machine's
+ * fact. 0 would mean "all of it" (bridge/view/blocks.py NO_TOOL_CAP is the
+ * sentinel on that side); the bridge's own 1200 is what this asks for,
+ * stated rather than inherited. */
+#define RC_CAP_TOOLMAX 1200
+
+/* The largest single record this client will accept, in bytes.
+ *
+ * It bounds the arm that replaces the paginator's mid-run split: a record
+ * too large for a page gets a page of its own, WHOLE, because half a
+ * record is not a smaller record but two fragments the client must refuse.
+ * Something has to say how large "too large" is, and it is the machine
+ * that has to hold it.
+ *
+ * Under RC_MAX_FRAME with room for the frame's own headers, and the bridge
+ * clamps it there as well rather than trusting the number. */
+#define RC_CAP_MAXBLOCK 61440
+
+/* The wrap column is NOT here, deliberately. The client knows its window's
+ * width at runtime and the bridge does not wrap any more, so a number sent
+ * once at connect would be wrong after the first resize and useless to the
+ * only reader there is. rc_render takes it as a parameter instead. */
 
 /* How many characters short of the path limit a DIRECTORY must stop.
  * CreateDirectory refuses within 12 of MAX_PATH so an 8.3 name still fits

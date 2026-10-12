@@ -114,6 +114,18 @@ FAKE_CAPS = {
     # which is the whole reason that test parses the macro rather than keeping
     # its own list.
     "clip": "1",
+    # What it does with the transcript (stage 3, win/net/caps.h). Declared
+    # and MEANT, not for parity: fakegui really does take records -- it has
+    # no MSHTML and never had any use for the HTML the bridge used to send,
+    # which is the whole argument for the stage. Its block vocabulary is
+    # the one in bridge/view/blocks.py, since it links it.
+    "markup": "1",
+    "blocks": "1",
+    # The real client's numbers, so a page-sizing or clipping bug that only
+    # shows on the 32MB guest still shows here -- the same reasoning as the
+    # 32MB/2420KB in FAKE_IDENTITY below.
+    "toolmax": "1200",
+    "maxblock": "61440",
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a

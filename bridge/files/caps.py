@@ -339,6 +339,35 @@ class Caps:
     #: one straight after HELLO, and the handshake waits for it. 0 for a
     #: client that never said -- and it is never waited for.
     prefs: int = 0
+
+    #: --- what the client does with the transcript (stage 3) -------------
+    #:
+    #: 1 means it renders blocks itself and wants records rather than HTML
+    #: (win/net/caps.h RC_CAP_MARKUP). 0 is a client from before stage 3,
+    #: and there is no such client -- the key exists so a bridge can refuse
+    #: one it cannot speak to, not so a client can ask for the old
+    #: behaviour. A fallback nothing exercises is a second renderer that
+    #: rots, which is the whole argument BACKLOG 13 makes.
+    markup: int = 0
+    #: Which block vocabulary it understands (bridge/view/blocks.py
+    #: VERSION). Refused outside the range rather than guessed: records a
+    #: client cannot read render as nothing, with one easily-missed line in
+    #: its log and no sign at all on this side.
+    blocks: int = 0
+    #: How much of a tool result it wants to see, in characters. 0 means it
+    #: did not say and the bridge's own TOOL_RESULT_MAX stands; -1 means all
+    #: of it. The ONE appearance number that stays here, because truncating
+    #: on the client would mean the bytes had already crossed a 5 KB/s link
+    #: -- bandwidth, not appearance.
+    toolmax: int = 0
+    #: The largest single record it will accept. It bounds the arm that
+    #: replaces the paginator's mid-run split -- a record too large for a
+    #: page gets a page of its own, whole -- and something has to say how
+    #: large "too large" is. CLAMPED against the frame cap here as well as
+    #: on the client, because a number that cannot fit in a frame is a
+    #: record that can never be delivered.
+    maxblock: int = 0
+
     #: True when the client declared any of this, rather than being assumed.
     declared: bool = False
 
@@ -406,6 +435,13 @@ def _num(h: dict, key: str, default: int, lo: int, hi: int) -> int:
     return v
 
 
+#: The most a record can be and still fit in a frame, headroom for the
+#: frame's own headers included. Imported lazily inside from_hello would be
+#: tidier; it is here because bridge/wire/protocol.py does not import this
+#: module and a cycle would be worse than a constant that is checked.
+_MAX_BLOCK_CEILING = 65536 - 1024
+
+
 def from_hello(h: dict) -> Caps:
     """Read a client's declaration. Raises rather than guessing."""
     acp = codec_for_acp(h.get("acp"))
@@ -429,7 +465,11 @@ def from_hello(h: dict) -> Caps:
         "shortnames", "maxdepth",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
         "maxfiles", "deflate", "automation", "keys", "ops", "clip",
-        "prefs"))
+        "prefs",
+        # Stage 3. `declared` is one bool over the whole set, so a key that
+        # is not in this tuple leaves a client that declared ONLY that key
+        # reported as "assumed (client did not say)" in every log line.
+        "markup", "blocks", "toolmax", "maxblock"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -474,6 +514,18 @@ def from_hello(h: dict) -> Caps:
         ops=_num(h, "ops", 0, 0, 2),
         clip=_num(h, "clip", 0, 0, 1),
         prefs=_num(h, "prefs", 0, 0, 1),
+        markup=_num(h, "markup", 0, 0, 1),
+        blocks=_num(h, "blocks", 0, 0, 255),
+        # -1 is "all of it", so the floor is -1 and not 0. The two are
+        # different answers -- "no opinion" and "none, thank you" -- and
+        # telling them apart is what a handshake is for.
+        toolmax=_num(h, "toolmax", 0, -1, 1 << 20),
+        # CLAMPED, not merely ranged. A record larger than a frame can
+        # never be delivered, so a client asking for one is asking for a
+        # block it will never see; the bridge holds it to what the wire can
+        # carry rather than refusing the connection over it.
+        maxblock=min(_num(h, "maxblock", 0, 0, 1 << 24),
+                     _MAX_BLOCK_CEILING),
         declared=declared,
     )
 

@@ -303,6 +303,13 @@ class ConnectionService:
         guest.link.writer = writer
         guest.view.page_bytes = page_bytes
         guest.view.page_blocks = page_blocks
+        # HERE, and not alongside the page limits in options.py, which is the
+        # trap the stage-3 plan named: limits_for has TWO production callers
+        # -- this one and the PREFS handler -- and PREFS is the user's
+        # settings, which have no business overwriting what the CLIENT
+        # declared it can render. Page size is a preference; how much of a
+        # tool result the machine can show is a fact about the machine.
+        guest.view.toolmax = caps.toolmax
         guest.hello = dict(h)
         guest.caps = caps
         fold.use(caps.acp)

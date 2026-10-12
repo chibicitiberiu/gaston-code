@@ -106,3 +106,53 @@ async def test_a_block_with_no_payload_sends_nothing(svc):
 
     await s.write_block(guest, B.Block("rule"))
     assert conn.send_html.await_args.args[1] == "<hr>"
+
+
+# --- the client's declaration survives the user's settings ------------------
+
+
+def test_only_the_handshake_sets_the_declared_tool_cap():
+    """The trap the stage-3 plan named, in the form it actually takes.
+
+    limits_for has TWO production callers: the handshake and the PREFS
+    handler. The page limits go through both, deliberately -- page size IS
+    a preference, scaled by the user's own multiplier. toolmax is not: it
+    is how much of a tool result this MACHINE can usefully show, which the
+    client declares at the handshake and the user's settings have no
+    business touching.
+
+    So it is set beside the page limits at the handshake and nowhere else.
+    The obvious tidy-up is to move all three into one place; all three
+    would then be reset by the next PREFS frame, silently, and a client
+    that asked for the whole of every tool result would quietly start
+    getting 1,200 characters again on its first settings change.
+
+    Structural, because exercising on_prefs means standing up a model list,
+    a permission desk and a prompts table to assert the absence of one
+    line.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[3] / "bridge"
+    opts = (root / "services" / "options.py").read_text(encoding="utf-8")
+    conn = (root / "services" / "connection.py").read_text(encoding="utf-8")
+
+    assert "toolmax" not in opts, (
+        "the PREFS handler now touches toolmax; the user's settings must "
+        "not overwrite what the client declared it can render")
+    assert "guest.view.toolmax = caps.toolmax" in conn, (
+        "the handshake no longer applies the declared tool cap, so every "
+        "client silently gets the bridge's own number")
+
+
+@pytest.mark.asyncio
+async def test_the_declared_cap_reaches_the_block_that_is_built(svc):
+    """End to end: the number on the view is the number the record carries,
+    because nothing else would notice if the plumbing were cut."""
+    from bridge.view import html as H
+
+    _s, guest, _conn = svc
+    guest.view.toolmax = 50
+    block = H.tool_result("x" * 500, cap=guest.view.toolmax)
+    assert block.attrs["clipped"] == 450
+    assert len("".join(block.texts())) == 50

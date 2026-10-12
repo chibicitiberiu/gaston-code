@@ -554,6 +554,18 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * says one is coming, and for nothing when it is absent. */
     if (n->prefs) HDR("prefs", RC_STR(RC_CAP_PREFS));
 
+    /* What this client does with the transcript (stage 3). Four keys, each
+     * a small number, because the bridge must be able to refuse a value it
+     * does not know rather than guess at a packed field.
+     *
+     * No `wrapcol`: the bridge does not wrap any more, so it has no use for
+     * a column -- and one sent at connect would be wrong after the first
+     * resize anyway. See win/net/caps.h. */
+    HDR("markup",   RC_STR(RC_CAP_MARKUP));
+    HDR("blocks",   RC_STR(RC_CAP_BLOCKS));
+    HDR("toolmax",  RC_STR(RC_CAP_TOOLMAX));
+    HDR("maxblock", RC_STR(RC_CAP_MAXBLOCK));
+
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
      * own because the bridge builds the agent's system prompt inside the
      * same call that consumes HELLO, before it starts reading any further

@@ -344,3 +344,71 @@ def test_the_key_table_version_is_declared_and_bounded():
     assert C.from_hello({"keys": "1"}).keys == 1
     with pytest.raises(C.CapsError):
         C.from_hello({"keys": "2"})
+
+
+# --- what the client does with the transcript (stage 3) ---------------------
+
+
+def test_the_four_transcript_keys_are_read():
+    caps = C.from_hello({"markup": "1", "blocks": "1", "toolmax": "1200",
+                         "maxblock": "61440"})
+    assert caps.markup == 1
+    assert caps.blocks == 1
+    assert caps.toolmax == 1200
+    assert caps.maxblock == 61440
+    assert caps.declared
+
+
+def test_declaring_only_a_transcript_key_still_counts_as_declaring():
+    """`declared` is ONE bool over the whole set, so a key missing from the
+    tuple leaves a client that declared only that key reported as "assumed
+    (client did not say)" in every log line it appears in."""
+    for key, value in (("markup", "1"), ("blocks", "1"),
+                       ("toolmax", "1200"), ("maxblock", "4096")):
+        assert C.from_hello({key: value}).declared, key
+
+
+def test_a_client_that_says_nothing_gets_zeros_not_guesses():
+    caps = C.from_hello({})
+    assert (caps.markup, caps.blocks, caps.toolmax, caps.maxblock) \
+        == (0, 0, 0, 0)
+
+
+def test_toolmax_tells_no_opinion_apart_from_none_thank_you():
+    """0 is "did not say" and the bridge's own cap stands; -1 is "all of
+    it". The floor is therefore -1 and not 0, and a handshake exists to
+    tell those two answers apart."""
+    assert C.from_hello({"toolmax": "0"}).toolmax == 0
+    assert C.from_hello({"toolmax": "-1"}).toolmax == -1
+    with pytest.raises(C.CapsError):
+        C.from_hello({"toolmax": "-2"})
+
+
+def test_maxblock_is_clamped_to_what_a_frame_can_carry():
+    """CLAMPED, not refused. A record larger than a frame can never be
+    delivered, so a client asking for one is asking for a block it will
+    never see -- the bridge holds it to what the wire can carry rather than
+    refusing the connection over a number it can simply correct."""
+    assert C.from_hello({"maxblock": "1000000"}).maxblock \
+        == C._MAX_BLOCK_CEILING
+    assert C.from_hello({"maxblock": "4096"}).maxblock == 4096
+
+
+def test_the_clamp_tracks_the_frame_cap():
+    """_MAX_BLOCK_CEILING is a constant because importing protocol here
+    would be a cycle. A constant that must track another number is a drift
+    risk, so it is asserted rather than trusted."""
+    from bridge.wire.protocol import MAX_FRAME
+
+    assert C._MAX_BLOCK_CEILING == MAX_FRAME - 1024
+
+
+def test_a_value_outside_its_range_is_refused_rather_than_clamped():
+    """Everything but maxblock. `_num` raises, which is what stops a bridge
+    half-applying a capability it does not understand."""
+    with pytest.raises(C.CapsError):
+        C.from_hello({"markup": "2"})
+    with pytest.raises(C.CapsError):
+        C.from_hello({"blocks": "256"})
+    with pytest.raises(C.CapsError):
+        C.from_hello({"markup": "yes"})
