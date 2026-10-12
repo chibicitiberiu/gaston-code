@@ -349,8 +349,11 @@ class Bridge:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        if self.connection.guest and self.connection.guest.claude:
-            await self.connection.guest.claude.close()
+        # EVERY GUEST. This closed `the` guest's session, which was all
+        # of them when there was one slot.
+        for guest in list(self.connection._guests.values()):
+            if guest.claude:
+                await guest.claude.close()
 
     # --- connection --------------------------------------------------------
 

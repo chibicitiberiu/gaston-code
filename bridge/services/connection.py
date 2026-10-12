@@ -120,6 +120,14 @@ class ConnectionService:
             self._guests[key] = g
             self._order.append(key)
 
+    def _forget(self, key: str) -> None:
+        """Drop a guest from the registry and close what it was holding."""
+        g = self._guests.pop(key, None)
+        if key in self._order:
+            self._order.remove(key)
+        if g is not None and g.claude is not None and self.spawn:
+            self.spawn(g.claude.close())
+
     def _remember(self, key: str, g: GuestSession) -> None:
         self._guests[key] = g
         if key in self._order:
@@ -510,47 +518,75 @@ class ConnectionService:
         idle_check_s = getattr(self.config, "idle_check_s", 15.0)
         perm_grace_s = getattr(self.config, "perm_grace_s", 60.0)
         idle_timeout_s = getattr(self.config, "idle_timeout_s", 90.0)
+        evict_after_s = getattr(self.config, "evict_after_s", 3600.0)
         while True:
             await asyncio.sleep(idle_check_s)
-            guest = self.guest
-            if guest is None:
-                continue
-            if not guest.link.connected:
-                # `perms is not None` is implied by `perm_pending is not
-                # None` -- the property returns None without a desk -- but
-                # saying it is what lets a checker see it too.
-                if (
-                    guest.perms is not None
-                    and guest.perm_pending is not None
-                    and guest.lost_at is not None
-                    and time.monotonic() - guest.lost_at > perm_grace_s
-                ):
-                    guest.perms.deny_all(
-                        "gone",
-                        "The Windows machine disconnected before anyone could "
-                        "answer, so this was not approved. It was not refused "
-                        "on purpose -- ask again if you still need it.",
-                    )
-                continue
-            if guest.exec_pending or guest.sync.active:
-                continue
-            idle = time.monotonic() - guest.last_seen
-            if idle < idle_timeout_s:
-                continue
-            log.warning(
-                "guest silent for %.0fs; closing so it can reconnect", idle
-            )
-            if guest.perms is not None:
+            # EVERY GUEST, not the one. A list() because eviction below
+            # mutates the registry.
+            for key, guest in list(self._guests.items()):
+                self._reap_one(key, guest, perm_grace_s, idle_timeout_s,
+                               evict_after_s)
+
+    def _reap_one(self, key: str, guest: GuestSession, perm_grace_s: float,
+                  idle_timeout_s: float, evict_after_s: float) -> None:
+        """One guest's turn through the reaper. Split out when the loop
+        learned to iterate, so the body did not grow a level of indent and
+        a `continue` did not quietly become a `return` with a different
+        meaning."""
+        # ONE GUEST'S CODEPAGE, bound before anything writes a frame for
+        # it. `deny_all` below builds blocks and sends them, and `fold`
+        # keeps the codepage in a ContextVar -- so without this a prompt
+        # denied on guest B is folded through whichever guest attached
+        # first in this task's context.
+        self.bind_codepages(guest)
+        if not guest.link.connected:
+            # `perms is not None` is implied by `perm_pending is not
+            # None` -- the property returns None without a desk -- but
+            # saying it is what lets a checker see it too.
+            if (
+                guest.perms is not None
+                and guest.perm_pending is not None
+                and guest.lost_at is not None
+                and time.monotonic() - guest.lost_at > perm_grace_s
+            ):
                 guest.perms.deny_all(
-                    "idle", "The Windows machine stopped responding."
+                    "gone",
+                    "The Windows machine disconnected before anyone could "
+                    "answer, so this was not approved. It was not refused "
+                    "on purpose -- ask again if you still need it.",
                 )
-            w, guest.link.writer = guest.link.writer, None
-            self.mark_lost(guest)
-            try:
-                if w is not None:
-                    w.close()
-            except Exception:
-                pass
+            # AND EVENTUALLY IT GOES. Nothing ever removed an entry
+            # while there was one slot: the session was deliberately
+            # kept so a reconnect reattached it, and one retained
+            # GuestSession cost nothing. Keyed on the machine id it is
+            # one retained session, SDK subprocess and permission desk
+            # PER MACHINE ID EVER SEEN -- and ids do churn, because
+            # machineid.cpp re-mints over a malformed machine.id.
+            if (guest.lost_at is not None
+                    and time.monotonic() - guest.lost_at > evict_after_s):
+                log.info("guest %s has been gone %.0fs; forgetting it",
+                         key or "(no id)", time.monotonic() - guest.lost_at)
+                self._forget(key)
+            return
+        if guest.exec_pending or guest.sync.active:
+            return
+        idle = time.monotonic() - guest.last_seen
+        if idle < idle_timeout_s:
+            return
+        log.warning(
+            "guest silent for %.0fs; closing so it can reconnect", idle
+        )
+        if guest.perms is not None:
+            guest.perms.deny_all(
+                "idle", "The Windows machine stopped responding."
+            )
+        w, guest.link.writer = guest.link.writer, None
+        self.mark_lost(guest)
+        try:
+            if w is not None:
+                w.close()
+        except Exception:
+            pass
 
     async def on_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

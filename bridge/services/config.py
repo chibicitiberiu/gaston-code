@@ -25,6 +25,14 @@ class BridgeConfig:
     sync_state: str | None = None
     sync_sweep_s: float = 120.0
     idle_timeout_s: float = 90.0
+    #: How long a guest that has gone stays in the registry before it is
+    #: forgotten, with its SDK session closed. Nothing ever forgot one while
+    #: there was a single slot -- the session was kept deliberately so a
+    #: reconnect reattached it. Keyed by machine id (stage 3c) that is one
+    #: retained session per id ever seen, and ids churn: machineid.cpp
+    #: re-mints over a malformed machine.id. An hour is far longer than any
+    #: reconnect and far shorter than a week of them.
+    evict_after_s: float = 3600.0
     idle_check_s: float = 15.0
     perm_grace_s: float = 60.0
     hello_timeout_s: float = 10.0

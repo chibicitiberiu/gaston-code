@@ -579,23 +579,32 @@ class SyncService:
         the guest asked for costs a debug line and nothing else.
         """
         while True:
-            guest = self._get_guest(None)
-            # The client's own interval (Options > Files), else the bridge's;
-            # -1 means only when the machine reports a change.
-            want = getattr(getattr(guest, "prefs", None), "sync_sweep_s", 0)
-            await asyncio.sleep(want if want > 0
+            # THE INTERVAL IS ONE GUEST'S PREFERENCE and the sweep is every
+            # guest's. Taking the shortest interval any attached client asked
+            # for is the only reading that honours all of them: a client that
+            # wants a sweep every 10s gets one, and a client that wants
+            # fewer is not swept more often than it asked because its own
+            # arm below is what decides whether to run.
+            guests = list(self.connection._guests.values())
+            wants = [getattr(getattr(g, "prefs", None), "sync_sweep_s", 0)
+                     for g in guests]
+            positive = [w for w in wants if w > 0]
+            await asyncio.sleep(min(positive) if positive
                                 else self.config.sync_sweep_s)
-            guest = self._get_guest(None)
-            if want == -1:
+            if not self.config.sync_dir:
                 continue
-            if self.config.sync_dir and guest is not None:
+            for guest in list(self.connection._guests.values()):
+                # -1 means only when the machine reports a change.
+                if getattr(getattr(guest, "prefs", None),
+                           "sync_sweep_s", 0) == -1:
+                    continue
                 # Bound HERE as well as inherited from ConnectionService.
                 # attach's context: this keeps it true once a task started
                 # for one connection is still running during the next one --
-                # and once R7 gives the bridge two guests on two codepages,
-                # it is the only thing that can be right.
+                # and with two guests on two codepages it is the only thing
+                # that can be right.
                 self.connection.bind_codepages(guest)
-                await self.run_sync("the bridge's own sweep")
+                await self.run_sync("the bridge's own sweep", guest=guest)
 
     def edits_outside_the_mirror(
         self, guest: GuestSession | None = None, limit: int = 20
