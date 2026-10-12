@@ -253,6 +253,19 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .clip { color: #808080; font-style: normal; margin-top: 2px; }
 .notice { color: #808080; margin: 6px 0; }
 
+/* The thinking stream. EMITTED SINCE THE CLASS EXISTED AND NEVER STYLED --
+   presentation.py wrote <div class="thinking"> and there was no rule, so
+   extended thinking has always rendered as ordinary model prose and nobody
+   could tell the two apart. test_guest_css.py could not see it because it
+   walks the classes the GUEST names, and this one the bridge invents; the
+   mirror of that test now walks the renderer and would have caught it.
+
+   Italic and grey rather than a box: it is a lot of text, it is not the
+   answer, and a tinted panel the length of a page is worse on an 8bpp
+   display than restraint is. Same grey as a notice, for the same reason --
+   this is the machine talking about itself. */
+.thinking { color: #707070; font-style: italic; margin: 6px 0; }
+
 /* The status line, under everything. Grey like a notice because it is the
    same kind of thing -- the app talking about itself -- but it does not
    scroll away, it is replaced. The spinner is a real .gif file beside the

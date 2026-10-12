@@ -37,10 +37,13 @@ class PresentationService:
                     await self.write_updates(
                         guest, guest.view.render.feed(text))
                 else:
-                    await self.write_block(
-                        guest, f'<div class="{style}">' + H.esc(text)
-                        + "</div>"
-                    )
+                    # The only other style is "thinking" (session.py's
+                    # on_thinking). It used to build its own div from the
+                    # style NAME, which is how .thinking came to be emitted
+                    # for as long as the class has existed without ever
+                    # having a stylesheet rule: an interpolated class name
+                    # is invisible to every guard on either side.
+                    await self.write_block(guest, H.thinking(text))
             c = Coalescer(sink)
             c.set_link_speed(guest.link.link_bps)
             c.start()

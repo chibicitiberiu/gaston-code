@@ -1469,10 +1469,12 @@ rebuilding the guest.
 the ones first written here had drifted.* The shipped `STYLESHEET` is **9,375 bytes,
 of which 5,574 are CSS comments in 11 blocks** (the largest is the 1,643-byte
 `overflow: auto` note), not the 8,445/4,919 this entry used to claim. The DOC body
-`document()` produces goes from **9,557 bytes to 3,962** -- 58% of the frame. The
-saving is 5,595 rather than 5,574 because the blank lines the comments leave go with
-them; 3,983 was this entry subtracting the comment figure instead of measuring the
-result, and is corrected here. `doc()`
+`document()` produces drops **5,595 bytes** -- 58% of the frame, 9,557 down to 3,962
+as measured on 2026-10-12. The saving is the stable figure and the two absolutes are
+not: the stylesheet grew by 65 bytes the same day, when stage 3 A10 gave `.thinking`
+the rule it had never had. The saving is 5,595 rather than 5,574 because the blank
+lines the comments leave go with them; 3,983 was this entry subtracting the comment
+figure instead of measuring the result. `doc()`
 (`bridge/wire/protocol.py:171`) builds a plain `Frame` with no `enc` header, so unlike
 `TEXT` and export data this one is **never compressed**: those bytes go on the wire
 verbatim, once per connect and again on every reconnect. On a 5 KB/s link that is

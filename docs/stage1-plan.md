@@ -134,7 +134,8 @@ A `_without_comments()` applied once to `STYLESHEET` at module scope.
 shares the stylesheet deliberately (`html.py:680-686`) and is compressed, so it loses
 nothing by shrinking too.
 
-Measured effect: the DOC body goes from **9,557 to 3,962 bytes**, 58% off a frame
+Measured effect: the DOC body drops **5,595 bytes** (9,557 to 3,962 as measured on
+2026-10-12; the saving is stable, the absolutes move with the stylesheet), 58% off a frame
 `bridge/wire/protocol.py:171-173` sends with no `enc` header, once per attach
 (`bridge/server.py:407`) and again on every reconnect.
 

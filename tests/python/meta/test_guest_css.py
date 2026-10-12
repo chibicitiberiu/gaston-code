@@ -92,3 +92,97 @@ def test_the_two_slots_are_distinct():
     """
     slots = guest_slots()
     assert slots["RC_SLOT_DONE"] != slots["RC_SLOT_LIVE"]
+
+
+# --- the other direction ----------------------------------------------------
+#
+# Everything above walks the classes the GUEST names. A class the BRIDGE
+# invents is invisible to all of it, which is how `.thinking` came to be
+# emitted for as long as the class had existed with no rule anywhere:
+# presentation.py built `<div class="{style}">` from the style NAME, so
+# there was no literal for anything to grep and no macro for anything to
+# sweep. Found while planning stage 3, fixed in A10.
+#
+# After C2 the renderer is the guest's and this reads win/resources/view.tpl
+# instead of htmlrender.py. The assertion does not change.
+
+def rendered_classes() -> set:
+    """Every class the renderer can put in the document."""
+    from bridge.view import blocks as B
+    from bridge.view.htmlrender import _PERM_HEAD, render
+
+    samples = [
+        B.Block("para", {}, [("t", "x")]),
+        B.Block("code", {}, [("l", "c"), ("t", "x")]),
+        B.Block("heading", {"level": 3}, [("t", "x")]),
+        B.Block("bullet", {}, [("t", "x")]),
+        B.Block("numbered", {}, [("t", "x")]),
+        B.Block("quote", {}, [("t", "x")]),
+        B.Block("rule"),
+        B.Block("table", {"header": 1}, [("r", ""), ("c", "x")]),
+        B.Block("user", {}, [("t", "x")]),
+        B.Block("notice", {}, [("t", "x")]),
+        B.Block("error", {}, [("t", "x")]),
+        B.Block("tool", {}, [("n", "e"), ("t", "x")]),
+        B.Block("toolresult", {"error": 0, "clipped": 3}, [("t", "x")]),
+        B.Block("toolresult", {"error": 1}, [("t", "x")]),
+        B.Block("thinking", {}, [("t", "x")]),
+        B.Block("clip", {"dropped": 3}),
+        B.Block("exportheading", {}, [("h", "t"), ("t", "w")]),
+    ] + [B.Block("permission", {"settleable": s},
+                 [("h", h), ("b", "x"), ("d", "y"), ("w", "z"), ("p", "p"),
+                  ("t", "t"), ("s", "s"), ("k", "k"), ("v", "v")])
+         for s, h in ((1, "ask"), (0, "view"))]
+
+    assert {b.kind for b in samples} == set(B.KINDS), (
+        "a kind with no sample here is a kind whose classes nothing checks")
+
+    out = set()
+    for b in samples:
+        for m in re.findall(r'class="([^"]+)"', render(b)):
+            out.update(m.split())
+    for head in _PERM_HEAD.values():
+        for m in re.findall(r'class="([^"]+)"', head):
+            out.update(m.split())
+    return out
+
+
+def test_every_class_the_renderer_emits_has_a_rule():
+    """The mirror of the first test, and the one that was missing.
+
+    A class with no rule is not an error anywhere: the block renders, it
+    just looks like whatever is around it. `.thinking` looked exactly like
+    the model's answer for the whole life of the feature.
+    """
+    # Both sheets, because an export gets WIRE_CSS + EXPORT_CSS and the
+    # `exportheading` kind only ever appears there. Checking only the live
+    # sheet would report a false positive for it; checking only the union
+    # would miss a LIVE class that had slipped into the export-only sheet,
+    # so the split is asserted too, below.
+    css = H.STYLESHEET + H.EXPORT_CSS
+    missing = sorted(c for c in rendered_classes() if f".{c}" not in css)
+    assert not missing, (
+        f"the renderer emits {missing} and no stylesheet has a rule for "
+        f"them -- those blocks render as whatever is around them, with no "
+        f"error and no log line")
+
+
+def test_only_the_export_heading_depends_on_the_export_only_sheet():
+    """The live view never gets EXPORT_CSS, so a class that drifted into it
+    would be unstyled on screen and fine in a saved file -- which is the
+    hardest version of this bug to notice, because the export looks right."""
+    live_only = {c for c in rendered_classes()
+                 if f".{c}" not in H.STYLESHEET}
+    assert live_only == {"exporthead"}, (
+        f"{sorted(live_only - {'exporthead'})} are emitted into the live "
+        f"view but only styled in EXPORT_CSS")
+
+
+def test_the_two_sweeps_overlap_where_they_should():
+    """Both sides name .notice, .err and .you, which is the whole point of
+    the first test -- it is a contract, not a coincidence. If this ever
+    fails, one of the two sweeps has stopped seeing what it was written
+    for."""
+    shared = {c for c in guest_classes().values() for c in c.split()}
+    assert {"notice", "err", "you"} <= shared
+    assert {"notice", "err", "you"} <= rendered_classes()

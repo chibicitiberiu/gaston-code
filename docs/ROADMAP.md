@@ -60,7 +60,8 @@ something later.
   (`bridge/view/html.py:631`) and `document()` defaults to it. **5,574 of 9,375
   bytes** are CSS comments, 59% of the stylesheet; the strip removes 5,595,
   because the blank lines the comments leave go too, taking the DOC body from
-  9,557 to 3,962 -- 58% of the frame. Two denominators, which is why both
+  9,557 to 3,962 (measured 2026-10-12) -- 58% of the frame. Two denominators,
+  which is why both
   percentages appear and neither is wrong. `doc()` carries no `enc` header, so
   those bytes went out verbatim once per connect and again on every reconnect.
 - The stale-doc sweep: `PROGRESS.md`'s "Current goal" still says Phase 5; R5 and
