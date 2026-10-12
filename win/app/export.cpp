@@ -10,6 +10,7 @@
 #include "core/log.h"
 #include "core/str.h"
 #include "core/rc_cpp.h"
+#include "view/render.h"
 
 /* GetSaveFileNameA through LoadLibrary rather than as an import.
  *
@@ -21,6 +22,109 @@
  * released afterwards, because it is used once in a while and never in a
  * loop. */
 typedef BOOL (WINAPI *PFN_GETSAVEFILENAMEA)(LPOPENFILENAMEA);
+
+/* --- the document the guest now writes ----------------------------------
+ *
+ * The bridge built this until stage 3 C3 and cannot any more: it has
+ * neither the markup nor the stylesheet. The skeleton is compiled in for
+ * the same reason the live view's is -- see win/app/htmlview.cpp -- and
+ * the two stylesheets are the files beside the exe, copied in.
+ */
+
+/* Where a literal block breaks in an EXPORT. Fixed, and not the window's
+ * column: a saved file is read somewhere else at some other width, and the
+ * one thing worse than a fixed column is one that silently encodes how big
+ * the window happened to be when Save was pressed. 76 rather than the
+ * view's 56, because a file is read in a browser window and not in a 470px
+ * pane. */
+#define RC_EXPORT_WRAPCOL 76
+
+static const char EXPORT_HEAD_1[] =
+    "<html><head><meta http-equiv=\"Content-Type\" "
+    "content=\"text/html; charset=";
+static const char EXPORT_HEAD_2[] = "\"><title>";
+static const char EXPORT_HEAD_3[] = "</title><style>";
+static const char EXPORT_HEAD_4[] = "</style></head><body>";
+static const char EXPORT_TAIL[] = "</body></html>";
+
+/* A ByteSink over the ChunkSink, so the renderer can write straight into
+ * the file. The offset is the sink's own count, which is why rc_export
+ * keeps `recordBytes` separately for the ordering check -- see export.h. */
+class ExportSink : public ByteSink
+{
+public:
+    explicit ExportSink(ChunkSink &s) : m_sink(s), m_failed(false) {}
+
+    bool write(const void *data, unsigned len)
+    {
+        if (m_failed) return false;
+        if (m_sink.write((unsigned long)m_sink.received(), data, len)
+            != CHUNK_OK) {
+            m_failed = true;
+            return false;
+        }
+        return true;
+    }
+
+    bool failed() const { return m_failed; }
+
+private:
+    ExportSink(const ExportSink &);
+    ExportSink &operator=(const ExportSink &);
+
+    ChunkSink &m_sink;
+    bool       m_failed;
+};
+
+/* Copy one file beside the exe into the sink. The stylesheets, which is
+ * the only thing in this path that is read rather than streamed through.
+ * Missing is not fatal: an unstyled export is a readable export, and a
+ * hand-updated box is exactly where one of these goes missing. */
+static bool copy_css(const char *name, ByteSink &out)
+{
+    char dir[MAX_PATH], path[MAX_PATH];
+    char buf[2048];
+    size_t got;
+
+    GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
+    { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
+    rc_strf(path, sizeof(path), "%s\\%s", dir, name);
+
+    File f(fopen(path, "rb"));
+    if (!f.valid()) {
+        rc_log("export: no %s; the file will be unstyled", name);
+        return true;
+    }
+    while ((got = fread(buf, 1, sizeof buf, f.get())) > 0)
+        if (!out.write(buf, (unsigned)got))
+            return false;
+    return true;
+}
+
+int rc_export::writeHead(const char *title)
+{
+    ExportSink out(sink);
+    char charset[24];
+    const char *t = (title && *title) ? title : "Conversation";
+
+    /* The same derivation as the live view's: the charset must name the
+     * table the bytes were written with, and that is a fact about this
+     * machine. */
+    rc_strf(charset, sizeof charset, "windows-%u", (unsigned)GetACP());
+
+    out.write(EXPORT_HEAD_1, (unsigned)strlen(EXPORT_HEAD_1));
+    out.write(charset, (unsigned)strlen(charset));
+    out.write(EXPORT_HEAD_2, (unsigned)strlen(EXPORT_HEAD_2));
+    out.write(t, (unsigned)strlen(t));
+    out.write(EXPORT_HEAD_3, (unsigned)strlen(EXPORT_HEAD_3));
+    /* BOTH sheets, view.css first: export.css is only what the live view
+     * has no use for, never a replacement. An export that looks different
+     * from what was on screen invites the question of which one is right. */
+    if (!copy_css("view.css", out) || !copy_css("export.css", out))
+        return 0;
+    out.write(EXPORT_HEAD_4, (unsigned)strlen(EXPORT_HEAD_4));
+    return !out.failed();
+}
 
 static int ask_for_path(HWND owner, const char *suggested,
                         char *out, unsigned cap)
@@ -175,39 +279,84 @@ int rc_export::frame(rc_frame *f)
             return 1;
         }
         total = t ? (unsigned long)atol(t) : 0;
+        recordBytes = 0;
+        wroteHead = 0;
         return 1;
     }
 
     if (strcmp(f->type, "EXPORTDAT") == 0) {
         const char *o = rc_frame_get(f, "off");
         unsigned long off = o ? (unsigned long)atol(o) : 0;
+        ExportSink out(sink);
         if (!sink.active()) return 1;
 
-        /* `off` is in DECOMPRESSED bytes, which is what has been written. */
-        switch (sink.write(off, f->body, f->body_len)) {
-        case CHUNK_OK:
-            break;
-        case CHUNK_OUT_OF_ORDER:
-            /* A chunk that does not continue where the last one stopped means
-             * a hole, and a file with a hole in it renders as garbage from
-             * that point on with nothing to say why. Refuse the whole export
-             * instead. */
-            rc_log("export: chunk at %lu, expected %lu -- abandoning", off,
-                   (unsigned long)sink.received());
+        /* THE ORDER CHECK, moved rather than lost. It used to be
+         * ChunkSink's: `off` was in written bytes and the sink compared it
+         * against what it had. From stage 3 C3 this side RENDERS, so the
+         * file is markup and the two numbers are different lengths --
+         * sink.write is given sink.received() and its check can never
+         * fire. win/fs/xfer.h names that check load-bearing ("It is
+         * CHECKED, not trusted... Two of the three implementations this
+         * replaces did not check"), so it is here instead, against the
+         * count of record bytes consumed.
+         *
+         * A chunk that does not continue where the last stopped means a
+         * hole, and a file with a hole renders as garbage from that point
+         * with nothing to say why. Refuse the whole export. */
+        if (off != recordBytes) {
+            rc_log("export: chunk at %lu record bytes, expected %lu -- "
+                   "abandoning", off, recordBytes);
             if (html)
                 html->error("The export arrived out of order and has been "
                             "discarded. Nothing was written.");
             cleanup("a chunk arrived out of order");
-            break;
-        default:
+            return 1;
+        }
+
+        if (!wroteHead) {
+            /* The file's own name for <title>, which is the browser tab
+             * and nothing else. The conversation's real title is in the
+             * `exportheading` record and becomes the <h1> a line later --
+             * but that record has not been rendered yet when the head is
+             * written, and carrying the title in an EXPORTSTART header to
+             * fix the tab would be a protocol change for a tab. */
+            const char *base = strrchr(sink.targetPath(), '\\');
+            if (!writeHead(base ? base + 1 : sink.targetPath())) {
+                if (html)
+                    html->error("Writing the file failed -- the drive may "
+                                "be full. Nothing was kept.");
+                cleanup("the head could not be written");
+                return 1;
+            }
+            wroteHead = 1;
+        }
+
+        /* Rendered straight into the sink: no buffer holds the markup, so
+         * the streaming rule survives the move. The bridge chunks on
+         * RECORD boundaries, so every byte here is whole records.
+         *
+         * A FIXED wrapcol, not the window's. An exported file is read
+         * somewhere else, at some other width, and the one thing worse
+         * than a fixed column is one that silently encodes the size of
+         * the window that happened to be open. */
+        if (!rc_render(f->body, f->body_len, RC_EXPORT_WRAPCOL, out)) {
+            rc_log("export: a record was refused at %lu", recordBytes);
+            if (html)
+                html->error("The export could not be rendered and has been "
+                            "discarded. Nothing was written.");
+            cleanup("a record was refused");
+            return 1;
+        }
+        if (out.failed()) {
             rc_log("export: write failed at %lu",
                    (unsigned long)sink.received());
             if (html)
                 html->error("Writing the file failed -- the drive may be "
                             "full. Nothing was kept.");
             cleanup("the write failed");
-            break;
+            return 1;
         }
+        recordBytes += f->body_len;
         return 1;
     }
 
@@ -230,8 +379,14 @@ int rc_export::frame(rc_frame *f)
             cleanup("the bridge reported a failure");
             return 1;
         }
-        if (total && got != total) {
-            rc_log("export: short by %lu bytes", total - got);
+        /* AGAINST RECORD BYTES, which is what `total` counts. It used to
+         * compare sink.received() -- written bytes -- and those were the
+         * same number only while the bridge sent the finished document.
+         * Comparing them now would fail every export, since markup is
+         * longer than the records it came from. */
+        if (total && recordBytes != total) {
+            rc_log("export: short by %lu record bytes",
+                   total - recordBytes);
             if (html)
                 html->error("The export finished short and has been "
                             "discarded. Nothing was written.");
@@ -246,6 +401,12 @@ int rc_export::frame(rc_frame *f)
          * WriteFile and buffers nothing, so a full disk fails at the write
          * that fills it and is reported above. The failure mode is gone
          * rather than handled. */
+        /* The document's close, before the file is committed. */
+        {
+            ExportSink out(sink);
+            out.write(EXPORT_TAIL, (unsigned)strlen(EXPORT_TAIL));
+        }
+        got = (unsigned long)sink.received();
         rc_strf(where, sizeof(where), "%s", sink.tempPath());
         rc_strf(msg, sizeof(msg), "Conversation exported to %s (%lu bytes).",
                 sink.targetPath(), got);

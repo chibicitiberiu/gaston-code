@@ -66,6 +66,33 @@ class _SockWriter:
         return None
 
 
+def send_export(send, records):
+    """Answer an EXPORT with records, chunked on record boundaries.
+
+    The same rule GuestLink.send_export_records follows and for the same
+    reason: the guest renders each chunk straight into the file and never
+    holds the document, so a record split across two frames arrives as two
+    fragments it must refuse.
+    """
+    budget = PR.MAX_FRAME - 1024
+    total = sum(len(x) for x in records)
+    send(PR.export_start(total))
+    off = 0
+    chunk, size = [], 0
+    for rec in records:
+        if chunk and size + len(rec) > budget:
+            send(PR.export_data(off, total, ENC_RAW, b"".join(chunk)))
+            off += size
+            chunk, size = [], 0
+        chunk.append(rec)
+        size += len(rec)
+    if chunk:
+        send(PR.export_data(off, total, ENC_RAW, b"".join(chunk)))
+        off += size
+    send(PR.export_end(True, bytes_=off))
+    print(f"  answered EXPORT with {len(records)} records, {total} bytes")
+
+
 def replay_fence(send, conn, a) -> int:
     """Stream a long fenced block the way a real answer arrives.
 
@@ -251,26 +278,32 @@ def main() -> int:
                                  "|a <b>|`c`|"])),
         ("thinking", B.thinking("a thought, in passing")),
     ]
+    sent_records = []
     for name, block in checks:
+        sent_records.append(B.encode(block))
         send(PR.text_frame("append", ENC_RAW, 1, B.encode(block)))
         print(f"  sent {name}")
         time.sleep(0.2)
 
     # And a permission card, which is the one composite kind and the only
     # one whose payload ORDER matters.
-    send(PR.text_frame("append", ENC_RAW, 1, B.encode(B.Block(
+    perm = B.encode(B.Block(
         "permission", {"settleable": 1},
         [("h", "ask"), ("b", "delete"), ("d", "C:\\TEMP\\OLD"),
          ("w", "this cannot be undone"), ("p", "3 files, 2 KB"),
          ("s", "bring Notepad to the front"), ("s", "close Notepad"),
          ("k", "path"), ("v", "C:\\TEMP\\OLD"),
-         ("k", "permanent"), ("v", "yes")]))))
+         ("k", "permanent"), ("v", "yes")]))
+    sent_records.append(perm)
+    send(PR.text_frame("append", ENC_RAW, 1, perm))
     print("  sent permission card")
     time.sleep(0.2)
 
-    send(PR.text_frame("append", ENC_RAW, 1, B.encode(B.notice(
+    last = B.encode(B.notice(
         "if you can read every line above, the MSHTML host, the view class "
-        "and the record renderer all work"))))
+        "and the record renderer all work"))
+    sent_records.append(last)
+    send(PR.text_frame("append", ENC_RAW, 1, last))
 
     print(f"\nall frames sent. holding the link for {a.hold:.0f}s -- "
           f"look at the guest window now.")
@@ -283,6 +316,14 @@ def main() -> int:
                 break
             for f in r.feed(data):
                 print(f"  guest -> {f.type} {f.headers}")
+                if f.type == "EXPORT":
+                    # The guest asks; this answers with the SAME records it
+                    # was already shown. Stage 3 C3 moved the export's
+                    # rendering to the guest, so there is nothing to build
+                    # here -- which is exactly what makes a stub able to
+                    # drive it at all. Before C3 a probe would have had to
+                    # produce a whole styled document.
+                    send_export(send, sent_records)
     except TimeoutError:
         print("hold expired")
     except KeyboardInterrupt:

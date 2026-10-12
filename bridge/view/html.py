@@ -14,10 +14,14 @@ already name. Nothing here is new behaviour; `tests/python/view/test_html.py`
 passes unchanged, all 42 of it, which is the point of doing the split as its
 own commit.
 
-WHAT IS STILL REALLY HERE: `STYLESHEET`, `WIRE_CSS`, `EXPORT_CSS`, `SKELETON`,
-`document` and `export_document`. Those leave at C3 and C4, when the guest
-composes its own document from files beside the exe. They are not moved into
-either new module because both of their destinations are off this machine.
+WHAT IS STILL REALLY HERE: `STYLESHEET`, `WIRE_CSS`, `SKELETON` and
+`document`, which is the DOC frame and nothing else. The export half --
+`export_document`, `EXPORT_CSS` and `esc` with them -- went at C3, when the
+guest started rendering its own export from win/resources/view.css and
+export.css. The rest goes at C4 with DOC itself.
+
+They were never moved into either new module, because both of their
+destinations are off this machine.
 
 The incremental rule that made the parser tractable is in `blocks.py` now, but
 it is worth repeating where people will look for it: **only complete lines are
@@ -50,7 +54,7 @@ from .blocks import (  # noqa: F401  -- re-exported for importers
     BlockStream,
     BlockUpdate,
 )
-from .htmlrender import esc, render  # noqa: F401
+from .htmlrender import render  # noqa: F401
 
 #: The one cap that STAYS on the bridge, and the line is bandwidth against
 #: appearance: truncating on the client means the bytes already crossed a
@@ -366,40 +370,3 @@ def document(css: str | None = None) -> str:
                        css if css is not None else WIRE_CSS)
 
 
-def export_document(title: str, body: str, when: str = "") -> str:
-    """The whole transcript as one standalone file.
-
-    NOT `document()` with the body filled in. That one is the live view: it
-    has the `#l` and `#s` slots the streaming path replaces, and an exported
-    file carrying two empty divs named after a protocol nobody reading the
-    file has heard of is just litter. This has a heading, the conversation,
-    and nothing that only makes sense while connected.
-
-    Same stylesheet, deliberately: an export that looks different from what
-    was on screen invites the question of which one is right. It also has to
-    render in IE5 on the machine that saved it, which is the same constraint
-    the stylesheet was already written to. WIRE_CSS rather than STYLESHEET for
-    the same reason the live view uses it -- the comments explain the rules to
-    whoever maintains them, not to whoever reads the transcript -- and here it
-    is free either way, since export data is compressed.
-    """
-    head = '<div class="exporthead"><h1>' + esc(title or "Conversation")
-    head += "</h1>"
-    if when:
-        head += '<div class="notice">' + esc(when) + "</div>"
-    head += "</div>"
-    return ("<html><head>"
-            "<meta http-equiv=\"Content-Type\" "
-            "content=\"text/html; charset=" + C.html_charset(fold.codec())
-            + "\">"
-            "<title>" + esc(title or "Conversation") + "</title>"
-            "<style>" + WIRE_CSS + EXPORT_CSS + "</style></head>"
-            "<body>" + head + body + "</body></html>")
-
-
-#: Only what the live view has no use for. Kept separate so the shared
-#: stylesheet stays exactly what the guest is running.
-EXPORT_CSS = (
-    ".exporthead { border-bottom: 1px solid #808080; margin-bottom: 12px; }"
-    ".exporthead h1 { font-size: 12pt; margin: 0 0 2px 0; }"
-)

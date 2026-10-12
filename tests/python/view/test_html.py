@@ -15,11 +15,10 @@ from bridge.view.html import (
     LIVE,
     HtmlStream,
     document,
-    esc,
     render,
     user_turn,
 )
-from bridge.view.htmlrender import TOOL_WRAP_COL, spans
+from bridge.view.htmlrender import TOOL_WRAP_COL, esc, spans
 
 
 def inline(text: str) -> str:

@@ -24,7 +24,7 @@ from ..agent.prompts import text as policy_text
 from ..agent.session import TOOLS, Session
 from ..guest import GuestSession
 from ..view import html as H
-from ..wire import fold
+from ..view.blocks import Block, encode
 from ..wire.protocol import (
     Frame,
     error,
@@ -156,14 +156,13 @@ class SessionService:
         """
         title = self.conv_title(guest)
         when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-        doc = H.export_document(title, guest.view.pages.all_text(),
-                                "Exported from Gaston Code, " + when)
-        # CP1252 on the way out, because the file is read on the machine that
-        # saved it, by a browser that will be told windows-1252 in the meta
-        # tag the document carries.
-        data = fold.encode(doc)
-        log.info("export: %d bytes for %r", len(data), title)
-        await guest.link.send_export(guest, data)
+        heading = Block("exportheading", {},
+                        [("h", title or "Conversation"),
+                         ("t", "Exported from Gaston Code, " + when)])
+        records = [encode(heading), *guest.view.pages.all_records()]
+        log.info("export: %d records, %d bytes for %r",
+                 len(records), sum(len(r) for r in records), title)
+        await guest.link.send_export_records(guest, records)
 
     def _homes(self) -> list[str]:
         """The directories this bridge runs conversations under: --cwd and

@@ -39,6 +39,7 @@ class DummyGuest:
         self.view.pages.all_text.return_value = "Turn 1\nHello World\n"
         self.link = MagicMock()
         self.link.send_export = AsyncMock()
+        self.link.send_export_records = AsyncMock()
 
 
 @pytest.fixture
@@ -166,11 +167,17 @@ async def test_on_export(mock_deps):
 
     frame = Frame("EXPORT", {})
     await svc.on_export(guest, frame)
-    guest.link.send_export.assert_called_once()
-    args = guest.link.send_export.call_args[0]
+    # RECORDS from stage 3 C3, not a document: the bridge has neither the
+    # markup nor the stylesheet to build one with.
+    guest.link.send_export_records.assert_called_once()
+    args = guest.link.send_export_records.call_args[0]
     assert args[0] is guest
-    assert isinstance(args[1], bytes)
-    assert b"Gaston Code" in args[1]
+    records = args[1]
+    assert isinstance(records, list) and records
+    from bridge.view.blocks import decode
+    head = decode(records[0])
+    assert head[0].kind == "exportheading"
+    assert any("Gaston Code" in t for t in head[0].texts())
 
 
 # --- the chat list loses nothing to other people's work ---------------------

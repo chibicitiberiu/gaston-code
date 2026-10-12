@@ -155,6 +155,62 @@ class GuestLink:
         await self.send(guest, text_frame(mode, ENC_RAW, page_no, body),
                         compress=True)
 
+    async def send_export_records(self, guest, records: list) -> None:
+        """Stream an export as whole records, with a START and an END.
+
+        CHUNKED ON RECORD BOUNDARIES, which is the one thing this cannot
+        get wrong. The guest renders each chunk as it arrives and never
+        holds the document -- a transcript is hundreds of kilobytes and
+        that machine has tens free -- so a record split across two frames
+        would reach the renderer as two fragments it must refuse, and the
+        export would be missing a block with nothing to say which.
+
+        `off` is in RECORD bytes, not written bytes, and the guest checks
+        it against its own count of records consumed. Those two numbers
+        were the same thing when the bridge sent finished markup and are
+        not any more; see win/app/export.cpp.
+
+        A record larger than one frame gets a frame of its own, the same
+        rule the paginator uses for a page -- and for the same reason, that
+        half of one is not a smaller one.
+        """
+        budget = MAX_FRAME - 1024
+        total = sum(len(r) for r in records)
+        if not await self.send(guest, export_start(total)):
+            return
+        sent = 0
+        chunk: list[bytes] = []
+        size = 0
+        for rec in records:
+            if chunk and size + len(rec) > budget:
+                if not await self._export_chunk(guest, sent, total, chunk):
+                    return
+                sent += size
+                chunk, size = [], 0
+            chunk.append(rec)
+            size += len(rec)
+        if chunk and not await self._export_chunk(guest, sent, total, chunk):
+            return
+        sent += size
+        await self.send(guest, export_end(True, bytes_=sent))
+
+    async def _export_chunk(self, guest, off: int, total: int,
+                            chunk: list) -> bool:
+        body = b"".join(chunk)
+        if not await self.send(guest, export_data(off, total, ENC_RAW, body),
+                               compress=True):
+            log.warning("export: the link went away at %d/%d bytes",
+                        off, total)
+            await self.send(guest, export_end(
+                False, bytes_=off,
+                reason="The connection dropped during the export."))
+            return False
+        # Between chunks, for the same reason send_records' caller yields: a
+        # multi-hundred-KB export would otherwise hold the event loop for
+        # its whole duration and a Stop press would wait it out.
+        await self.wire_yield(guest)
+        return True
+
     async def send_export(self, guest, data: bytes) -> None:
         """Stream an export to the guest, chunked, with a START and an END.
 

@@ -1449,8 +1449,16 @@ rebuilding the guest.
 
    The answer is the one that makes the docstring's argument true by construction
    rather than by discipline: the guest renders its own export. It will already have
-   the renderer, and `win/app/cache.cpp` already holds its rendered pages, so export
-   becomes "assemble what is cached and write it". The two rejected options are
+   the renderer, so export becomes "render what the bridge sends and write it".
+
+   **NOT "assemble what is cached", which this entry said until 2026-10-12 and
+   which cannot work.** Ranges are served on demand and `win/app/cache.cpp` holds
+   only what arrived, so a cache-assembled export silently omits whatever the
+   reader never paged to. That is worse than a second renderer, because the output
+   is plausible and incomplete: a transcript that looks whole and is missing the
+   middle. Built in stage 3 C3 as a stream -- the bridge sends the records, chunked
+   on record boundaries, and the guest renders each chunk straight into the file
+   without ever holding the document. The two rejected options are
    recorded because they were real: a `.css` beside the `.htm` (precedent exists --
    IE5 has no `data:` URIs, so inline images are already files beside `view.htm`)
    solves styling but not markup; a deliberate bridge-side second renderer keeps

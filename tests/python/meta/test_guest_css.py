@@ -159,7 +159,9 @@ def test_every_class_the_renderer_emits_has_a_rule():
     # sheet would report a false positive for it; checking only the union
     # would miss a LIVE class that had slipped into the export-only sheet,
     # so the split is asserted too, below.
-    css = H.STYLESHEET + H.EXPORT_CSS
+    # The repo's export.css, because the bridge's copy went at C3 with
+    # export_document. The live sheet is still the bridge's until C4.
+    css = H.STYLESHEET + repo_css("export.css")
     missing = sorted(c for c in rendered_classes() if f".{c}" not in css)
     assert not missing, (
         f"the renderer emits {missing} and no stylesheet has a rule for "
@@ -225,8 +227,18 @@ def test_the_shipped_stylesheet_is_the_bridge_s_modulo_comments():
     assert rules_of(repo_css("view.css")) == rules_of(H.STYLESHEET)
 
 
-def test_the_shipped_export_sheet_is_the_bridge_s_too():
-    assert rules_of(repo_css("export.css")) == rules_of(H.EXPORT_CSS)
+def test_the_export_sheet_holds_only_what_the_live_view_lacks():
+    """It was compared against the bridge's EXPORT_CSS until C3, when that
+    went with export_document -- the guest renders its own export now and
+    there is no second copy left to drift from.
+
+    What is still worth asserting is the SPLIT: export.css must hold only
+    rules the live sheet does not, or an export and the screen disagree
+    about something the live view was supposed to own."""
+    live = {r.split("{")[0].strip() for r in rules_of(repo_css("view.css"))}
+    export = {r.split("{")[0].strip()
+              for r in rules_of(repo_css("export.css"))}
+    assert export and not (export & live), export & live
 
 
 def test_the_shipped_sheets_declare_the_version_the_code_expects():

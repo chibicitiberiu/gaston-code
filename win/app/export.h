@@ -23,6 +23,23 @@
  * That sink is fs/xfer.h now, and this is one of its three callers. It went
  * the other way round: BACKLOG 6 named the version that used to live here as
  * the cleanest of the three implementations and the one to extract from.
+ *
+ * FROM STAGE 3 C3 THE BRIDGE SENDS RECORDS AND THIS SIDE RENDERS THEM. The
+ * bridge cannot build the document any more -- it has neither the markup
+ * nor the stylesheet -- and the alternative was a second renderer there,
+ * which is the thing the whole stage exists to avoid.
+ *
+ * It does not change the streaming rule: a chunk is rendered and written
+ * and forgotten, and the bridge chunks on RECORD boundaries so that a
+ * record never arrives in two pieces. What this side now holds for the
+ * length of the transfer is the two stylesheets, ~11KB, copied into the
+ * document's <head> before the first record.
+ *
+ * §13 of BACKLOG said export could "assemble what is cached". IT CANNOT:
+ * ranges are served on demand and win/app/cache.cpp holds only what
+ * arrived, so a cache-assembled export silently omits whatever the reader
+ * never paged to -- which is worse than a second renderer, because the
+ * output is plausible and incomplete.
  */
 #ifndef RC_EXPORT_H
 #define RC_EXPORT_H
@@ -48,12 +65,35 @@ class rc_export {
      * check, and the old file is NOT moved aside -- on a failed rename the
      * temp is left findable and the person is told where it is. */
     ChunkSink sink;
-    unsigned long total;    /* what EXPORTSTART said to expect, or 0 */
+    unsigned long total;    /* RECORD bytes EXPORTSTART said to expect, or 0 */
+    /* RECORD bytes consumed, which from stage 3 C3 is NOT what has been
+     * written. The bridge sends records and this side renders them, so the
+     * file is markup and is a different length -- the two numbers were the
+     * same thing when the bridge sent finished HTML.
+     *
+     * It carries the ordering invariant ChunkSink used to. Writing with
+     * sink.write(sink.received(), ...) means the sink's own `off` check can
+     * never fire, and win/fs/xfer.h calls that check load-bearing by name:
+     * "It is CHECKED, not trusted... Two of the three implementations this
+     * replaces did not check." So the check is not lost, it moved: `off` on
+     * each EXPORTDAT is compared against this. */
+    unsigned long recordBytes;
+    int wroteHead;          /* the <html><head> with the stylesheets */
     rc_html *html;          /* notices and errors; may be NULL */
 
     rc_export(const rc_export &);
     rc_export &operator=(const rc_export &);
-    rc_export() : total(0), html(0) {}
+    rc_export() : total(0), recordBytes(0), wroteHead(0), html(0) {}
+
+    /* The document's own opening: <html><head> with view.css and
+     * export.css inlined, then <body>. Written before the first record.
+     *
+     * THIS IS THE ONE PLACE THE GUEST HOLDS MORE THAN A CHUNK -- about
+     * 11KB of stylesheet, read from disk and written straight out. The
+     * header above says "THE GUEST NEVER HOLDS THE DOCUMENT" and that is
+     * still true of the transcript, which is what the sentence is about;
+     * it holds the two stylesheets for as long as it takes to copy them. */
+    int writeHead(const char *title);
 
     void cleanup(const char *why);
 

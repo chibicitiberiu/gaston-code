@@ -750,7 +750,7 @@ class _NoPatch:
 
     def setattr(self, *a, **kw):
         import bridge.server as srv
-        srv.sesslist.history_html = lambda sid_, limit=2000: []
+        srv.sesslist.history_blocks = lambda sid_, limit=2000: []
 
 
 async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
@@ -1121,40 +1121,89 @@ async def test_export_streams_the_whole_transcript(harness):
     data = _export_bytes(harness, frames)
     assert len(data) == int(start[0].headers["total"])
     assert int(end[0].headers["bytes"]) == len(data)
-    text = data.decode("cp1252")
-    assert text.startswith("<html>") and text.rstrip().endswith("</html>")
-    assert "hello" in text, "the conversation itself must be in there"
-    assert "<style>" in text, "and it must stand alone, not need our CSS"
+
+    # RECORDS from stage 3 C3, not a document. The bridge cannot build one
+    # any more -- it has neither the markup nor the stylesheet -- and the
+    # alternative was a second renderer there, which is the thing the whole
+    # stage exists to avoid. The guest renders each chunk into the file as
+    # it arrives, so the streaming rule is unchanged.
+    got = blocks.decode(data)
+    assert got, "the export carried no records"
+    assert got[0].kind == "exportheading", got[0].kind
+    assert any("hello" in t for b in got for t in b.texts()), (
+        "the conversation itself must be in there")
 
     offs = [int(f.headers["off"]) for f in frames if f.type == "EXPORTDAT"]
     assert offs == sorted(offs) and offs[0] == 0
     await harness.close(w)
 
 
-async def test_export_of_an_empty_conversation_is_still_a_document(harness):
+async def test_no_export_chunk_splits_a_record(harness):
+    """The one thing the export chunker cannot get wrong.
+
+    The guest renders each chunk as it arrives and never holds the
+    document, so a record split across two frames reaches the renderer as
+    two fragments it must refuse -- and the export is missing a block with
+    nothing to say which. Every chunk must therefore decode on its own.
+    """
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    guest = harness.bridge.connection.guest
+    # Written with stream=False, so the paginator fills without the live
+    # TEXT frames -- which would otherwise have to be inflated here too,
+    # in order, just to keep the stream in step.
+    for i in range(400):
+        await harness.bridge.presentation.write_block(
+            guest, blocks.para("paragraph %04d " % i + "x" * 300),
+            stream=False, notify=False)
+
+    await harness.send(w, Frame("EXPORT", {}))
+    frames = await harness.recv_until(r, {"EXPORTEND"}, 20.0)
+    dats = [f for f in frames if f.type == "EXPORTDAT"]
+    assert len(dats) > 1, "test setup: the export must span several frames"
+
+    # Inflated in stream order, because one persistent deflate stream means
+    # a chunk decoded out of sequence is garbage -- the same constraint the
+    # guest is under.
+    for f in dats:
+        body = (harness.unzip.decompress(f.body)
+                if f.headers.get("enc") == "deflate" else f.body)
+        assert blocks.decode(body), f"chunk at {f.headers['off']} is a fragment"
+    await harness.close(w)
+
+
+async def test_export_of_an_empty_conversation_still_carries_its_heading(harness):
     """Exporting before saying anything should produce a valid, if dull,
-    file rather than a zero-byte one or an error."""
+    file rather than a zero-byte one or an error.
+
+    It used to assert the bytes ended in </html>, which was the bridge
+    building the document. The guest writes the <html> and the </html> now
+    (win/app/export.cpp), so what this end can still promise is that the
+    stream is well-formed records and carries the heading -- an export
+    with no heading would be a file with no title and no date.
+    """
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("EXPORT", {}))
     frames = await harness.recv_until(r, {"EXPORTEND"}, 10.0)
     data = _export_bytes(harness, frames)
-    assert data.decode("cp1252").rstrip().endswith("</html>")
+    got = blocks.decode(data)
+    assert len(got) == 1 and got[0].kind == "exportheading", got
     await harness.close(w)
 
 
 # --- opening a conversation without starting one ----------------------------
 
 
-async def _switch_to(harness, monkeypatch, r, w, sid, blocks=None):
+async def _switch_to(harness, monkeypatch, r, w, sid, history=None):
     """Drive a SWITCH with history replay faked.
 
-    history_html reads the real transcript store, which a test has none of.
+    history_blocks reads the real transcript store, which a test has none
     Faking it keeps the test about the switch rather than about the SDK.
     """
     import bridge.server as srv
-    monkeypatch.setattr(srv.sesslist, "history_html",
-                        lambda sid_, limit=2000: list(blocks or []))
+    monkeypatch.setattr(srv.sesslist, "history_blocks",
+                        lambda sid_, limit=2000: list(history or []))
     await harness.send(w, Frame("SWITCH", {"id": sid}))
     return await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
 
