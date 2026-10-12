@@ -38,6 +38,7 @@ toolkit.on_path()
 
 from bridge.view import html as H  # noqa: E402
 from bridge.wire import protocol as PR  # noqa: E402
+from bridge.wire.compress import ENC_RAW  # noqa: E402
 from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
 
 STEPS = [
@@ -100,7 +101,7 @@ def main() -> int:
     conn.sendall(PR.ready("barprobe", "none", 1, 1, 1).encode())
     conn.sendall(PR.doc(H.document()).encode())
     conn.sendall(Frame("OPTIONSEND", {}).encode())
-    conn.sendall(PR.text_frame("append", "plain", 1,
+    conn.sendall(PR.text_frame("append", ENC_RAW, 1,
                                H.notice("barprobe: driving the bar states")
                                .encode("cp1252", "replace")).encode())
     time.sleep(1.5)

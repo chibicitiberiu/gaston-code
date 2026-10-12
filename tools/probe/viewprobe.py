@@ -38,6 +38,7 @@ toolkit.on_path()
 
 from bridge.view import html as H  # noqa: E402
 from bridge.wire import protocol as PR  # noqa: E402
+from bridge.wire.compress import ENC_RAW  # noqa: E402
 from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
 
 
@@ -95,16 +96,21 @@ def main() -> int:
         ("tool result", H.tool_result("VOLUME IN DRIVE C IS WIN98\n"
                                       " 3 FILE(S)      1,234 BYTES")),
         ("tool error", H.tool_result("Access denied.", error=True)),
-        ("markdown", H.inline("**bold**, `code`, and a [link](http://x/) "
-                              "with <escaping> to check")),
+        # No link case: there is no [text](url) run. `_INLINE` has three
+        # groups -- code, bold, em -- and `inline("[t](http://x/)")` returns
+        # its input. This read as a link test until 2026-10-12 and was
+        # silently passing on the escaping instead.
+        ("inline runs", H.inline("**bold**, _em_, `code`, nested "
+                                 "**bold with `code` inside**, and "
+                                 "<escaping> & \"quotes\" to check")),
     ]
     for name, markup in checks:
-        send(PR.text_frame("append", "plain", 1, markup.encode("cp1252",
-                                                               "replace")))
+        send(PR.text_frame("append", ENC_RAW, 1, markup.encode("cp1252",
+                                                              "replace")))
         print(f"  sent {name}")
         time.sleep(0.2)
 
-    send(PR.text_frame("append", "plain", 1,
+    send(PR.text_frame("append", ENC_RAW, 1,
                        H.notice("if you can read every line above, the "
                                 "MSHTML host and the view class both work"
                                 ).encode("cp1252", "replace")))
