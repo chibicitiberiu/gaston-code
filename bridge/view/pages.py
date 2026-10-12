@@ -44,6 +44,58 @@ HARD_LINES = MAX_LINES * 2
 HARD_BLOCKS = MAX_BLOCKS * 2
 
 
+class Transcript:
+    """The transcript: every record, in order, and nothing else.
+
+    What `Paginator` becomes once the client asks for blocks by range
+    (`docs/stage3b-plan.md`). It is append-only and it has no opinion about
+    where a page begins, because after stage 3 a record is indivisible and
+    every boundary is safe -- so the only thing left to decide is how many
+    records the reader wants, and the reader is the one with the memory
+    constraint.
+
+    IT LANDS BEFORE IT IS USED, and `Paginator` feeds it on every write, so
+    the cutover has something to compare against: `test_pages.py`'s
+    equivalence test asserts that the pages' records flattened in order are
+    the same list, record for record, that this holds. That is the whole
+    safety argument for deleting the pages, and it is cheap -- a second list
+    of references to the same bytes objects, not a second copy of the
+    transcript.
+    """
+
+    def __init__(self) -> None:
+        self._records: list[bytes] = []
+
+    def add(self, record: bytes) -> int:
+        """Append one record. Returns the index it landed at."""
+        self._records.append(record)
+        return len(self._records) - 1
+
+    @property
+    def count(self) -> int:
+        return len(self._records)
+
+    def range(self, offset: int, limit: int) -> list[bytes]:
+        """`limit` records starting at `offset`, zero-based.
+
+        OUT OF RANGE IS EMPTY, NOT AN ERROR. A guest asking for a range that
+        the transcript has since shrunk past -- which `reset` does on a
+        conversation switch -- should get an empty answer and a total it can
+        believe, not a refusal it has to have a recovery path for. The one
+        thing that IS an error is a negative offset, because that is a bug on
+        the asking side rather than a race.
+        """
+        if offset < 0:
+            raise ValueError(f"offset {offset} is negative")
+        if limit <= 0:
+            return []
+        return self._records[offset:offset + limit]
+
+    def all_records(self) -> list[bytes]:
+        """Every record, in order. For the export."""
+        return list(self._records)
+
+
 @dataclass
 class PageRun:
     """A run of whole records, in order.
@@ -152,6 +204,9 @@ class Paginator:
         self.hard_blocks = max_blocks * 2
         self._pages: list[Page] = [Page(number=1)]
         self._anchors: list[Anchor] = []
+        #: The same records, in the same order, without the page boundaries.
+        #: Fed by `write`; this is what survives stage 3b.
+        self._transcript = Transcript()
 
     # --- state -------------------------------------------------------------
 
@@ -167,9 +222,18 @@ class Paginator:
     def anchors(self) -> list[Anchor]:
         return list(self._anchors)
 
+    @property
+    def transcript(self) -> Transcript:
+        return self._transcript
+
     def all_records(self) -> list:
-        """Every record in the transcript, in order. For the export."""
-        return [rec for p in self._pages for rec in p.records]
+        """Every record in the transcript, in order. For the export.
+
+        FROM THE TRANSCRIPT, not from the pages, since stage 3b's A2 -- the
+        two are asserted equal by `test_pages.py` and this is the caller
+        that proves it in production rather than only in a test.
+        """
+        return self._transcript.all_records()
 
     def all_text(self) -> str:
         """Every page's HTML, in order, as one string.
@@ -244,6 +308,7 @@ class Paginator:
             page = self.live
 
         page.add(record)
+        self._transcript.add(record)
         return sealed, [(page.number, record)]
 
     def message_boundary(self) -> Page | None:

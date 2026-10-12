@@ -15,12 +15,15 @@ section for what replaced them and why deleting the arm alone would have
 hung the caller.
 """
 
+import pytest
+
 from bridge.view.blocks import Block, encode
 from bridge.view.pages import (
                                HARD_BYTES,
                                MAX_BYTES,
                                MAX_LINES,
                                Paginator,
+                               Transcript,
                                )
 
 
@@ -436,3 +439,62 @@ def test_writing_an_oversize_record_terminates():
     for _ in range(5):
         p.write(big(5000))
     assert p.count >= 5
+
+
+# --- the transcript, which is what the pages become (stage 3b A2) ----------
+#
+# These do not test pagination. They test that the append-only Transcript
+# `Paginator` now feeds holds exactly what the pages hold, in the same order,
+# which is the entire safety argument for deleting the pages in B3. They
+# outlive this file.
+
+
+def test_the_transcript_holds_what_the_pages_hold():
+    """Record for record, in order, over a corpus that seals several times."""
+    p = Paginator(max_bytes=2048, max_blocks=8)
+    for i in range(200):
+        p.add(f"para\nt line {i:04d} padding padding padding\n.\n".encode())
+        if i % 7 == 0:
+            p.message_boundary()
+
+    from_pages = [rec for pg in p._pages for rec in pg.records]
+    assert p.transcript.count == len(from_pages)
+    assert p.transcript.all_records() == from_pages
+    assert p.all_records() == from_pages
+    # And it really did seal, or the assertion above proves nothing.
+    assert p.count > 5
+
+
+def test_a_range_is_a_window_on_the_transcript():
+    t = Transcript()
+    for i in range(10):
+        assert t.add(f"r{i}".encode()) == i
+    assert t.count == 10
+    assert t.range(0, 3) == [b"r0", b"r1", b"r2"]
+    assert t.range(8, 5) == [b"r8", b"r9"]      # short at the end
+    assert t.range(10, 5) == []                  # at the end
+    assert t.range(99, 5) == []                  # past it, not an error
+    assert t.range(0, 0) == []
+    assert t.range(0, -1) == []
+
+
+def test_a_negative_offset_is_a_bug_on_the_asking_side():
+    """Empty for a range past the end, because the transcript can shrink
+    under a guest; an exception for a negative one, because nothing races
+    an offset below zero."""
+    t = Transcript()
+    t.add(b"r0")
+    with pytest.raises(ValueError):
+        t.range(-1, 5)
+
+
+def test_the_transcript_survives_a_record_too_large_for_a_page():
+    """The paginator gives an oversize record a page of its own. The
+    transcript does not care, and that is the point."""
+    p = Paginator(max_bytes=512, max_blocks=4)
+    big = b"para\nt " + b"x" * 4096 + b"\n.\n"
+    p.add(b"para\nt small\n.\n")
+    p.add(big)
+    p.add(b"para\nt after\n.\n")
+    assert p.transcript.all_records() == [b"para\nt small\n.\n", big,
+                                          b"para\nt after\n.\n"]
