@@ -26,6 +26,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from ..wire import fold
+
 APPEND = "append"
 LIVE = "live"
 
@@ -178,7 +180,7 @@ def table_block(lines: list[str]) -> Block:
     payload: list[tuple[str, str]] = []
     for r in ([head] if header else []) + body:
         payload.append(("r", ""))
-        payload.extend(("c", c) for c in r)
+        payload.extend(("c", runs(clean(c))) for c in r)
     return Block("table", {"header": header}, payload)
 
 
@@ -200,20 +202,20 @@ TOOL_RESULT_MAX = 1200
 
 def user_turn(text: str) -> Block:
     """One user message, as its own block."""
-    return Block("user", {}, [("t", ln)
+    return Block("user", {}, [("t", clean(ln))
                               for ln in (text.strip().splitlines() or [""])])
 
 
 def notice(text: str) -> Block:
-    return Block("notice", {}, [("t", text)])
+    return Block("notice", {}, [("t", clean(text))])
 
 
 def error(text: str) -> Block:
-    return Block("error", {}, [("t", text)])
+    return Block("error", {}, [("t", clean(text))])
 
 
 def tool_call(name: str, summary: str) -> Block:
-    return Block("tool", {}, [("n", name), ("t", summary)])
+    return Block("tool", {}, [("n", clean(name)), ("t", clean(summary))])
 
 
 def tool_result(body: str, *, error: bool = False) -> Block:
@@ -231,21 +233,24 @@ def tool_result(body: str, *, error: bool = False) -> Block:
     attrs = {"error": 1 if error else 0}
     if len(body) > TOOL_RESULT_MAX:
         attrs["clipped"] = len(body) - TOOL_RESULT_MAX
-    return Block("toolresult", attrs, [("t", ln) for ln in kept.split("\n")])
+    return Block("toolresult", attrs,
+                 [("t", clean(ln)) for ln in kept.split("\n")])
 
 
 def code_block(text: str, lang: str = "") -> Block:
-    payload: list[tuple[str, str]] = [("l", lang)] if lang else []
-    payload.extend(("t", ln) for ln in text.split("\n"))
+    payload: list[tuple[str, str]] = [("l", clean(lang))] if lang else []
+    payload.extend(("t", clean(ln)) for ln in text.split("\n"))
     return Block("code", {}, payload)
 
 
 def para(text: str) -> Block:
-    return Block("para", {}, [("t", ln) for ln in text.split("\n")])
+    return Block("para", {}, [("t", runs(clean(ln)))
+                              for ln in text.split("\n")])
 
 
 def thinking(text: str) -> Block:
-    return Block("thinking", {}, [("t", ln) for ln in text.split("\n")])
+    return Block("thinking", {}, [("t", clean(ln))
+                                  for ln in text.split("\n")])
 
 
 # --- the stream ------------------------------------------------------------
@@ -376,7 +381,7 @@ class BlockStream:
             out = self._start("heading")
             level = min(len(m.group(1)) + 2, 6)
             out.append(BlockUpdate(APPEND, Block("heading", {"level": level},
-                                                 [("t", m.group(2))])))
+                                                 [("t", runs(clean(m.group(2))))])))
             self._kind = None
             return out
 
@@ -455,16 +460,273 @@ class BlockStream:
             # Show it as a paragraph anyway: this is the first thing the reader
             # sees of a turn, and holding it back until a newline arrives is
             # exactly the stall the live block exists to avoid.
-            return Block("para", {}, [("t", x) for x in lines])
+            return Block("para", {}, [("t", runs(clean(x))) for x in lines])
 
         if self._kind == "code":
+            # LITERAL: cleaned but not marked. Inside a fence everything is
+            # text, which is the whole meaning of a fence.
             payload: list[tuple[str, str]] = []
             if self._lang:
-                payload.append(("l", self._lang))
-            payload.extend(("t", x) for x in lines)
+                payload.append(("l", clean(self._lang)))
+            payload.extend(("t", clean(x)) for x in lines)
             return Block("code", {}, payload)
         if self._kind == "table":
             return table_block(lines)
         if self._kind in ("para", "bullet", "numbered", "quote"):
-            return Block(self._kind, {}, [("t", x) for x in lines])
+            return Block(self._kind, {},
+                         [("t", runs(clean(x))) for x in lines])
         return None
+
+
+# --- inline runs, as marks -------------------------------------------------
+#
+# The bridge finds the runs; the client draws them. A client with no layout
+# engine wants to know that a stretch of text is code, not that it is wrapped
+# in <code>.
+#
+# THE ENCODING IS A STACK, NOT A FLAG BYTE. An earlier draft of the plan used
+# a flat 3-bit state per character on three claims, all of which are false and
+# all of which were checked by running the old renderer:
+#
+#   * <b><code>x</code></b> and <code><b>x</b></code> do NOT render alike.
+#     `code` is specified with the `font:` SHORTHAND, which resets
+#     font-weight and font-style, so the nesting order is visible.
+#   * Nesting reaches depth three: "__a *b `c` d* e__" is
+#     <b>a <i>b <code>c</code> d</i> e</b>.
+#   * A flat state is lossy: "**a****b**" is <b>a</b><b>b</b>, two spans that
+#     a run list cannot tell from one.
+#
+#: Opens a span. Followed by exactly one letter naming which.
+MARK_OPEN = "\x01"
+#: Closes the innermost open span. Provably sufficient: the inline parser
+#: concatenates balanced fragments, so the output is always well-nested.
+MARK_CLOSE = "\x02"
+
+#: Letter -> what the run means. Semantic, not an element: `s` is strong, not
+#: bold, because a teletype client underlines it and a speech client stresses
+#: it, and neither draws a <b>.
+SPANS = {"c": "code", "s": "strong", "e": "emphasis"}
+
+#: Depth is structurally bounded at three and the bound is CHECKED rather
+#: than assumed: **X**/*X* exclude * from X and __X__/_X_ exclude _, so a
+#: chain uses at most one *-family level, one _-family level and code.
+MAX_SPAN_DEPTH = 3
+
+#: The three bytes a record cannot carry as content. \x00 truncates a block
+#: in the DOM (see link.py), and the other two are the marks themselves.
+RESERVED = "\x00\x01\x02"
+
+
+def clean(text: str) -> str:
+    """Drop the bytes a record reserves. Model text, before anything else.
+
+    HERE, AND NOT IN THE ENCODER, which is where the plan first put it and
+    where it cannot work: by the time a payload reaches the encoder it is
+    full of \\x01 and \\x02 that this function would strip, and the record
+    would arrive as one unstyled run. The strip has to happen upstream of the
+    marks, which means at the moment model text becomes payload.
+
+    Not in `fold` either: fold.encode short-circuits on text.isascii(), so a
+    NUL never reaches _fold_char, and protocol.py routes every header value
+    through the same function.
+    """
+    if not text:
+        return text
+    for ch in RESERVED:
+        if ch in text:
+            text = text.replace(ch, "")
+    return text
+
+
+def runs(text: str, _depth: int = 0) -> str:
+    """One line of prose, with its inline runs marked. No markup.
+
+    Code spans do not recurse, which matches the old renderer: backticks win
+    and everything inside them is literal.
+    """
+    out = []
+    pos = 0
+    for m in _INLINE.finditer(text):
+        if m.start() > pos:
+            out.append(text[pos:m.start()])
+        if m.group("code"):
+            out.append(MARK_OPEN + "c" + m.group("code")[1:-1] + MARK_CLOSE)
+        elif m.group("bold"):
+            inner = m.group("bold")[2:-2]
+            out.append(MARK_OPEN + "s"
+                       + (runs(inner, _depth + 1)
+                          if _depth < MAX_SPAN_DEPTH else inner)
+                       + MARK_CLOSE)
+        else:
+            inner = m.group("em")[1:-1]
+            out.append(MARK_OPEN + "e"
+                       + (runs(inner, _depth + 1)
+                          if _depth < MAX_SPAN_DEPTH else inner)
+                       + MARK_CLOSE)
+        pos = m.end()
+    if pos < len(text):
+        out.append(text[pos:])
+    return "".join(out)
+
+
+def span_depth(text: str) -> int:
+    """The deepest nesting in a marked string. For the bound's own test."""
+    depth = best = 0
+    i = 0
+    while i < len(text):
+        if text[i] == MARK_OPEN and i + 1 < len(text) and text[i + 1] in SPANS:
+            depth += 1
+            best = max(best, depth)
+            i += 2
+            continue
+        if text[i] == MARK_CLOSE and depth:
+            depth -= 1
+        i += 1
+    return best
+
+
+# --- the record codec ------------------------------------------------------
+#
+# THE RECORD LIVES IN THE FRAME BODY, not in frame headers, and the frame
+# headers do not change. Headers were the first design and three things
+# argued it down:
+#
+#   * A 90-block page goes out as ONE deflated frame today, because Page.add
+#     coalesces same-style runs. One frame per block costs ~40 header bytes
+#     each plus an independent deflate per frame, on a 5 KB/s link.
+#   * An export would become thousands of frames and would rewrite
+#     ChunkSink's offset protocol to do it.
+#   * The composite kinds need a body parser regardless, so headers would
+#     have saved the key=value scan and encoded the kind twice.
+#
+#     <kind> [<attr>=<value>]*   LF   first line, ASCII, bounded
+#     <tag>[ <payload>]          LF   zero or more
+#     .                          LF   end of record
+#
+# No dot-stuffing. A payload line always begins with its tag letter and only
+# the terminator begins with '.', so the ambiguity dot-stuffing exists to
+# solve cannot arise.
+
+#: The first line is ASCII and bounded, because it is the one line a reader
+#: must parse before it knows what it is reading. Attributes are small
+#: integers and bounded enumerations; anything a model can grow is a payload
+#: line instead.
+MAX_HEAD = 128
+
+#: Refused rather than truncated. The client declares its own limit at the
+#: handshake (`maxblock`); this is the bridge's own sanity bound.
+MAX_RECORD = 1 << 20
+
+
+class RecordError(ValueError):
+    """A record that cannot be built or cannot be read."""
+
+
+def encode(block: Block) -> bytes:
+    """One record, folded and ready for a frame body.
+
+    Folded HERE rather than by the caller, so that `pack` measures the bytes
+    that actually go on the wire. Folding EXPANDS -- an ellipsis becomes
+    three dots and an em dash becomes two hyphens -- so a budget counted in
+    characters is not a budget.
+    """
+    allowed_attrs, allowed_tags = KINDS.get(block.kind, ((), ()))
+    if block.kind not in KINDS:
+        raise RecordError(f"unknown kind {block.kind!r}")
+
+    head = [block.kind]
+    for k in sorted(block.attrs):
+        if k not in allowed_attrs:
+            raise RecordError(f"{block.kind} has no attribute {k!r}")
+        lo, hi = ATTRS[k]
+        v = int(block.attrs[k])
+        if not lo <= v <= hi:
+            raise RecordError(f"{k}={v} is outside {lo}..{hi}")
+        head.append(f"{k}={v}")
+    line = " ".join(head)
+    if len(line) > MAX_HEAD:
+        raise RecordError(f"head is {len(line)} bytes, over {MAX_HEAD}")
+
+    out = [line.encode("ascii")]
+    for tag, text in block.payload:
+        if len(tag) != 1 or not tag.isascii() or not tag.isalpha():
+            raise RecordError(f"tag {tag!r} is not one ASCII letter")
+        if tag not in allowed_tags:
+            raise RecordError(f"{block.kind} has no payload tag {tag!r}")
+        # A tag alone is a line with no payload, and that is load-bearing: a
+        # blank line in a pasted message is an empty `t`, and without it the
+        # blank lines vanish.
+        out.append(fold.encode(tag + (" " + text if text else "")))
+    out.append(b".")
+    data = b"\n".join(out) + b"\n"
+    if len(data) > MAX_RECORD:
+        raise RecordError(f"record is {len(data)} bytes, over {MAX_RECORD}")
+    return data
+
+
+def pack(items: list[Block], budget: int) -> list[bytes]:
+    """Records grouped into frame bodies, each within `budget` BYTES.
+
+    A record is never split. A frame body is zero or more WHOLE records, and
+    zero is real -- an empty LIVE body is what clears the open slot.
+
+    A single record larger than the budget gets a body of its own, whole,
+    rather than being cut: half a record is not a smaller record, it is two
+    fragments the client must refuse. Bounding it is the client's job, via
+    the `maxblock` it declares at the handshake.
+    """
+    bodies: list[bytes] = []
+    cur: list[bytes] = []
+    size = 0
+    for b in items:
+        rec = encode(b)
+        if cur and size + len(rec) > budget:
+            bodies.append(b"".join(cur))
+            cur, size = [], 0
+        cur.append(rec)
+        size += len(rec)
+    if cur:
+        bodies.append(b"".join(cur))
+    return bodies
+
+
+def decode(data: bytes) -> list[Block]:
+    """Records back to Blocks. For tests and for the agreement check.
+
+    Nothing in production calls this -- the guest is the only reader of a
+    record. It exists so that the encoder can be tested against something
+    other than a golden string, and so the guest's parser has a second
+    opinion to disagree with.
+    """
+    text = fold.decode(data)
+    out: list[Block] = []
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    i = 0
+    while i < len(lines):
+        head = lines[i]
+        i += 1
+        parts = head.split(" ")
+        kind = parts[0]
+        if kind not in KINDS:
+            raise RecordError(f"unknown kind {kind!r}")
+        attrs: dict[str, int] = {}
+        for p in parts[1:]:
+            if "=" not in p:
+                raise RecordError(f"bad attribute {p!r}")
+            k, _, v = p.partition("=")
+            if k not in ATTRS:
+                raise RecordError(f"unknown attribute {k!r}")
+            attrs[k] = int(v)
+        payload: list[tuple[str, str]] = []
+        while True:
+            if i >= len(lines):
+                raise RecordError("record ended without a terminator")
+            ln = lines[i]
+            i += 1
+            if ln == ".":
+                break
+            payload.append((ln[0], ln[2:] if len(ln) > 1 else ""))
+        out.append(Block(kind, attrs, payload))
+    return out

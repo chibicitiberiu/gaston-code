@@ -500,6 +500,20 @@ caller, and a test re-point lands with the change that breaks it** — never ear
    `htmlrender.py` is the oracle for the rest of the stage.
 5. **A5 — the record codec, bridge-side only.** `encode`, `pack(records, budget_bytes)` which
    folds as it measures and never splits a record, `decode` for tests, and the payload sanitiser.
+   **Two corrections, both found by writing it.**
+   **The sanitiser cannot live in `blocks.encode`.** By the time a payload reaches the encoder it
+   is full of `\x01` and `\x02`, so a strip there would remove the marks themselves and the
+   record would arrive as one unstyled run. It has to be upstream of the marks — `clean()`, at
+   the moment model text becomes payload — which also means `Block.payload` is clean by
+   construction and the encoder has nothing to sanitise.
+   **And A1's strip does NOT come out here.** It can only go once no caller can hand `send_html`
+   unclean text, and three producers still hand-build markup at A5: `permissions.py` (A8),
+   `sessions.py` (A9) and `presentation.py`'s thinking path (A10). It comes out at **C2**, when
+   `send_html` stops carrying TEXT at all.
+   **The inline marks land here too**, because the record shape is first realised here: the parse
+   emits `\x01`/`\x02` into the payload and `htmlrender` grows a `spans()` that consumes them.
+   Doing it any later would mean B2 comparing two different inputs — a record with marks against
+   a Block with raw markdown — instead of the same record on both sides.
    *Proves:* round-trip properties over every kind, every nesting the grammar produces (depth
    three, same-kind nesting, adjacent same-state runs), an empty payload, a tag-only line, a
    record over budget refused, and `pack` never emitting a body that ends mid-record.

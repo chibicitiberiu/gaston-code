@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import html as _html
 
-from .blocks import _INLINE, Block
+from .blocks import MARK_CLOSE, MARK_OPEN, Block
 
 #: Where a tool-result line is broken if nothing else breaks it. MEASURED, in
 #: the client's default 640x480 window on the Athlon (2026-10-03): a result
@@ -57,27 +57,67 @@ def esc(text: str) -> str:
     return _html.escape(text, quote=False)
 
 
-def inline(text: str) -> str:
-    """Inline spans within one line."""
-    out = []
-    pos = 0
-    for m in _INLINE.finditer(text):
-        if m.start() > pos:
-            out.append(esc(text[pos:m.start()]))
-        if m.group("code"):
-            out.append("<code>" + esc(m.group("code")[1:-1]) + "</code>")
-        elif m.group("bold"):
-            # Recurse: `code` inside **bold** is common, and escaping the inner
-            # span instead of parsing it puts literal backticks on screen.
-            # The delimiters are stripped first, so this cannot re-match the
-            # span it is already inside.
-            out.append("<b>" + inline(m.group("bold")[2:-2]) + "</b>")
-        else:
-            out.append("<i>" + inline(m.group("em")[1:-1]) + "</i>")
-        pos = m.end()
-    if pos < len(text):
-        out.append(esc(text[pos:]))
+#: Mark letter -> the element IE5 gets. The only place in the bridge that
+#: knows a run's letter means a tag, and the guest's view.tpl is the place
+#: that will know it instead.
+_SPAN_TAG = {"c": "code", "s": "b", "e": "i"}
+
+
+def spans(text: str) -> str:
+    """One marked line, as HTML. Escapes everything that is not a mark.
+
+    The stack is a real stack and not a bitmask or a slot per kind, because a
+    kind nests inside itself: "_a *b* c_" is <i>a <i>b</i> c</i>.
+
+    An unclosed run at the end is closed here rather than left dangling. A
+    LIVE update carries the open block mid-write, so a truncated one is
+    normal and not an error -- and handing MSHTML an unbalanced <b> leaks the
+    styling into everything appended after it.
+    """
+    out: list[str] = []
+    stack: list[str] = []
+    run: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == MARK_OPEN and i + 1 < n and text[i + 1] in _SPAN_TAG:
+            out.append(esc("".join(run)))
+            run = []
+            tag = _SPAN_TAG[text[i + 1]]
+            stack.append(tag)
+            out.append("<" + tag + ">")
+            i += 2
+            continue
+        if c == MARK_CLOSE and stack:
+            out.append(esc("".join(run)))
+            run = []
+            out.append("</" + stack.pop() + ">")
+            i += 1
+            continue
+        # A stray mark with no letter, or a close with nothing open, is
+        # dropped rather than shown. It cannot come from the parser; it could
+        # come from a record built by hand or cut in the wrong place.
+        if c in (MARK_OPEN, MARK_CLOSE):
+            i += 1
+            continue
+        run.append(c)
+        i += 1
+    out.append(esc("".join(run)))
+    while stack:
+        out.append("</" + stack.pop() + ">")
     return "".join(out)
+
+
+def inline(text: str) -> str:
+    """Markdown source straight to HTML, in one step.
+
+    The old path, kept because the shim's callers and three tests name it.
+    After C2 nothing on the bridge renders, and this is where the two halves
+    are still visible as one function: parse to marks, then draw them.
+    """
+    from .blocks import clean, runs
+    return spans(runs(clean(text)))
 
 
 def fold_long_lines(text: str, width: int = TOOL_WRAP_COL) -> str:
@@ -121,7 +161,7 @@ def fold_long_lines(text: str, width: int = TOOL_WRAP_COL) -> str:
 
 
 def _prose(block: Block, joiner: str = "<br>") -> str:
-    return joiner.join(inline(t) for t in block.texts())
+    return joiner.join(spans(t) for t in block.texts())
 
 
 def _clip(dropped: int) -> str:
@@ -148,7 +188,7 @@ def _table(block: Block) -> str:
     out = ["<table>"]
     for i, r in enumerate(rows):
         cell = "th" if (header and i == 0) else "td"
-        out.append("<tr>" + "".join(f"<{cell}>{inline(c)}</{cell}>"
+        out.append("<tr>" + "".join(f"<{cell}>{spans(c)}</{cell}>"
                                     for c in r) + "</tr>")
     out.append("</table>")
     return "".join(out)
@@ -195,9 +235,9 @@ _RENDER = {
     "para":          lambda b: "<p>" + _prose(b) + "</p>",
     "code":          _code,
     "heading":       _heading,
-    "bullet":        lambda b: "<ul>" + "".join(f"<li>{inline(x)}</li>"
+    "bullet":        lambda b: "<ul>" + "".join(f"<li>{spans(x)}</li>"
                                                 for x in b.texts()) + "</ul>",
-    "numbered":      lambda b: "<ol>" + "".join(f"<li>{inline(x)}</li>"
+    "numbered":      lambda b: "<ol>" + "".join(f"<li>{spans(x)}</li>"
                                                 for x in b.texts()) + "</ol>",
     "quote":         lambda b: "<blockquote>" + _prose(b) + "</blockquote>",
     "rule":          lambda b: "<hr>",
