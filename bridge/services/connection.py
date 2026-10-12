@@ -22,7 +22,6 @@ from .. import prefs as prefs_mod
 from ..agent import policy, profiles, toolrep, toolrules
 from ..guest import GuestSession
 from ..synccoord import SyncCoordinator
-from ..view.pages import Paginator
 from ..view.transcript import TranscriptView
 from ..wire import fold
 from ..wire.link import GuestLink
@@ -40,7 +39,7 @@ class ConnectionService:
     def __init__(
         self,
         config: BridgeConfig,
-        create_guest: Callable[[int, int], Any] | None = None,
+        create_guest: Callable[[], Any] | None = None,
         on_attach: Callable[[Any, bool], Any] | None = None,
         handle_frame: Callable[[Any, Frame], Any] | None = None,
         on_lost: Callable[[Any], None] | None = None,
@@ -213,13 +212,11 @@ class ConnectionService:
             return None
 
         caps = neg.caps
-        # UNSCALED. The page size used to be worked out here, from HELLO's
-        # mem_kb and the client's view.page preference. Stage 3b moved both
-        # halves to the client and did not replace them with a declaration:
-        # a window is whatever the GETBLOCKS in front of the bridge asks
-        # for. What is left is the paginator's own constructor arguments,
-        # which go when the paginator does.
-        page_bytes, page_blocks = neg.page_bytes, neg.page_blocks
+        # The page size used to be worked out here, from HELLO's mem_kb and
+        # the client's view.page preference, and handed to a Paginator.
+        # Stage 3b moved both halves to the client and did not replace them
+        # with a declaration: a window is whatever the GETBLOCKS in front of
+        # the bridge asks for, and what it is asking of is a list.
         log.info("guest has %d MB", neg.mem_kb // 1024)
         log.info("client rules: %s", caps.summary())
         if client_prefs.declared:
@@ -282,16 +279,12 @@ class ConnectionService:
 
         if self.guest is None:
             if self.create_guest:
-                self.guest = self.create_guest(page_bytes, page_blocks)
+                self.guest = self.create_guest()
             else:
                 mod = sys.modules.get("bridge.server")
                 guest_cls = getattr(mod, "GuestSession", None) if mod else None
                 if guest_cls:
-                    self.guest = guest_cls(
-                        view=TranscriptView(
-                            pages=Paginator(page_bytes, page_blocks)
-                        )
-                    )
+                    self.guest = guest_cls(view=TranscriptView())
 
         guest = self.guest
         if guest is None:
@@ -299,8 +292,6 @@ class ConnectionService:
             return None
 
         guest.link.writer = writer
-        guest.view.page_bytes = page_bytes
-        guest.view.page_blocks = page_blocks
         # HERE, and not alongside the page limits in options.py, which is the
         # trap the stage-3 plan named: limits_for has TWO production callers
         # -- this one and the PREFS handler -- and PREFS is the user's

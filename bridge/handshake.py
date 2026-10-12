@@ -32,7 +32,6 @@ import secrets
 from dataclasses import dataclass
 
 from .files import caps as C
-from .view.pages import limits_for
 from .wire.protocol import MAX_FRAME, PROTO_VERSION
 
 
@@ -55,8 +54,6 @@ class Handshake:
     from."""
 
     caps: C.Caps
-    page_bytes: int
-    page_blocks: int
     mem_kb: int
 
 
@@ -118,7 +115,6 @@ def negotiate(headers: dict, secret: str) -> Handshake:
     # bigger page than the 32MB floor the design is built around, and the
     # handshake is the only place the bridge learns which it has.
     mem_kb = _int(headers, "mem_kb", "bad_mem")
-    page_bytes, page_blocks = limits_for(mem_kb)
 
-    return Handshake(caps=caps, page_bytes=page_bytes,
-                     page_blocks=page_blocks, mem_kb=mem_kb)
+
+    return Handshake(caps=caps, mem_kb=mem_kb)

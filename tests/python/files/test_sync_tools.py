@@ -29,8 +29,8 @@ def _committed_guest(local: str, guest_root: str):
     these tests reach, and the paths around it want `sync_lock` and the rest
     of the machinery a namespace does not have.
     """
-    from bridge.server import GuestSession, Paginator, TranscriptView
-    g = GuestSession(view=TranscriptView(pages=Paginator(4096, 90)))
+    from bridge.server import GuestSession, Transcript, TranscriptView
+    g = GuestSession(view=TranscriptView(pages=Transcript()))
     g.work_dir = local
     g.work_guest = guest_root
     return g

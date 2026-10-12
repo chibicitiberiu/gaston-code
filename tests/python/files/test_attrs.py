@@ -136,8 +136,8 @@ def test_sync_status_explains_the_rules_to_the_agent(tmp_path, monkeypatch):
     b.config.sync_state = str(state)
     # A conversation with a folder: without one nothing is mirrored and the
     # status is a sentence saying so rather than a report about a tree.
-    from bridge.server import GuestSession, Paginator, TranscriptView
-    b.connection.guest = GuestSession(view=TranscriptView(pages=Paginator(4096, 90)))
+    from bridge.server import GuestSession, Transcript, TranscriptView
+    b.connection.guest = GuestSession(view=TranscriptView(pages=Transcript()))
     b.connection.guest.work_dir = str(root)
     b.connection.guest.work_guest = "C:\\WORK"
     b.connection.guest.guest_sync_root = "C:\\WORK"

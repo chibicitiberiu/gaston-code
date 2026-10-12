@@ -28,15 +28,8 @@ from dataclasses import dataclass, field
 
 from ..wire.coalesce import Coalescer
 from .blocks import BlockStream
-from .pages import Paginator
+from .pages import Transcript
 
-#: Paginator's own defaults, used when a guest's scaled limits are still 0
-#: -- either genuinely unset (limits_for() has not run yet, e.g. a bare
-#: GuestSession in a unit test) or the harmless `0 or 16384` case
-#: `reset()`'s docstring explains. Named so `16384`/`90` are not typed
-#: twice in this file.
-DEFAULT_PAGE_BYTES = 16384
-DEFAULT_PAGE_BLOCKS = 90
 #: What a client that did not declare one gets. The same 90 the bridge used
 #: to compute for a 32MB guest -- a floor, not a policy: every real client
 #: says, and stage 3b's point is that the one with the memory constraint is
@@ -51,7 +44,7 @@ class TranscriptView:
     #: The transcript lives here, in full. The guest only ever holds one
     #: page, which is what bounds its memory by page size rather than by
     #: conversation length.
-    pages: Paginator = field(default_factory=Paginator)
+    pages: Transcript = field(default_factory=Transcript)
     #: The PARSER, not a renderer -- stage 3 C2. It was an HtmlStream and
     #: the field was called `render`, which stopped being true when the
     #: markup moved to the client: what this produces is structure, and
@@ -73,9 +66,6 @@ class TranscriptView:
     #: a malformed or truncated request, and it is the same 90 the bridge
     #: used to compute for a 32MB guest.
     block_limit: int = DEFAULT_BLOCK_LIMIT
-    #: Page caps for THIS guest, scaled to the RAM it reported in HELLO.
-    page_bytes: int = 0
-    page_blocks: int = 0
     #: How much of a tool result this guest wants to see, declared at the
     #: handshake from stage 3 C1. 0 means it did not say and blocks.py
     #: chooses; blocks.NO_TOOL_CAP means all of it.
@@ -91,17 +81,16 @@ class TranscriptView:
     deliver: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def reset(self) -> None:
-        """Start over: a fresh paginator and parser, every live coalescer
-        stopped and dropped, and the view back on LIVE.
+        """Start over: a fresh transcript and parser, every live coalescer
+        stopped and dropped, and the view back at the live end.
 
         `_new_session` and `_switch` each rebuilt this by hand, with their
         own copy of the default page limits -- one of them written as
-        `guest.view.page_bytes or None or 16384`, where `or None` did nothing at
-        all (`x or None` is `None` exactly when `x or 16384` would already
-        have chosen 16384). docs/audit/02-bridge-python.md 02.17/02.18.
+        `guest.view.page_bytes or None or 16384`, where `or None` did
+        nothing at all (docs/audit/02-bridge-python.md 02.17/02.18). There
+        are no limits to copy wrongly now: a transcript is a list.
         """
-        self.pages = Paginator(self.page_bytes or DEFAULT_PAGE_BYTES,
-                               self.page_blocks or DEFAULT_PAGE_BLOCKS)
+        self.pages = Transcript()
         self.parse = BlockStream()
         for c in self.coalescers.values():
             await c.stop()

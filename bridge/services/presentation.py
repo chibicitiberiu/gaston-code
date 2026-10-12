@@ -136,7 +136,7 @@ class PresentationService:
                         "declared it can hold; it was not sent",
                         len(record), self._maxblock(guest))
             return
-        guest.view.pages.write(record)
+        guest.view.pages.add(record)
 
         # TAGGED WITH THE PAGE IT LANDED ON, which is the fix for a bug
         # this rewrite exposed and did not introduce. The old code captured
@@ -162,7 +162,7 @@ class PresentationService:
         # doubles the frame count of a long turn, each frame its own write
         # and drain on a link measured in single digits of KB/s, to redraw
         # the same string in the page bar.
-        total = guest.view.pages.transcript.count
+        total = guest.view.pages.count
         async with guest.view.deliver:
             if stream and guest.view.view_live:
                 await self.connection.send_records(
@@ -200,7 +200,7 @@ class PresentationService:
         the limit the guest supplied rather than from any opinion here about
         what a page is.
         """
-        t = guest.view.pages.transcript
+        t = guest.view.pages
         limit = guest.view.block_limit
         if limit_s:
             try:

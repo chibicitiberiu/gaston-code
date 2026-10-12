@@ -62,7 +62,7 @@ async def test_write_block_refuses_markup(svc):
 async def test_the_record_reaches_the_paginator_whole(svc):
     s, guest, _conn = svc
     await s.write_block(guest, PROSE)
-    assert guest.view.pages.live.records == [RECORD]
+    assert guest.view.pages.all_records() == [RECORD]
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_the_live_arm_bypasses_write_block(svc):
     await s.write_updates(guest, [BlockUpdate(LIVE, PROSE)])
     assert conn.send_records.await_args.args[1] == RECORD
     assert conn.send_records.await_args.args[2] == LIVE
-    assert guest.view.pages.live.records == []
+    assert guest.view.pages.all_records() == []
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_a_record_over_the_client_s_declared_bound_is_refused(svc):
     guest.caps.maxblock = 200
     await s.write_block(guest, B.Block("code", {}, [("t", "x" * 5000)]))
     conn.send_records.assert_not_awaited()
-    assert guest.view.pages.live.records == []
+    assert guest.view.pages.all_records() == []
 
 
 # --- the client's declaration survives the user's settings ------------------

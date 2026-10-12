@@ -46,7 +46,7 @@ from .services.ui import UiService
 from .services.workspace import WorkspaceService
 from .view import html as H
 from .view.html import APPEND
-from .view.pages import Paginator
+from .view.pages import Transcript
 from .view.transcript import TranscriptView
 from .wire.protocol import (
     Frame,
@@ -68,8 +68,8 @@ __all__ = [
     "Frame",
     "GuestSession",
     "H",
-    "Paginator",
     "Session",
+    "Transcript",
     "TranscriptView",
     "init_logging",
     "load_config",
@@ -354,9 +354,9 @@ class Bridge:
 
     # --- connection --------------------------------------------------------
 
-    def _create_guest(self, page_bytes: int, page_blocks: int) -> GuestSession:
+    def _create_guest(self) -> GuestSession:
         g = GuestSession(
-            view=TranscriptView(pages=Paginator(page_bytes, page_blocks)),
+            view=TranscriptView(pages=Transcript()),
             synccoord=self.connection._preattach_synccoord,
         )
         self.permissions.attach(g, cwd=self.config.cwd)

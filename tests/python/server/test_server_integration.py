@@ -293,7 +293,7 @@ def _fill(guest, n: int, fmt: str = "line {:04d} padding padding padding\n"):
     deterministic than persuading a model to emit them."""
     for i in range(n):
         guest.view.pages.add(_rec(fmt.format(i)))
-    return guest.view.pages.transcript.count
+    return guest.view.pages.count
 
 
 async def test_a_window_comes_back_whole(harness):
