@@ -295,6 +295,12 @@ class ConnectionService:
         # single-instance mutex already enforces at the other end.
         held = self._guests.get(machine)
         if held is not None and held.link.connected:
+            # NAME THE MACHINE. "another client holds this session" with no
+            # id is unanswerable from a log when there are two machines and
+            # the question is which one collided.
+            log.warning("refused %s: %s is already attached",
+                        writer.get_extra_info("peername"),
+                        machine or "a client with no machine id")
             await self.try_send_raw(
                 writer, error("busy", "another client holds this session")
             )

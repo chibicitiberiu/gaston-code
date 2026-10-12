@@ -3,9 +3,9 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 3c — several guest machines.**
-Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12, stage 3b on
-2026-10-13. Phase 5 (Attach) shipped; 5.1 is
+**Current goal: `ROADMAP.md` stage 4 — the recorded decisions and the
+small repairs.** Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12,
+stages 3b and 3c on 2026-10-13. Phase 5 (Attach) shipped; 5.1 is
 below, and 5.2/5.3 went in without a write-up of their own. Phase 6 is
 part-built: `ui`, `input`, `shot`, `focus`, `launch`, `ps`, `kill` and the
 clipboard pair are live and measured on real hardware, while `ocr` and the
@@ -4394,6 +4394,65 @@ rendered in MSHTML and the wire reporting 2.43:1. That turn is also the proof
 for the GUID commit -- every one of the thirteen is exercised by that window
 existing. On the Athlon: self_update, uilaneprobe 15/15, clipprobe 8/8, and
 MSAA returning real roles from the box's own oleacc.
+
+---
+
+## Stage 3c -- several guest machines against one bridge (2026-10-13)
+
+R7. `ROADMAP.md` stage 3c, planned in `docs/stage3c-plan.md`. Six commits,
+`7c81fe5..342f4cf`. The exit condition was run on the two real machines:
+both attached at 01:35:56, two conversations, two mirrors, two baselines --
+`docs/measurements/two-guests-20261013.txt`.
+
+**The bug it closes was live.** `ConnectionService.guest` was one slot, so
+`is_reconnect` asked whether a GuestSession existed and never whose it was.
+A second machine connecting after the first had gone was a reconnect: attach
+replaced the link, caps, prefs and tools and left `claude` -- the live
+conversation -- along with work_dir, grants, mode_id, perms, sess_id and the
+whole transcript belonging to the previous machine. The person at the second
+keyboard got the first one's chat and nothing said so. Both of this
+project's machines talk to one bridge.
+
+Demonstrated rather than reasoned about: with the old `is_reconnect`
+restored, the new test fails on the transcript assertion.
+
+| what was shared | now |
+|---|---|
+| one `GuestSession` slot | `dict[machine_id, GuestSession]` |
+| one baseline per folder path | one per (machine, folder) |
+| one `SyncCoordinator` for every guest | one each |
+| one codepage per asyncio context | bound per guest in both loops |
+| `recent_prompts`, cleared nowhere | cleared with the chat |
+
+**Five things that were already per-guest in name only.** `synccoord` was a
+field of GuestSession -- and `_create_guest` handed every guest the SAME
+object, the one that exists before any guest does, so the field was
+cosmetic. `fold`'s codepage is a ContextVar, right for whichever guest
+attached first. `base_path` keyed on the guest root alone, so two machines
+mirroring `C:\WORK` shared one baseline with two `tree_id`s and refused each
+other's every pass, forever. `recent_prompts` was cleared by nothing at all.
+And six production paths resolved a guest out of process state when a caller
+passed none -- `agent/tools.py` had described that failure since it was
+written.
+
+**Two decisions the backlog asked for in writing.** The machine id and the
+baseline identity stay separate (§21's open question, answered): `machine`
+says who, `tree_id` exists to refuse a swapped disk, and unifying them means
+deciding which behaviour the one id keeps. And `machine` as a reconnect
+identity is an unauthenticated assertion, accepted as one (audit 04.21) --
+one shared secret per bridge, compared against a single `GASTON_SECRET`.
+
+**Nothing is migrated and nothing is deleted.** A baseline written before
+this stage records a root and no machine, and belongs to the first machine
+that comes back for it, which keeps its rows. On the real run the Athlon
+kept `base.json` and the VM got the keyed name.
+
+**What the real machines added over the fake ones.** The two-client tests
+are ordinary async tests and most of the stage is provable without
+hardware. What the hardware showed: the VM was still running a pre-3b
+client and was refused with `bad_version (bridge speaks 3, guest speaks 2)`
+-- stage 3b's version bump doing its job rather than letting a guest connect
+and silently fail to page.
 
 ---
 

@@ -34,7 +34,7 @@ in stage 1 for that reason.
 | 2 | Size: the flag decision and the gremote trim — **DONE 2026-10-11** | a measured before/after, and room in the caps for stage 3 |
 | 3 | The markup moves to the client — **DONE 2026-10-12** | a second client could be written without touching the bridge |
 | 3b | Pagination: the bridge stops dividing the transcript — **DONE 2026-10-13** | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
-| 3c | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
+| 3c | R7: several guest machines against one bridge — **DONE 2026-10-13** | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
@@ -354,46 +354,60 @@ ask is what makes the exit condition literally true.
 
 ---
 
-## Stage 3c — several guest machines against one bridge
+## Stage 3c — several guest machines against one bridge — DONE 2026-10-13
 
-R7. `BACKLOG.md` §7 (`:576`) is the decision record, §21 (`:2172`) the question it defers
-here. This section exists because the stage had a table row and nothing else, which is how
-it came to be postponed twice; `docs/stage3b-plan.md`'s sibling covers it in full.
+R7. Planned in `docs/stage3c-plan.md`; `BACKLOG.md` §7 is the decision record
+and §21 the question it answered. Six commits, `7c81fe5..342f4cf`.
 
-**What it is.** Two machines, two *different* conversations, at the same time. §7's answer
-is one mirror per conversation, so "two people work at once by working on different
-conversations". One conversation is never driven from two machines, and the tool surface
-forbids it anyway: the MCP server is named `machine` with no target argument
-(`bridge/agent/tools.py:1805`). Saying so matters because "several clients" reads like the
-other thing.
+**Exit condition, met on the real machines:** two guests hold two mirrors and
+two baselines at once. The QEMU guest and the Athlon, attached to one bridge
+at 01:35:56, in two conversations, with two mirrors and two baselines --
+`docs/measurements/two-guests-20261013.txt`.
 
-**What is in the way.** `ConnectionService.guest` (`bridge/services/connection.py:57`) is a
-single slot. A second *simultaneous* connection is refused process-wide rather than per
-machine (`:209-213`) -- and a second *sequential* one silently inherits the first machine's
-session, because `is_reconnect` is `self.guest is not None` (`:280`) and nothing compares
-HELLO's `machine`. Attach replaces the link, caps, prefs and tools and leaves the live
-conversation, work folder, grants, permission desk and transcript belonging to the previous
-machine. **Both of this project's machines connect to the same bridge, so that is reachable
-today**; the keying change is what makes it impossible rather than guarded against.
+**What it was.** `ConnectionService.guest` was a single slot. A second
+*simultaneous* client was refused process-wide, and a second *sequential* one
+silently inherited the first machine's session -- `is_reconnect` asked whether
+a GuestSession existed, never whose it was, so attach left the live
+conversation, work folder, grants, permission desk and transcript belonging to
+the previous machine. Both of this project's machines talk to one bridge, so
+that was reachable rather than theoretical.
 
-**Two decisions, both of which the backlog asked for in writing.**
+| what was shared | now |
+|---|---|
+| one `GuestSession` slot | a dict keyed by machine id |
+| one baseline per folder path | one per (machine, folder) |
+| one `SyncCoordinator` for every guest | one each; the first adopts the pre-attach queue |
+| one codepage binding per task | bound per guest in both background loops |
+| `recent_prompts`, cleared nowhere | cleared with the chat |
 
-- **The machine id and the sync baseline's identity stay separate** -- §21's open question,
-  answered. `machine` is a persistent GUID saying *who*; `tree_id` is volume-derived and
-  exists to refuse a swapped or reformatted disk (`bridge/files/syncrun.py:204-208`).
-  Unifying them would mean deciding which of the two behaviours the one id has and
-  rebuilding the other. Baselines key on **(machine, guest_root)** instead, which is the
-  actual defect: today two machines whose INI root is `C:\WORK` share one baseline file with
-  different `tree_id`s, and `scan_guest` then refuses both ways forever. The legacy
-  `base.json` rule stays, so nothing is migrated and nothing is deleted.
-- **`machine` as the reconnect identity is an unauthenticated assertion, accepted as such**
-  -- which is what audit 04.21 asked for rather than a per-client secret bolted on later.
-  There is one shared secret and it already grants everything; a client claiming another's
-  id inherits its transcript and its pending prompts.
+**Two decisions, both of which the backlog asked for in writing.** The machine
+id and the sync baseline's identity stay separate -- §21's open question,
+answered: `machine` says *who* and `tree_id` exists to refuse a swapped or
+reformatted disk, and unifying them would mean deciding which of the two
+behaviours the one id has. And `machine` as a reconnect identity is an
+**unauthenticated assertion, accepted as one** (audit 04.21): there is one
+shared secret per bridge, compared against a single `GASTON_SECRET`, so a
+client claiming another's id inherits its transcript exactly as before.
 
-**Exit condition:** two guests hold two mirrors and two baselines at once -- on the real
-hardware, the QEMU guest and the Athlon, in two conversations, writing into two mirrors,
-concurrently.
+### What is worth knowing afterwards
+
+- **Nothing on the bridge resolves a guest implicitly any more.** Six
+  production paths picked one out of process state when a caller passed none.
+  `agent/tools.py` had described that failure since it was written: the
+  command runs on whichever machine is attached rather than the one whose
+  conversation asked, and the permission prompt appears on the right person's
+  screen -- so it looks approved, because it WAS approved, for something else.
+- **`connection.guest` survives as test scaffolding**, which is a narrowing of
+  the plan said out loud: what makes two machines unsafe is production
+  resolving a guest implicitly, not a test reading one.
+- **Eviction is new behaviour on a path that deliberately had none.**
+  `reap_idle` kept a session so a reconnect reattached it, which was free with
+  one slot and is one retained SDK subprocess per machine id ever seen with a
+  dict.
+- **The real machines found the last stage's bug too**: the VM was still
+  running a pre-3b client and was refused with `bad_version (bridge speaks 3,
+  guest speaks 2)` -- stage 3b's version bump doing its job rather than
+  letting a guest connect and silently fail to page.
 
 ---
 

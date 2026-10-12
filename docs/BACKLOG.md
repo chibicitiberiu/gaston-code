@@ -605,7 +605,12 @@ the reason:
   `paths.check`'s existing arithmetic is unchanged.
 
 **[R -- 2026-10-10] R7 IS IN, and it is the larger reading: several guest
-machines against one bridge.** `docs/ROADMAP.md` gives it stage 3c, after the
+machines against one bridge. BUILT 2026-10-13, stage 3c** -- the bridge keys
+guests by machine id, baselines by (machine, folder), and two machines held
+two mirrors and two baselines at once on the real hardware
+(`docs/measurements/two-guests-20261013.txt`). The implementation list below
+is done except where it says otherwise; `docs/stage3c-plan.md` is the plan
+and `ROADMAP.md` stage 3c the outcome.** `docs/ROADMAP.md` gives it stage 3c, after the
 markup moves to the client and after pagination, and before the
 recorded-decisions stage. (It was 3b until stage 3 inserted pagination ahead
 of it; the number moved, the work did not.) Two things
@@ -620,6 +625,11 @@ settled with it:
   both reachable today, so the one item here that looked blocked on hardware is
   not. Whether the machine id and this section's baseline identity are the same
   id is still §21's open question, and stage 3c is where it gets answered.
+  **ANSWERED 2026-10-13: they stay separate.** `machine` says WHO and
+  `tree_id` exists to refuse a swapped or reformatted disk; unifying them
+  means deciding which of the two behaviours the single id keeps and giving
+  the other back by another route. The baseline is keyed on BOTH instead --
+  `(machine, guest_root)` -- which is what the deadlock actually needed.
 
 What this section's own decision does NOT give, stated plainly: two guests still
 share one mirror and one baseline, so it is not R7 and does not make multiple
@@ -2291,6 +2301,18 @@ cannot hold the file.
 which is the only place it can go: applied after the cap it would send a
 short list while the guest's own chats sat further down the fetch, which is
 the §21-adjacent bug this file opens with.
+
+**CLOSED 2026-10-13, stage 3c: they stay separate, and the baseline is
+keyed on both.** `machine` identifies a machine and `tree_id` is derived
+from the volume so that `scan_guest` can refuse a swapped or reformatted
+disk -- the two behaviours the paragraph below says cannot simply be
+merged. The deadlock that made this urgent is fixed by keying the baseline
+file on `(machine, guest_root)` rather than by unifying the ids, so the
+reformat guard is untouched. Nothing was migrated: a baseline written
+before the stage records a root and no machine and belongs to the first
+machine that comes back for it.
+
+The original question, kept for its reasoning:
 
 **Still open: whether this id and §7's baseline identity are the same id.**
 They should be, and this does not unify them -- deliberately. §7's `tree_id`

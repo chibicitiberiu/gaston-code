@@ -1,0 +1,61 @@
+Two guests, one bridge, at the same time
+========================================
+2026-10-13, stage 3c D7. ROADMAP's exit condition for the stage, run on
+the two real machines rather than on two fake clients.
+
+  QEMU Win98 SE guest   machine 6e4fc260-be09-11f1-8c3c-5254005ffe08
+  Athlon XP (TIBI)      machine 087dfc60-bde9-11f1-8c9c-00c026a0b99d
+
+Both attached to one bridge, both with a live conversation, both
+syncing, at 01:35-01:38.
+
+  01:35:56 guest identifies as 6e4fc260-...   attached sess=fc7495ec-...
+  01:35:56 guest identifies as 087dfc60-...   attached sess=a5757b18-...
+
+A second simultaneous client was refused process-wide before this stage
+("busy: another client holds this session"), without comparing machines.
+
+TWO MIRRORS, from the two conversations each machine was in:
+
+  b2sync/CREATEA3     the VM's
+  b2sync/OUTPUT40     the Athlon's
+
+TWO BASELINES, each stamped with the machine that owns it:
+
+  base.json              machine 087dfc60-...  root C:\WORK\OUTPUT40
+                         tree_id 2C3E11F9-...
+  base-8307815836.json   machine 6e4fc260-...  root C:\WORK\CREATEA3
+                         tree_id 82291980-...
+
+The Athlon kept `base.json` because it was there first, which is the
+"nothing is migrated and nothing is deleted" rule: the machine already
+using that file keeps its rows and does not re-read the whole tree.
+Note the two tree_ids are different volume serials -- that is the field
+whose disagreement used to deadlock a shared baseline, each machine
+refusing the other's every pass, forever.
+
+In THIS run the two roots also differ, because a conversation has its
+own folder under the root, so the old key would not have collided here.
+The collision is two machines in the same-named folder, which is what
+tests/python/files/test_sync_tools.py covers directly.
+
+THE CHAT LISTS STAY DISJOINT, which is the visible half: the VM shows
+only "Generate 120 padded lines" and the Athlon only "Output 400
+zero-padded l...". That filtering predates this stage (BACKLOG 21); what
+3c adds is that both lists can be on screen at once.
+
+ALSO SEEN, and worth having: the VM was still running a pre-3b client,
+and the bridge refused it with
+
+  bad_version (bridge speaks 3, guest speaks 2)
+
+which is decision 7 of stage 3b doing its job on real hardware. Without
+the bump that guest would have connected, sent GETPAGE, got
+`unknown_type`, and shown a transcript that appends but will not page.
+
+HOW IT WAS DRIVEN. The VM through QMP; the Athlon through gremote at
+10.0.0.125:7401 with autocheck's --type-into and --click. One shared
+secret for the bridge -- `negotiate` compares HELLO's against a single
+GASTON_SECRET, so every client sends the same one and `machine`
+identifies without authenticating. That is recorded as accepted in
+BACKLOG 7 and audit 04.21 rather than patched with per-client secrets.
