@@ -198,3 +198,96 @@ async def test_send_export_failure_aborts_with_error(link):
     await link.send_export(None, b"some content")
     # Writer will be set to None when EXPORTDAT fails, and export_end(False) will return False
     assert link.writer is None
+
+
+def _body_of(writer) -> bytes:
+    """The one TEXT frame a send_html wrote, decompressed."""
+    from bridge.wire.compress import StreamDecompressor
+    from bridge.wire.protocol import FrameReader
+    frames = list(FrameReader().feed(bytes(writer.written)))
+    assert len(frames) == 1, f"expected one frame, got {len(frames)}"
+    if frames[0].headers.get("enc") == "deflate":
+        return StreamDecompressor().decompress(frames[0].body)
+    return frames[0].body
+
+
+@pytest.mark.asyncio
+async def test_send_html_strips_nul_which_would_truncate_the_dom_copy(link):
+    """A NUL is a partial loss the user cannot see and the cache does not share.
+
+    `win/app/turn.cpp:190` gives the cache `(f->body, f->body_len)` and
+    `rc_html::block` a `const char *`, so the DOM stops at the first NUL while
+    the cache keeps the whole block. The same transcript then renders two
+    different ways depending on whether it arrived live or was redrawn from
+    the cache on reconnect.
+    """
+    writer = FakeWriter()
+    link.writer = writer
+
+    await link.send_html(None, "<p>before\x00after</p>", APPEND, page_no=1)
+
+    body = _body_of(writer)
+    assert b"\x00" not in body
+    assert b"<p>beforeafter</p>" == body
+
+
+@pytest.mark.asyncio
+async def test_send_html_keeps_cr_and_tab(link):
+    """Only the NUL goes. The other control bytes are display content.
+
+    `\\r` reaches the renderer today and is a line break there, because
+    `HtmlStream.feed` splits with `str.splitlines()`, which splits on it; a
+    lone `\\r` in an unterminated tail travels verbatim. `\\t` is whitespace
+    inside a `<pre>` and removing it would re-indent code. Stage 3's renderer
+    is specified to carry both, and B2 compares it byte-for-byte against this
+    path, so a strip added here would quietly break that proof.
+    """
+    writer = FakeWriter()
+    link.writer = writer
+
+    await link.send_html(None, "<pre>a\tb\rc</pre>", APPEND, page_no=1)
+
+    assert _body_of(writer) == b"<pre>a\tb\rc</pre>"
+
+
+@pytest.mark.asyncio
+async def test_send_html_live_nul_is_stripped_silently(link):
+    """Same strip on the live path, without the log line.
+
+    The open block is re-sent whole on every flush, so one NUL in a long
+    answer would be ten log lines a second for the rest of the turn. The
+    APPEND that seals the block reports it once.
+    """
+    writer = FakeWriter()
+    link.writer = writer
+
+    await link.send_html(None, "<p>partial\x00</p>", LIVE, page_no=1)
+
+    assert _body_of(writer) == b"<p>partial</p>"
+
+
+@pytest.mark.asyncio
+async def test_send_html_all_nul_body_sends_nothing_on_append(link):
+    """Stripping can empty a body, and an empty APPEND has nothing to append."""
+    writer = FakeWriter()
+    link.writer = writer
+
+    await link.send_html(None, "\x00\x00", APPEND, page_no=1)
+
+    assert len(writer.written) == 0
+
+
+@pytest.mark.asyncio
+async def test_send_html_all_nul_body_still_clears_the_live_slot(link):
+    """An emptied LIVE body must still be sent: it is what clears `#l`.
+
+    `send_html`'s existing empty-body arm sends a zero-length LIVE frame for
+    exactly this reason, and the strip must land on the near side of it.
+    """
+    writer = FakeWriter()
+    link.writer = writer
+
+    await link.send_html(None, "\x00", LIVE, page_no=1)
+
+    assert len(writer.written) > 0
+    assert _body_of(writer) == b""

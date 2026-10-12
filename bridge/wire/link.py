@@ -119,6 +119,34 @@ class GuestLink:
         whole thing.
         """
         data = fold.encode(html)
+
+        # A NUL truncates the block in the DOM and nowhere else, which is the
+        # worst shape a loss can take: `win/app/turn.cpp:190` hands the CACHE
+        # `(f->body, f->body_len)` and so keeps every byte, then hands
+        # `rc_html::block` a `const char *` (`win/app/htmlview.h`) that stops
+        # at the first one. The guest NUL-terminates every body it receives
+        # (`win/wire/connection.cpp:281` inflated, `:689` raw), so the tail of
+        # a block silently vanishes from the screen while sitting intact in
+        # the cache -- and a reconnect redraws from the cache, so the same
+        # transcript shows two different things depending on how it got there.
+        #
+        # `fold` is NOT the place for this: `fold.encode` short-circuits on
+        # `text.isascii()`, so a NUL never reaches `_fold_char`, and
+        # `protocol.py:48` routes every HEADER value through the same function
+        # -- a strip there would be both a no-op here and a silent edit of
+        # values that are not display text. So it belongs on the one path that
+        # ends at `innerHTML`, which is this one.
+        #
+        # Silent on LIVE: the bridge re-sends the whole open block every
+        # flush, so one NUL in a growing block would log ten lines a second,
+        # and the APPEND that seals it reports the same text once.
+        if b"\x00" in data:
+            if mode != LIVE:
+                log.warning("stripped %d NUL byte(s) from a %s block of %d "
+                            "bytes; they truncate the DOM copy and nothing "
+                            "else", data.count(b"\x00"), mode, len(data))
+            data = data.replace(b"\x00", b"")
+
         if not data:
             if mode == LIVE:
                 await self.send(guest, text_frame(mode, ENC_RAW, page_no, b""))
