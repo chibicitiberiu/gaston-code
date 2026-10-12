@@ -14,14 +14,6 @@
   },
   {
     "headers": {
-      "off": "0",
-      "page": "1",
-      "preview": "Resolve the sync conflict: merge your co"
-    },
-    "type": "ANCHOR"
-  },
-  {
-    "headers": {
       "state": "start"
     },
     "type": "TURN"

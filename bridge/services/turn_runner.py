@@ -2,7 +2,7 @@
 
 Owns the execution of turns on GuestSession (run_turn, run_turn_locked, resume_turn),
 injection of synchronization preambles and delivery tracking (with_sync_preamble,
-seed_agent_notices, clear_agent_notices), transcript anchor placement, and turn verdict
+seed_agent_notices, clear_agent_notices), and turn verdict
 calculation (turn_verdict).
 """
 
@@ -16,7 +16,6 @@ from ..agent import prompts
 from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import (
-    anchor_frame,
     pagesealed,
     turn_end,
     turn_error,
@@ -274,14 +273,10 @@ class TurnRunner:
             return
         display_names = self.attachment.parse_display_names(attach, attach_name)
         display_text = self.attachment.format_display_text(text, display_names)
-        anchor = guest.view.pages.mark_user_turn(display_text)
         if echo:
             await self.presentation.write_block(
                 guest, H.user_turn(display_text), stream=False
             )
-        await self.connection.send(
-            guest, anchor_frame(anchor.page, anchor.offset, anchor.preview)
-        )
         guest.turn_produced = False
         guest.turn_degraded = ""
         guest.turn_stopped = False

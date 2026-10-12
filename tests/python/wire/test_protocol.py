@@ -312,20 +312,20 @@ def test_non_ascii_header_round_trips_through_cp1252():
 
 
 def test_header_value_outside_cp1252_is_folded_not_fatal():
-    f = Frame("ANCHOR", {"preview": "emoji \U0001f600 and ⑂"})
+    f = Frame("NOTICE", {"preview": "emoji \U0001f600 and ⑂"})
     back = Frame.decode(f.encode()[4:])
     assert back.headers["preview"].startswith("emoji ")
 
 
 def test_percent_is_not_double_decoded():
     """A literal '%25' in the value must come back as '%25', not '%'."""
-    f = Frame("ANCHOR", {"preview": "100%25 sure"})
+    f = Frame("NOTICE", {"preview": "100%25 sure"})
     back = Frame.decode(f.encode()[4:])
     assert back.headers["preview"] == "100%25 sure"
 
 
 def test_control_characters_in_a_header_are_escaped():
-    f = Frame("ANCHOR", {"preview": "a\tb\x00c"})
+    f = Frame("NOTICE", {"preview": "a\tb\x00c"})
     wire = f.encode()
     assert b"\t" not in wire[4:].split(b"\n\n")[0]
     back = Frame.decode(wire[4:])
@@ -334,5 +334,5 @@ def test_control_characters_in_a_header_are_escaped():
 
 def test_a_stray_percent_without_hex_digits_is_left_alone():
     """Decoding must never raise on input the guest may have mangled."""
-    f = Frame.decode(b"ANCHOR\npreview=50%\n\n")
+    f = Frame.decode(b"NOTICE\npreview=50%\n\n")
     assert f.headers["preview"] == "50%"

@@ -9,12 +9,6 @@ import pytest
 from bridge.services.turn_runner import TurnRunner, turn_verdict
 
 
-class DummyAnchor:
-    page = 1
-    offset = 42
-    preview = "Hello world"
-
-
 class DummyZip:
     stats = (100, 50)
     ratio = 2.0
@@ -23,9 +17,6 @@ class DummyZip:
 class DummyPages:
     def __init__(self):
         self.count = 2
-
-    def mark_user_turn(self, text):
-        return DummyAnchor()
 
     def message_boundary(self):
         return None
@@ -109,7 +100,7 @@ async def test_run_turn_locked_success(turn_deps):
 
     await runner.run_turn_locked(guest, "Hello agent")
 
-    # Anchor frame, turn_start, turn_end sent
+    # turn_start and turn_end sent
     assert conn.send.call_count >= 2
     pres.write_block.assert_called_once()
     pres.flush_text.assert_called_once()

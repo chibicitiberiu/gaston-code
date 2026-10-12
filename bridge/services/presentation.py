@@ -218,7 +218,3 @@ class PresentationService:
         """Reset the guest's transcript view."""
         await guest.view.reset()
 
-    def mark_user_turn(self, guest: GuestSession, line: str) -> Any:
-        """Record a user turn marker in the paginator."""
-        return guest.view.pages.mark_user_turn(line)
-

@@ -13,7 +13,7 @@ Numbering rules, and the first one is the non-obvious one:
 
   * Pages fill FORWARD from the oldest. Page 1 is the start of the conversation.
     A sealed page never renumbers. Numbering backwards from the end (so "page 1"
-    is newest) would invalidate every anchor the moment new text arrived.
+    is newest) would renumber every sealed page the moment new text arrived.
   * A page seals when it is full, and is then frozen forever.
   * In LIVE mode a page seals only at a MESSAGE boundary, so a turn is never
     split mid-sentence under the reader's eyes. Pages may therefore overshoot
@@ -167,15 +167,6 @@ class Page:
         return self.blocks >= hard_blocks
 
 
-@dataclass
-class Anchor:
-    """A user turn: the landmarks a reader actually navigates by."""
-
-    page: int
-    offset: int          # character offset within that page
-    preview: str         # first ~40 characters
-
-
 def limits_for(mem_kb: int) -> tuple[int, int]:
     """Page caps for a machine with this much RAM.
 
@@ -203,7 +194,6 @@ class Paginator:
         self.hard_bytes = max_bytes * 2
         self.hard_blocks = max_blocks * 2
         self._pages: list[Page] = [Page(number=1)]
-        self._anchors: list[Anchor] = []
         #: The same records, in the same order, without the page boundaries.
         #: Fed by `write`; this is what survives stage 3b.
         self._transcript = Transcript()
@@ -217,10 +207,6 @@ class Paginator:
     @property
     def count(self) -> int:
         return len(self._pages)
-
-    @property
-    def anchors(self) -> list[Anchor]:
-        return list(self._anchors)
 
     @property
     def transcript(self) -> Transcript:
@@ -302,13 +288,6 @@ class Paginator:
                 and self.live.runs:
             return self._seal(continued=False)
         return None
-
-    def mark_user_turn(self, preview: str) -> Anchor:
-        page = self.live
-        a = Anchor(page=page.number, offset=page.nbytes,
-                   preview=preview[:40].replace("\n", " "))
-        self._anchors.append(a)
-        return a
 
     def _seal(self, *, continued: bool) -> Page:
         page = self.live

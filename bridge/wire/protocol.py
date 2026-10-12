@@ -281,15 +281,6 @@ def turn_end(ok: bool, subtype: str, cost_usd: float | None, ms: int,
     return Frame("TURN", h)
 
 
-def anchor_frame(page: int, off: int, preview: str) -> Frame:
-    """Where a user turn landed in the transcript, so the guest can jump
-    back to it from history."""
-    return Frame("ANCHOR", {
-        "page": str(page), "off": str(off),
-        "preview": truncate_header_value(preview, MAX_HEADER_VALUE),
-    })
-
-
 # --- permission prompts -----------------------------------------------------
 
 

@@ -1,14 +1,6 @@
 [
   {
     "headers": {
-      "off": "0",
-      "page": "1",
-      "preview": "Fail this turn"
-    },
-    "type": "ANCHOR"
-  },
-  {
-    "headers": {
       "state": "start"
     },
     "type": "TURN"

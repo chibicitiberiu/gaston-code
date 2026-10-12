@@ -39,9 +39,6 @@ def normalize_headers(headers: dict[str, str], frame_type: str) -> dict[str, str
             norm[k] = "<MS>"
         elif k == "cost_usd":
             norm[k] = "<COST>"
-        elif k == "preview" and frame_type == "ANCHOR":
-            # Mask dynamic session ids or paths in preview text
-            norm[k] = re.sub(r"fake-session-\d+", "<CONV_ID>", v)
         else:
             norm[k] = v
     return norm

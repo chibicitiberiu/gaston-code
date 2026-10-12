@@ -1,14 +1,6 @@
 [
   {
     "headers": {
-      "off": "0",
-      "page": "1",
-      "preview": "[Attached: SAMPLE.TXT] Inspect this file"
-    },
-    "type": "ANCHOR"
-  },
-  {
-    "headers": {
       "state": "start"
     },
     "type": "TURN"

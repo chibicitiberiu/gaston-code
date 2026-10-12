@@ -2,7 +2,7 @@
 
 Two properties carry the whole design:
 
-  1. **Page numbers never change.** An anchor captured now must still point at
+  1. **Page numbers never change.** A sealed page must still be the page it
      the same text after an hour of streaming.
   2. **Page size is genuinely bounded.** Otherwise the 32MB memory argument is
      fiction, and the single most likely way to break it is one enormous fenced
@@ -194,7 +194,7 @@ def test_boundary_seal_is_not_marked_continued():
 
 def test_page_numbers_are_forward_and_never_renumber():
     """The non-obvious rule. Numbering backwards from the end would invalidate
-    every anchor the moment new text arrived."""
+    every sealed page the moment new text arrived."""
     p = Paginator()
     for i in range(MAX_LINES + 5):
         p.add(rec(line(i)))
@@ -231,50 +231,10 @@ def test_page_lookup_out_of_range():
     assert p.page(1) is not None
 
 
-# --- anchors ---------------------------------------------------------------
-
-
-def test_anchor_records_page_and_offset():
-    p = Paginator()
-    first = rec("some earlier text")
-    p.add(first)
-    a = p.mark_user_turn("what does the frame cap do?")
-    assert a.page == 1
-    # RECORD BYTES, not characters of markup. The anchor is an offset into
-    # the page, and what a page holds changed; the property it is for --
-    # "this user turn starts here" -- did not.
-    assert a.offset == len(first)
-    assert a.preview.startswith("what does")
-
-
-def test_anchor_preview_is_truncated_and_single_line():
-    p = Paginator()
-    a = p.mark_user_turn("a" * 100 + "\nsecond line")
-    assert len(a.preview) <= 40
-    assert "\n" not in a.preview
-
-
-def test_anchors_survive_later_pagination():
-    """The whole point of forward numbering."""
-    p = Paginator()
-    a1 = p.mark_user_turn("first question")
-    for i in range(MAX_LINES * 4):
-        p.add(rec(line(i)))
-        if i % 60 == 0:
-            p.message_boundary()
-    a2 = p.mark_user_turn("second question")
-
-    assert a1.page == 1
-    assert a2.page == p.live.number
-    assert p.page(a1.page).number == 1
-    assert [a.preview for a in p.anchors] == ["first question", "second question"]
-
-
 def test_realistic_session_stays_bounded():
     """Long conversation: many pages, all bounded, numbering stable."""
     p = Paginator()
     for turn in range(40):
-        p.mark_user_turn(f"question {turn}")
         for i in range(60):
             p.add(rec(line(i)))
         p.add(rec("int main(void) { return 0; }\n"))
@@ -283,7 +243,6 @@ def test_realistic_session_stays_bounded():
     assert p.count > 5, "40 turns should span several pages"
     for n in range(1, p.count + 1):
         assert p.page(n).nbytes <= HARD_BYTES
-    assert [a.page for a in p.anchors] == sorted(a.page for a in p.anchors)
 
 
 # --- block count ------------------------------------------------------------

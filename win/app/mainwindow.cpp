@@ -659,14 +659,6 @@ void MainWindow::onPageBar(rc_frame *f)
     }
 }
 
-void MainWindow::onAnchor(rc_frame *f)
-{
-    const char *page = rc_frame_get(f, "page");
-    const char *preview = rc_frame_get(f, "preview");
-    rc_log("anchor: page=%s preview=%s", page ? page : "?",
-           preview ? preview : "");
-}
-
 /* PERMREQ, PERMSTATE, PERMWAIT, PERMEND, HALT, HALTEND -- all six owned by
  * app/bar.cpp now; see PermissionBar::frame's own comments there for what each one
  * does. One handler serves all six rows in the table below. */
@@ -790,7 +782,6 @@ void MainWindow::renderFrame(rc_frame *f)
         { "PAGESTART",   &MainWindow::onPageBar },
         { "PAGEEND",     &MainWindow::onPageBar },
         { "PAGESEALED",  &MainWindow::onPageBar },
-        { "ANCHOR",      &MainWindow::onAnchor },
         { "PERMREQ",     &MainWindow::onBar },
         { "PERMSTATE",   &MainWindow::onBar },
         { "PERMWAIT",    &MainWindow::onBar },

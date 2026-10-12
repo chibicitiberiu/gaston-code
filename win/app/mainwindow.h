@@ -126,7 +126,6 @@ private:
     void onOptions(rc_frame *f);
     void onChats(rc_frame *f);
     void onPageBar(rc_frame *f);
-    void onAnchor(rc_frame *f);
     void onBar(rc_frame *f);
     void onError(rc_frame *f);
     void onNotice(rc_frame *f);

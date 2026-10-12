@@ -1,14 +1,6 @@
 [
   {
     "headers": {
-      "off": "0",
-      "page": "1",
-      "preview": "Run vol c:"
-    },
-    "type": "ANCHOR"
-  },
-  {
-    "headers": {
       "state": "start"
     },
     "type": "TURN"

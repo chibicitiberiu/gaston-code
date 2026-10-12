@@ -482,9 +482,6 @@ class FakeGui:
             self.page_total = int(f.headers.get("total", "0") or 0)
             print(f"{DIM}[page {f.headers.get('page')} sealed; "
                   f"{self.page_total} pages total]{RESET}")
-        elif t == "ANCHOR":
-            print(f"{DIM}[anchor page={f.headers.get('page')} "
-                  f"preview={f.headers.get('preview', '')!r}]{RESET}")
         elif t == "NOTICE":
             print(f"{YELLOW}[{f.headers.get('kind')}] {text}{RESET}")
         elif t == "RESYNC":

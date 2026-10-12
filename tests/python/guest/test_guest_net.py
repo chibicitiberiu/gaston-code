@@ -22,7 +22,7 @@ HARNESS rather than in the guest -- which is worth recording, because the
 first diagnosis blamed net.cpp and was wrong.
 
 netcheck.exe reported "FAIL: 1 frames leaked" against a real Bridge on every
-run, with all 13 frames (READY, DOC, 4x OPTION, OPTIONSEND, ANCHOR, TURN
+run, with all 13 frames (READY, DOC, 4x OPTION, OPTIONSEND, TURN
 start, 3x TEXT, TURN end) printed and freed by its own WM_RC_FRAME handler
 first. The count was CORRECT. netcheck's main loop sets `g_done` from inside
 the dispatch loop, so the instant the TURN end is handled it stops pumping,
