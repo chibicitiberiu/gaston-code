@@ -684,3 +684,82 @@ async def test_off_is_not_offered_and_a_mode_change_rebuilds_before_the_turn(
     assert "Bash" in g.claude.tools
     assert g.claude.resume and not g.claude.fork
     await harness.close(w)
+
+
+# --- two machines do not share what is per-machine (stage 3c D4/D5) ---------
+
+
+async def test_two_guests_do_not_share_a_halt_bar_or_a_notice_queue(harness):
+    """synccoord.py's own docstring names this failure: "one coordinator per
+    BRIDGE means every client shares one halt bar and one notice queue, so
+    with two clients agent A resolving its own conflict takes the bar down
+    on B's screen and drains B's notices into A's next turn."
+
+    It was a field of GuestSession already -- and `_create_guest` handed
+    every guest the SAME object, the one that exists before any guest does,
+    which made the field cosmetic.
+    """
+    r1, w1 = await harness.connect(hdrs={"machine": "BOX-A"})
+    await _recv(harness, r1, "OPTIONSEND")
+    r2, w2 = await harness.connect(hdrs={"machine": "BOX-B"})
+    await _recv(harness, r2, "OPTIONSEND")
+
+    a = harness.bridge.connection._guests["BOX-A"]
+    b = harness.bridge.connection._guests["BOX-B"]
+    assert a.synccoord is not b.synccoord
+
+    a.synccoord.agent_notices.append("A's conflict")
+    assert b.synccoord.agent_notices == [], (
+        "B's agent was handed A's notices")
+    a.synccoord.raise_halt("A's halt", ["C:\\WORK\\X.TXT"])
+    assert not b.synccoord.halt_id, "A's halt put a bar on B's screen"
+    await harness.close(w2)
+    await harness.close(w1)
+
+
+async def test_the_first_guest_still_adopts_the_preattach_queue(harness):
+    """The handover the single-guest test pins, kept: a notice recorded
+    before anyone connected reaches the first machine that does. The second
+    machine does not get it, because that queue has been claimed."""
+    b = harness.bridge
+    b.connection.guest = None
+    b.connection.synccoord.agent_notices.append("before anyone connected")
+
+    r1, w1 = await harness.connect(hdrs={"machine": "BOX-A"})
+    await _recv(harness, r1, "OPTIONSEND")
+    first = b.connection._guests["BOX-A"]
+    assert "before anyone connected" in first.synccoord.agent_notices
+
+    r2, w2 = await harness.connect(hdrs={"machine": "BOX-B"})
+    await _recv(harness, r2, "OPTIONSEND")
+    second = b.connection._guests["BOX-B"]
+    assert "before anyone connected" not in second.synccoord.agent_notices
+    await harness.close(w2)
+    await harness.close(w1)
+
+
+async def test_each_guest_is_folded_through_its_own_codepage(harness):
+    """`fold` keeps the codepage in a ContextVar, so a task started for one
+    connection carries that binding into whatever it does next. With one
+    guest that was always right. The reaper writes frames (deny_all) and
+    the sweeper runs passes, and both now bind per guest before they do."""
+    from bridge.wire import fold
+
+    r1, w1 = await harness.connect(hdrs={"machine": "BOX-A", "acp": "1252"})
+    await _recv(harness, r1, "OPTIONSEND")
+    r2, w2 = await harness.connect(hdrs={"machine": "BOX-B", "acp": "1250"})
+    await _recv(harness, r2, "OPTIONSEND")
+
+    conn = harness.bridge.connection
+    a, b = conn._guests["BOX-A"], conn._guests["BOX-B"]
+    assert a.caps.acp != b.caps.acp, "test setup: two codepages"
+
+    conn.bind_codepages(a)
+    one = fold.encode("\u015b")          # s-acute: in 1250, not in 1252
+    conn.bind_codepages(b)
+    two = fold.encode("\u015b")
+    assert one != two, (
+        "both guests folded through the same codepage; a ContextVar set for "
+        "whichever attached first was answering for both")
+    await harness.close(w2)
+    await harness.close(w1)

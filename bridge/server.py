@@ -44,6 +44,7 @@ from .services.sync import SyncService
 from .services.turn_runner import TurnRunner, turn_verdict
 from .services.ui import UiService
 from .services.workspace import WorkspaceService
+from .synccoord import SyncCoordinator
 from .view import html as H
 from .view.html import APPEND
 from .view.pages import Transcript
@@ -358,9 +359,21 @@ class Bridge:
     # --- connection --------------------------------------------------------
 
     def _create_guest(self) -> GuestSession:
+        # ONE COORDINATOR EACH. Every guest was handed the SAME object --
+        # the one that exists before any guest does -- which was free while
+        # only one could attach and is the failure synccoord.py's own
+        # docstring warns about the moment two can: "agent A resolving its
+        # own conflict takes the bar down on B's screen and drains B's
+        # notices into A's next turn".
+        #
+        # The FIRST guest adopts the pre-attach one, so a notice recorded
+        # before anyone connected still reaches a screen. Every guest after
+        # that gets its own, because that queue has already been claimed and
+        # a second machine has no business receiving it.
+        pre = self.connection._preattach_synccoord
         g = GuestSession(
             view=TranscriptView(pages=Transcript()),
-            synccoord=self.connection._preattach_synccoord,
+            synccoord=pre if not self.connection._guests else SyncCoordinator(),
         )
         self.permissions.attach(g, cwd=self.config.cwd)
         return g
