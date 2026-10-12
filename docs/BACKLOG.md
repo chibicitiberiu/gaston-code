@@ -1408,7 +1408,7 @@ jobs that were never separated, and only one of them is a transform.
   The *parse* belongs on the bridge and is not in question. **Emitting the markup is a
   third job this list missed; §31 is where it went, and it is the larger half.**
 - **Decoration** -- `STYLESHEET` (`bridge/view/html.py:445`), inlined into the skeleton
-  by `document()` (`:624-640`) and sent once per connect from `server.py:407`. This is
+  by `document()` (`:657`) and sent once per connect from `server.py:407`. This is
   one client's appearance, written to IE5's constraints, and it ships from the far side
   of the wire.
 
@@ -1440,7 +1440,7 @@ rebuilding the guest.
    assumed**, that means a `HELLO` capability saying which vocabulary version this
    client understands, and the bridge refusing an unknown value rather than guessing.
 2. **What export does -- DECIDED 2026-10-10: the guest renders it.**
-   `bridge/view/html.py:643-670` builds a standalone file with `STYLESHEET + EXPORT_CSS`
+   `bridge/view/html.py:668-695` builds a standalone file with `STYLESHEET + EXPORT_CSS`
    inline, on the bridge (`bridge/services/session.py:159`), and its docstring gives a
    real reason: an export that looks different from what was on screen invites the
    question of which one is right. If the bridge no longer holds the stylesheet it
@@ -1469,7 +1469,10 @@ rebuilding the guest.
 the ones first written here had drifted.* The shipped `STYLESHEET` is **9,375 bytes,
 of which 5,574 are CSS comments in 11 blocks** (the largest is the 1,643-byte
 `overflow: auto` note), not the 8,445/4,919 this entry used to claim. The DOC body
-`document()` produces goes from **9,557 bytes to 3,983** -- 58% of the frame. `doc()`
+`document()` produces goes from **9,557 bytes to 3,962** -- 58% of the frame. The
+saving is 5,595 rather than 5,574 because the blank lines the comments leave go with
+them; 3,983 was this entry subtracting the comment figure instead of measuring the
+result, and is corrected here. `doc()`
 (`bridge/wire/protocol.py:171`) builds a plain `Frame` with no `enc` header, so unlike
 `TEXT` and export data this one is **never compressed**: those bytes go on the wire
 verbatim, once per connect and again on every reconnect. On a 5 KB/s link that is
@@ -2848,7 +2851,14 @@ stops being.
 The vocabulary is a rename of what `html.py` already recognises rather than a new
 design: `_FENCE`, `_HEADING`, `_BULLET`, `_QUOTE`, `_RULE`, `_ROW`/`_SEP` and
 `_INLINE` (`:45-64`) are para, pre(lang), heading(level), bullet/numbered(depth),
-quote, rule, table, plus the inline set code/strong/em/link.
+quote, rule, table, plus the inline set code/strong/em. **Not link** -- this line
+claimed one until 2026-10-12 and there is no such run: `_INLINE` has three groups,
+there is no `[text](url)` pattern, no `href` and no `<a>` rule anywhere in
+`html.py`, and `inline("see [text](http://x/) here")` returns its input. Links
+stay reserved in the vocabulary and unimplemented, because the transcript is a
+`WebBrowser` control and an `<a href>` navigates it away from the transcript.
+Two of the attrs are not real either: `_BULLET` captures the indent and the
+marker and `_line` discards both, so there is no depth to carry.
 
 ### What it would take to close
 
@@ -2886,7 +2896,7 @@ quote, rule, table, plus the inline set code/strong/em/link.
    the short form is that after this entry lands the bridge has no markup to
    write, so the choice is a renderer on the guest or a second renderer on the
    bridge, and one renderer is the whole point. The constraint itself:
-   `export_document` (`bridge/view/html.py:643`, called from
+   `export_document` (`bridge/view/html.py:668`, called from
    `bridge/services/session.py:159`) builds a standalone file from
    `pages.all_text()`. Without the markup the bridge cannot build it at all, not
    just cannot style it. Same three options as §13 -- the guest renders its own
@@ -2907,7 +2917,8 @@ quote, rule, table, plus the inline set code/strong/em/link.
 
 **Order.** §13 first, for two reasons: it is smaller, and it builds the handshake
 capability and answers the export question that this entry also needs. The
-4,919 bytes of CSS comments noted there are free and depend on neither.
+5,574 bytes of CSS comments noted there are free and depend on neither (this line
+said 4,919 until 2026-10-12; `13` had already recorded that figure as superseded).
 
 **What it costs to leave open.** Nothing today -- there is one client and it is a
 browser. The bill arrives the first time somebody writes a second one, and it is

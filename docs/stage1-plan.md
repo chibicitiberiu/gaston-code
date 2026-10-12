@@ -70,7 +70,7 @@ Recorded in commit 1, before any code, because stage 3 reads them.
 | Decision | Answer |
 |---|---|
 | **R7** | **In**, the larger reading: several guest machines against one bridge. It becomes its own stage between 3 and 4 in `ROADMAP.md`. `BACKLOG.md` 7's implementation list stands; `client_id` as an unauthenticated assertion is accepted in writing. Note while recording it: **two guests already exist** (the VM and the Athlon, `machine=TIBI`), so `rebind` is verifiable without new hardware — BACKLOG 7 says it needs a second machine and it has one. |
-| **Export** | **The guest renders it.** One renderer, no drift, and `win/app/cache.cpp` already holds rendered pages, so export becomes "assemble what is cached and write it". `bridge/view/html.py:652-656` argues the exported copy must match the screen; this makes that true by construction. Replaces the three-option list in BACKLOG 13 step 2 and 31 step 5. |
+| **Export** | **The guest renders it.** One renderer, no drift, and `win/app/cache.cpp` already holds rendered pages, so export becomes "assemble what is cached and write it". `bridge/view/html.py:677-679` argues the exported copy must match the screen; this makes that true by construction. Replaces the three-option list in BACKLOG 13 step 2 and 31 step 5. |
 | **Vocabulary capability** | One `HELLO` key, a small integer version, bridge refuses an unknown value rather than guessing — per **client rules are declared at handshake**. Covers both 13's class names and 31's block kinds. The client has 14 free HELLO slots (`win/net/net.cpp:236` `RC_HELLO_MAX 48`, 34 in use) and `tests/python/meta/test_hello_headers.py` asserts two remain after. |
 | **Cache format** | The cache keeps holding **rendered markup**, not blocks, so a reconnect costs no re-render on a 1998 CPU; the format key gets a bump so pages written by an older renderer are discarded rather than shown. |
 | **0.15d scope** | The reboot run plus BACKLOG 15's harness. Foreign-process GDI capture (the probe's own D4, `win/checks/probe.c:2874-2883`) stays deferred **with its reason restated**, not silently. |
@@ -131,10 +131,10 @@ reaching the wire.
 
 A `_without_comments()` applied once to `STYLESHEET` at module scope.
 `document()` and `export_document()` both pick it up, which is right: export
-shares the stylesheet deliberately (`html.py:667`) and is compressed, so it loses
+shares the stylesheet deliberately (`html.py:680-686`) and is compressed, so it loses
 nothing by shrinking too.
 
-Measured effect: the DOC body goes from **9,557 to 3,983 bytes**, 58% off a frame
+Measured effect: the DOC body goes from **9,557 to 3,962 bytes**, 58% off a frame
 `bridge/wire/protocol.py:171-173` sends with no `enc` header, once per attach
 (`bridge/server.py:407`) and again on every reconnect.
 

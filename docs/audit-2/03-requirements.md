@@ -401,19 +401,38 @@ bridge/` is a comment or docstring). `tests/python/meta/test_no_os_in_code.py`'s
 on the three targets `CLAUDE.md:14` names (all DOS-path machines); it is the
 inconsistency that is worth a line.
 
-### 03.17 — The guest builds a fourth CSS class that the cross-language guard does not sweep **PARTIAL**
+### 03.17 — The guest builds a fourth CSS class that the cross-language guard does not sweep **FIXED**
 
 `tests/python/meta/test_guest_css.py:1-10`: *"the guest builds three blocks
 itself — its own echo of what you typed, a notice, an error — and hard-codes
 their class names."* It finds them by regex over `RC_CSS_*` defines
 (`win/app/htmlview.h:61-74`).
 
-`win/app/main.cpp:356` writes `<div class="status">` as a bare literal, with a
+**This paragraph describes the pre-fix tree and was never updated when the
+finding was closed; corrected 2026-10-12 after it was cited twice as live
+justification while planning stage 3.** The header said PARTIAL while the ledger
+below said Fixed, and nothing checks that those two agree. What it read was:
+*"`win/app/main.cpp:356` writes `<div class="status">` as a bare literal, with a
 `<img src="spin.gif">` inside it. `.status` is not an `RC_CSS_*` macro, so the
-test does not see it. `bridge/view/html.py:511-512` does define `.status` and
-`.status img`, so nothing is broken today — but the guard's stated invariant
-("rename `.notice` on the bridge and the guest's notices silently become
-unstyled text") is unenforced for one of the four.
+test does not see it."*
+
+Both halves are now closed. The macro exists -- `RC_CSS_STATUS`
+(`win/app/htmlview.h:61`) -- and the status row that uses it has since moved out
+of `main.cpp` into `win/app/statusbar.cpp:146-152`; `main.cpp` is 326 lines and
+holds no such literal. `test_guest_css.py`'s `guest_classes()` sweeps every
+`RC_CSS_*` define in the header and asserts each class against the stylesheet, so
+the guard's invariant ("rename `.notice` on the bridge and the guest's notices
+silently become unstyled text") is enforced for all four.
+
+**The mirror of this finding is still open, and the sweep is structurally unable
+to see it:** a class the *bridge* invents, which no `RC_CSS_*` names.
+`.thinking` is exactly that -- `bridge/services/presentation.py:38-41` writes
+`<div class="{style}">` and `bridge/services/session.py:343` passes
+`style="thinking"`, while the stylesheet has no `.thinking` rule and
+`bridge/view/html.py` mentions the word once, in a comment. The thinking stream
+has never been styled, on either side, and no test could notice. Stage 3 closes
+it in A10 and B3, which is also what makes `view.tpl` and `view.css` a single
+place to check.
 
 ### 03.18 — An unrecognised guest exec status is reported to the model as success **PARTIAL**
 
@@ -668,7 +687,7 @@ Sixteen checked against HEAD.
 | 02.6 | `STAT` and `PING` handled and never sent | **text wrong, code right.** Both are sent (`win/rpc/rpc.cpp:219`, `:230`). The `Fixed:` body still says STAT is not — see 03.25 |
 | 02.7 | idle guest disconnected at 90 s against a 600 s prompt deadline | **holds.** `idle_timeout_s = 90.0` (`bridge/server.py:534`) with a `PING` keepalive rather than an exemption, as the claim describes |
 | 02.27 | `GETOPTIONS` was a dead dispatch branch | **holds.** `grep -rn GETOPTIONS` over the whole repo returns nothing |
-| 03.4 | guest hand-builds HTML with class names shared with the bridge | **holds, incompletely.** `RC_CSS_*`/`RC_SLOT_*` macros plus `tests/python/meta/test_guest_css.py` — but `win/app/main.cpp:356`'s `class="status"` is outside the sweep (03.17) |
+| 03.4 | guest hand-builds HTML with class names shared with the bridge | **holds for what the guest names.** `RC_CSS_*`/`RC_SLOT_*` macros plus `tests/python/meta/test_guest_css.py`, and the `class="status"` row is inside the sweep since 03.17 was fixed. What stays outside it is a class the *bridge* invents: `.thinking` has no rule and no macro (03.17) |
 | 03.5 | TOOLRESULT, RESYNC and PONG unhandled by the guest | **holds but overtaken.** All three have handlers; `RESYNC`'s sender was then deleted with the replay buffer, so the handler is now dead code (03.11) |
 | 03.6 | STAT / PING / GETOPTIONS never sent by the guest | **holds.** Two now sent, the third removed rather than left as a dead handler |
 | 03.13 | 11-byte working-name reserve duplicated with no build check | **holds.** C89 static assert at `win/net/caps.h:84-85` tying `RC_WORKRESERVE_GASTON` to `RC_SYNC_WORK_SUFFIX`; `bridge/files/caps.py:149` mirrors it |
@@ -728,7 +747,7 @@ Fixed: 03.15 — Updated `docs/BACKLOG.md` §1: unblocked netem gate via unprivi
 
 Fixed: 03.16 — Removed DOS paths and built-in names from tool schema descriptions in `bridge/agent/tools.py`; strengthened `tests/python/meta/test_no_os_in_code.py` to ban Windows paths in live strings.
 
-Fixed: 03.17 — Added `RC_CSS_STATUS` define in `win/app/htmlview.h` used in `win/app/main.cpp:356`; updated regex in `tests/python/meta/test_guest_css.py` to match multi-class strings and verify all defines.
+Fixed: 03.17 — Added `RC_CSS_STATUS` define in `win/app/htmlview.h`, used by the status row (then `win/app/main.cpp:356`, now `win/app/statusbar.cpp:149`); updated regex in `tests/python/meta/test_guest_css.py` to match multi-class strings and verify all defines. Header token corrected from PARTIAL to FIXED 2026-10-12.
 
 Fixed: 03.18 — Added `ExecStatus.UNKNOWN` in `bridge/status.py` and `EXEC_STATUS_PROSE`; updated `bridge/server.py` and `win/rpc/rpc.cpp` to treat unrecognized exec status as error; added agreement test in `tests/python/wire/test_exec_status.py`.
 

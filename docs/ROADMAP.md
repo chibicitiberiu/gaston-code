@@ -55,10 +55,14 @@ something later.
   draft. What is left is the two cases where the wrapper could not speak and the
   agent is not told: it was skipped (no fs lane, no `temp` header, a failed
   `put`), or no verdict came back.
-- The `STYLESHEET` comment strip (`BACKLOG.md` 13, "free and separable").
-  **5,574 of 9,375 bytes** are CSS comments -- 58% of the DOC frame -- and `doc()`
-  carries no `enc` header, so they go out verbatim once per connect and again on
-  every reconnect. Needs the five DOC goldens regenerated and depends on nothing.
+- The `STYLESHEET` comment strip (`BACKLOG.md` 13, "free and separable") --
+  **DONE in stage 1**; `WIRE_CSS = _without_comments(STYLESHEET)`
+  (`bridge/view/html.py:631`) and `document()` defaults to it. **5,574 of 9,375
+  bytes** are CSS comments, 59% of the stylesheet; the strip removes 5,595,
+  because the blank lines the comments leave go too, taking the DOC body from
+  9,557 to 3,962 -- 58% of the frame. Two denominators, which is why both
+  percentages appear and neither is wrong. `doc()` carries no `enc` header, so
+  those bytes went out verbatim once per connect and again on every reconnect.
 - The stale-doc sweep: `PROGRESS.md`'s "Current goal" still says Phase 5; R5 and
   R6 are labelled planned above text saying they shipped; `PLAN.md:1660` says the
   in-process collector has not landed and it has; `BACKLOG.md` 697 asserts Phase
@@ -102,7 +106,7 @@ used the way it is meant to be used.
 
 **The decisions that gate stage 3** -- the reason they are here:
 
-1. **What export does.** `export_document` (`bridge/view/html.py:643`, called
+1. **What export does.** `export_document` (`bridge/view/html.py:668`, called
    from `bridge/services/session.py:159`) builds a standalone file from
    `pages.all_text()`. Once the markup belongs to the client the bridge cannot
    build it at all. Three options, in `BACKLOG.md` 13 and 31: the guest renders
@@ -202,6 +206,22 @@ citations; the short version:
 ---
 
 ## Stage 3 — the markup moves to the client
+
+**Planned 2026-10-12; `docs/stage3-plan.md` is the detailed plan and carries the
+citations, the seven decisions and the commit order.** Nineteen commits in three
+phases: everything bridge-side lands first with no wire change, the renderer is
+proved under Wine against the bridge's own emitter before it is linked, the cap
+moves once with the number measured, and the cutover is one commit because it
+cannot be two.
+
+Two things that section below does not say, both decided while planning. The
+appearance leaves the wire as **files beside the exe** -- `view.css`,
+`export.css` and a macro-substituted `view.tpl` -- so the markup and the style
+are editable without a rebuild. And **pagination is a stage of its own, after
+this one**, which is what lets this stage keep the bridge's emitter as a
+verified oracle rather than deleting it and trusting the new renderer. It takes
+the 3b slot and R7 becomes 3c; that renumbering lands with stage 3's own closing
+commit, not here, so the table above still reads as it did until then.
 
 `BACKLOG.md` 31, with 13 first because 13 is smaller and builds the handshake
 capability and the export answer that 31 also needs.
