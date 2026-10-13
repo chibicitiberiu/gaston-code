@@ -183,7 +183,33 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # What it does NOT buy is the stylesheet: 9,375 bytes of CSS and ~5,400 of
 # markup templates are FILES beside the exe, not image. Had they been
 # compiled in, this raise would have been four pages rather than four.
-COMMITTED_CAP ?= 498425
+#
+# 498,425 -> 506,617 on 2026-10-13, for stage 4: `kill` stops stranding a
+# DOS VM (BACKLOG 17). Measured 502,521; the cap is that plus one page, as
+# above.
+#
+# THIS ONE IS MOSTLY ALIGNMENT, AND SAYING SO IS THE POINT. Attributed
+# against the commit before it (497,913), from the link map:
+#
+#   +1,024  AUTO: the descendant walk in Processes::kill and
+#           reclaimOrphanVms. Two 512-byte blocks; the first 28 bytes of it
+#           were free, which is how little slack was left.
+#     +376  CONST and CONST2: the log lines naming what was killed and
+#           which VM was reclaimed or could not be.
+#   +4,096  ONE PAGE OF PADDING, bought by those 376 bytes. _DATA ended at
+#           0x0046ef40 with 192 bytes before the 0x0046f000 page, so the
+#           new constants pushed _BSS's base from 0x0046f000 to
+#           0x00471000. _BSS itself did not grow by a byte.
+#   -2,704  what the arithmetic above over-counts, because the page the
+#           slide bought is partly spent by the code in the same commit.
+#
+# The honest reading: 1,400 bytes of content cost 4,096, and the page it
+# bought has room in it. The frugal alternative was to shave 184 bytes of
+# log strings to stay under the boundary, which is a false economy -- it
+# makes the diagnostics worse to dodge an alignment artefact, and the next
+# commit buys the page anyway. The rest of stage 4 spends what is left
+# rather than asking again.
+COMMITTED_CAP ?= 506617
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a

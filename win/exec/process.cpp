@@ -178,6 +178,55 @@ KillStatus Processes::kill(DWORD pid, bool force, DWORD waitMs)
                 }
     }
 
+    /* FORCE: TAKE THE WIN32 DESCENDANTS DOWN FIRST, AND RECLAIM AN ORPHANED
+     * VM AFTERWARDS. BACKLOG 17.
+     *
+     * Without this, forcing a console program leaves two kinds of wreckage.
+     * Its Win32 children are reparented to nothing and keep running; and
+     * the WINOA386.MOD hosting its console stays, one thread, until reboot
+     * -- the leak the refusal above exists to avoid, which `force` was
+     * previously just a way to opt into. A guest carrying those later
+     * blue-screened in VMM.
+     *
+     * Children first, then the target, because the other order gives a
+     * child time to notice its parent went and do something about it.
+     *
+     * THE VM IS ONLY TOUCHED WHEN IT IS DEMONSTRABLY ORPHANED: after the
+     * target is confirmed gone we look again, and terminate a WINOA386.MOD
+     * that was below it only if nothing else is above it any more. A VM
+     * still owned by a live process is somebody else's DOS box. */
+    std::vector<DWORD> below;
+    if (force)
+    {
+        descendants(pid, below);
+        for (unsigned i = 0; i < below.size(); i++)
+        {
+            const ProcessInfo *c = 0;
+            for (unsigned j = 0; j < all.size(); j++)
+                if (all[j].pid == below[i])
+                    c = &all[j];
+            if (!c)
+                continue;
+            const char *cn = baseName(c->exe);
+            /* The VM is left for the orphan check below, and the
+             * never-kill list applies to a descendant exactly as it does
+             * to a target -- REDIR32 in particular cannot be killed at
+             * all, and trying leaves a zombie. */
+            if (lstrcmpiA(cn, "WINOA386.MOD") == 0)
+                continue;
+            bool skip = false;
+            for (unsigned k = 0; k < sizeof always / sizeof always[0]; k++)
+                if (lstrcmpiA(cn, always[k]) == 0)
+                    skip = true;
+            if (skip)
+                continue;
+            Handle ch(OpenProcess(PROCESS_TERMINATE, FALSE, c->pid));
+            if (ch.valid() && TerminateProcess(ch.get(), 1))
+                rc_log("process: killed %08lx (%s), below %08lx", c->pid,
+                       cn, pid);
+        }
+    }
+
     Handle h(OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid));
     if (!h.valid())
     {
@@ -190,11 +239,51 @@ KillStatus Processes::kill(DWORD pid, bool force, DWORD waitMs)
                GetLastError());
         return KILL_FAILED;
     }
-    if (WaitForSingleObject(h.get(), waitMs) == WAIT_OBJECT_0)
-        return KILL_OK;
-    rc_log("process: %08lx (%s) told to die, still there after %lums", pid,
-           name, waitMs);
-    return KILL_PENDING;
+    if (WaitForSingleObject(h.get(), waitMs) != WAIT_OBJECT_0)
+    {
+        rc_log("process: %08lx (%s) told to die, still there after %lums",
+               pid, name, waitMs);
+        return KILL_PENDING;
+    }
+    if (force && !below.empty())
+        reclaimOrphanVms(below);
+    return KILL_OK;
+}
+
+/* A DOS VM that was below a process we have just confirmed dead, and that
+ * nothing else is above any more. See the note in kill(). Best effort by
+ * design: failing to reclaim one is the behaviour this project had all
+ * along, so it is logged and never turned into a failed kill. */
+void Processes::reclaimOrphanVms(const std::vector<DWORD> &wasBelow)
+{
+    std::vector<ProcessInfo> now;
+    if (!snapshot(now, false))
+        return;
+    for (unsigned i = 0; i < now.size(); i++)
+    {
+        if (!contains(wasBelow, now[i].pid))
+            continue;
+        if (lstrcmpiA(baseName(now[i].exe), "WINOA386.MOD") != 0)
+            continue;
+        /* Still owned? Then it is not ours to reclaim. */
+        bool owned = false;
+        for (unsigned j = 0; j < now.size(); j++)
+            if (now[j].pid == now[i].ppid)
+                owned = true;
+        if (owned)
+        {
+            rc_log("process: DOS VM %08lx stays: %08lx is still above it",
+                   now[i].pid, now[i].ppid);
+            continue;
+        }
+        Handle vh(OpenProcess(PROCESS_TERMINATE, FALSE, now[i].pid));
+        if (vh.valid() && TerminateProcess(vh.get(), 1))
+            rc_log("process: reclaimed orphaned DOS VM %08lx", now[i].pid);
+        else
+            rc_log("process: orphaned DOS VM %08lx could not be reclaimed "
+                   "(%lu); it will stay until reboot", now[i].pid,
+                   GetLastError());
+    }
 }
 
 /* The DOS side of a job on 98: the VM, the redirector, or a 16-bit/DOS

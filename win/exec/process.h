@@ -89,9 +89,22 @@ public:
      * session it runs. Ending it leaves that VM half-dead until reboot
      * (measured, docs/BACKLOG.md 17), and a guest carrying such VMs later
      * blue-screened in VMM (docs/measurements/bsod-vm-20260927.txt).
-     * Decided 2026-09-27: no such kill without force. */
+     * Decided 2026-09-27: no such kill without force.
+     *
+     * WITH `force`, since 2026-10-13: the Win32 descendants are terminated
+     * first, and a WINOA386.MOD that was below the target is reclaimed
+     * afterwards IF nothing is above it any more. `force` used to be a way
+     * to opt into the leak this refusal describes; now it is a way to take
+     * the whole thing down. BACKLOG 17. */
     KillStatus kill(DWORD pid, bool force, DWORD waitMs);
 
+private:
+    /* Terminate a DOS VM that was below a process now confirmed dead and
+     * that nothing else owns. Best effort: never turns a kill into a
+     * failure. */
+    void reclaimOrphanVms(const std::vector<DWORD> &wasBelow);
+
+public:
     /* ExecJob's stop, and nothing else's: end `root` (whose handle is
      * `rootProcess`) and everything below it, WITHOUT the deny list -- the
      * tree is ours. True if `root` is gone in the end.
