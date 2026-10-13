@@ -106,3 +106,79 @@ def test_ui_run_carries_the_steps_in_the_body():
 def test_ui_cancel_names_the_run_it_stops():
     f = P.ui_cancel("u7")
     assert f.type == "UICANCEL" and f.headers == {"id": "u7"}
+
+
+# --- OCR, and the machine that has no OCR engine ---------------------------
+#
+# The absent case is the one worth pinning, because it is what every machine
+# but the one this was written on will do. `to_png` set the contract for a
+# missing dependency -- None rather than an exception, so the tool says so
+# and carries on -- and `to_text` has to keep it or a bridge without
+# Tesseract fails every `ocr` call instead of explaining itself once.
+
+def test_no_tesseract_is_none_and_not_an_exception(monkeypatch):
+    import bridge.wire.uiview as V
+    monkeypatch.setattr(V.shutil, "which", lambda _name: None)
+    assert V.to_text(b"BM not really a bitmap") is None
+
+
+def test_tesseract_that_refuses_is_none_too(monkeypatch):
+    """A non-zero exit is a refusal, not a crash: an unreadable capture
+    should read as "nothing found here", never as a broken bridge."""
+    import subprocess
+
+    import bridge.wire.uiview as V
+
+    monkeypatch.setattr(V.shutil, "which", lambda _name: "/usr/bin/tesseract")
+
+    def refuse(*_a, **_k):
+        return subprocess.CompletedProcess([], 1, b"", b"Error in pixReadMem")
+
+    monkeypatch.setattr(V.subprocess, "run", refuse)
+    assert V.to_text(b"BM nonsense") is None
+
+
+def test_what_tesseract_printed_is_what_comes_back(monkeypatch):
+    import subprocess
+
+    import bridge.wire.uiview as V
+
+    seen = {}
+
+    def ran(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["timeout"] = kw.get("timeout")
+        return subprocess.CompletedProcess(cmd, 0, b"Setup is copying\n", b"")
+
+    monkeypatch.setattr(V.shutil, "which", lambda _name: "/usr/bin/tesseract")
+    monkeypatch.setattr(V.subprocess, "run", ran)
+    assert V.to_text(b"BM bitmap") == "Setup is copying\n"
+    # --psm 6 is the one argument with a reason behind it: a dialog is a
+    # uniform block of text, and the default page segmentation is worse at
+    # it (docs/PLAN.md). Pinned so it is not dropped as noise.
+    assert "--psm" in seen["cmd"] and "6" in seen["cmd"]
+    assert seen["cmd"][2] == "stdout"
+    assert seen["timeout"] == V.OCR_TIMEOUT_S
+
+
+def test_the_capture_is_handed_over_as_a_file_that_goes_away(monkeypatch):
+    """Tesseract is given a path, never our stdin, and the temp directory is
+    its own so the name cannot collide with a concurrent call."""
+    import os
+    import subprocess
+
+    import bridge.wire.uiview as V
+
+    paths = []
+
+    def ran(cmd, **_kw):
+        paths.append(cmd[1])
+        assert os.path.exists(cmd[1]), "the capture is not there to read"
+        with open(cmd[1], "rb") as fp:
+            assert fp.read() == b"BM the bytes the guest sent"
+        return subprocess.CompletedProcess(cmd, 0, b"ok\n", b"")
+
+    monkeypatch.setattr(V.shutil, "which", lambda _name: "/usr/bin/tesseract")
+    monkeypatch.setattr(V.subprocess, "run", ran)
+    V.to_text(b"BM the bytes the guest sent")
+    assert paths and not os.path.exists(paths[0]), "the temp file stayed"

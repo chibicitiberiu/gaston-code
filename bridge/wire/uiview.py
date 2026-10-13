@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import shutil
+import subprocess
+import tempfile
 
 from ..agent import prompts
 from .uirec import UiNode
@@ -141,3 +145,57 @@ def to_png(bmp: bytes) -> bytes | None:
     except Exception:
         log.exception("a %d-byte capture would not decode as a BMP", len(bmp))
         return None
+
+
+#: How long Tesseract gets. A full 640x480 screen on this hardware is well
+#: under a second; the cap is for a wedged binary, not a slow one.
+OCR_TIMEOUT_S = 30
+
+
+def to_text(bmp: bytes) -> str | None:
+    """A guest BMP as the text Tesseract can find in it.
+
+    THE THIRD RUNG OF THE LADDER, NEVER THE FIRST (docs/PLAN.md). The
+    control tree is exact and free where it can see, MSAA is next, and OCR
+    earns its keep only where neither can -- a DOS full-screen box, a
+    custom-drawn installer, a setup progress bar. OCR on a dialog whose text
+    was already retrievable has spent CPU and tokens to produce a worse
+    answer.
+
+    `--psm 6` (assume a uniform block of text) suits dialog text better than
+    the default page segmentation, and the capture is fed as it arrived,
+    unscaled: Win98 does not antialias UI text by default, which is
+    unusually good input.
+
+    NO PILLOW NEEDED, unlike `to_png`: Tesseract reads BMP natively, so this
+    degrades on one missing dependency rather than two.
+
+    None rather than an exception when Tesseract is missing or fails, the
+    same contract `to_png` has for Pillow: a bridge without it should say so
+    and carry on, not fail the tool. Every machine but the one this was
+    written on will be the missing case.
+    """
+    exe = shutil.which("tesseract")
+    if exe is None:
+        log.warning("no tesseract on this bridge; a capture cannot be read")
+        return None
+    # Its own directory, so the name cannot collide and cleanup takes the
+    # lot. Tesseract is given a path and never reads our stdin.
+    with tempfile.TemporaryDirectory(prefix="gaston-ocr-") as d:
+        src = os.path.join(d, "shot.bmp")
+        try:
+            with open(src, "wb") as fp:
+                fp.write(bmp)
+            out = subprocess.run(
+                [exe, src, "stdout", "--psm", "6"],
+                capture_output=True, timeout=OCR_TIMEOUT_S, check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("tesseract did not run: %s", exc)
+            return None
+    if out.returncode != 0:
+        log.warning("tesseract refused a %d-byte capture (%d): %s", len(bmp),
+                    out.returncode,
+                    out.stderr.decode("utf-8", "replace").strip()[:200])
+        return None
+    return out.stdout.decode("utf-8", "replace")

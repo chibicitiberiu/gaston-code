@@ -715,7 +715,7 @@ def classify(ctx: Ctx, tool: str, args: dict | None) -> Verdict:
     if verb in _STATE:
         v.add(READ, _t("state"))
         return v
-    if verb in ("ui", "shot", "get_clipboard"):
+    if verb in ("ui", "shot", "ocr", "get_clipboard"):
         v.add(SCREEN_SEE, _t("screen_see"))
         return v
     if verb in ("input", "set_clipboard"):

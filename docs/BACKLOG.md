@@ -2814,9 +2814,23 @@ now reached. These were decided against, or deferred, on purpose:
   `POINTL*` in wParam -- a pointer into our process, meaningless in the
   target's. Needs the in-process reader (`win/inproc/`) or a shared-memory
   POINTL. Plain Edit is done.
-- **Text that exists only as pixels** -- owner-drawn controls, canvases. Would
-  be OCR on the bridge (the guest transforms nothing) followed by a `screen`
-  click at the found point. Until then: `at` offsets read off a `shot`.
+- ~~**Text that exists only as pixels** -- owner-drawn controls, canvases.
+  Would be OCR on the bridge (the guest transforms nothing) followed by a
+  `screen` click at the found point. Until then: `at` offsets read off a
+  `shot`.~~ **BUILT 2026-10-13, stage 4**, as `mcp__machine__ocr`: the same
+  capture `shot` takes, read on the bridge by Tesseract at `--psm 6`. The
+  architecture held -- the guest ships no OCR engine and never could.
+
+  **Reading is built; clicking what was read is not.** This bullet's second
+  half wanted a click at the found point, and `ocr` returns text with no
+  coordinates, so finding a control still means `ui`. That is deliberate
+  rather than deferred: a word's position in an OCR pass is a guess about a
+  guess, and `PLAN.md` puts OCR third in the ladder precisely because
+  anything with a real control should never reach it.
+
+  **It degrades like `to_png` does.** No Tesseract means a named refusal
+  pointing at `ui` and `shot`, not a failed tool -- and unlike the PNG path
+  it needs no Pillow, because Tesseract reads BMP natively.
 - **Recursive delete and folders across drives -- DONE the same day**, at
   the user's call ("go above and beyond what win98 lets us do"): win/fs/tree.h
   copies, moves and deletes whole trees, deletes go to the Recycle Bin unless

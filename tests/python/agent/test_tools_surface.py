@@ -179,9 +179,13 @@ from bridge.files import caps as C
 
 #: What a client that runs step lists is offered. `click`, `keys` and `focus`
 #: were retired for `input` on 2026-10-02; a client too old to run step lists
-#: keeps the two that only READ the screen (READ_TOOLS).
-SCREEN_TOOLS = ("ui", "input", "shot")
-READ_TOOLS = ("ui", "shot")
+#: keeps the ones that only READ the screen (READ_TOOLS).
+#:
+#: `ocr` joined both on 2026-10-13 and is in READ_TOOLS deliberately: it is a
+#: capture plus a transform on the bridge, so a client that can be read but
+#: not driven can still be OCR'd.
+SCREEN_TOOLS = ("ui", "input", "shot", "ocr")
+READ_TOOLS = ("ui", "shot", "ocr")
 
 
 class _Guest:

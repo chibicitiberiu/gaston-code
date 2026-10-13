@@ -36,7 +36,7 @@ from ..services.guest_fs import FsError
 from ..services.proc import ProcError
 from ..services.ui import UiError
 from ..wire import fold
-from ..wire.uiview import render_tree, to_png
+from ..wire.uiview import render_tree, to_png, to_text
 from . import prompts
 from . import toolnotes as notes
 from .selectors import render_candidates, split_steps
@@ -667,6 +667,56 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                          error=True)
         except Exception:
             log.exception("mcp__machine__shot failed: %r", args)
+            raise
+
+    @tool(
+        "ocr",
+        prompts.text("tools.ocr.description"),
+        {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.x")},
+                "y": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.y")},
+                "w": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.w")},
+                "h": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.h")},
+            },
+            "required": [],
+        },
+    )
+    async def machine_ocr(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            a = args or {}
+            bmp, headers = await ui.shot(
+                guest,
+                x=max(0, int(a.get("x") or 0)), y=max(0, int(a.get("y") or 0)),
+                w=max(0, int(a.get("w") or 0)), h=max(0, int(a.get("h") or 0)))
+            found = to_text(bmp)
+            if found is None:
+                # Same shape as `shot`'s missing-Pillow answer: name what was
+                # captured so the model knows the machine did its part, and
+                # point at the rung that does work here.
+                return _text(prompts.text("tools.ocr.no_engine",
+                                          w=headers.get("w"),
+                                          h=headers.get("h"),
+                                          size=len(bmp)), error=True)
+            found = found.strip()
+            if not found:
+                return _text(prompts.text("tools.ocr.nothing",
+                                          w=headers.get("w"),
+                                          h=headers.get("h")))
+            return _text(found)
+        except UiError as exc:
+            return _text(_ui_explain(exc, str(a.get("target") or "")),
+                         error=True)
+        except Exception:
+            log.exception("mcp__machine__ocr failed: %r", args)
             raise
 
     @tool(
@@ -1770,9 +1820,13 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     clip_ok = getattr(_caps, "clip", 0) >= 1
     clip_read = [machine_get_clipboard] if clip_ok else []
     clip_write = [machine_set_clipboard] if clip_ok else []
-    screen = ([machine_ui, machine_input, machine_shot,
+    # `ocr` sits with the READING tools, not the driving ones: it is a
+    # capture plus a transform on this side, so a client that can be read
+    # but not driven can still be OCR'd.
+    screen = ([machine_ui, machine_input, machine_shot, machine_ocr,
                *clip_read, *clip_write] if steps_ok
-              else [machine_ui, machine_shot, *clip_read] if automation
+              else [machine_ui, machine_shot, machine_ocr, *clip_read]
+              if automation
               else [])
     if automation and not steps_ok:
         # click, keys and focus were retired for `input` (2026-10-02). A

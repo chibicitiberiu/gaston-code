@@ -220,6 +220,22 @@ Width of the area, from `x`. Default 0, meaning the whole screen.'''
 h = '''
 Height of the area, from `y`. Default 0, meaning the whole screen.'''
 
+# THE THIRD RUNG, AND THE DESCRIPTION SAYS SO. `ui` is exact and free where
+# it can see; OCR is a guess made from pixels. A model that reaches for this
+# first spends tokens to get a worse answer, so the first paragraph is about
+# when NOT to use it (docs/PLAN.md, "OCR, on the bridge, as a fallback").
+[ocr]
+description = '''
+Read text out of the machine's screen as pixels, when nothing else can see it.
+
+Try `ui` first, always: it reads a control's real text exactly and costs a fraction of this. Reach for `ocr` only where there are no controls to read -- a DOS full-screen box, a custom-drawn installer, a setup progress message, a game. Text that `ui` already returned should never be OCR'd.
+
+What comes back is a best guess from an image, not the machine's own answer: it can misread, and it loses the layout. If you need to click something, find it with `ui`.'''
+no_engine = '''
+This bridge has no OCR engine installed, so the picture cannot be read here. The machine captured it ({w}x{h}, {size} bytes) -- that part worked. Use `ui` to read the controls, or `shot` to look at the picture yourself.'''
+nothing = '''
+No text was found in that {w}x{h} area. It may hold no text, or none the engine could make out -- try a tighter area around what you want to read, or `shot` to see what is actually there.'''
+
 # What a refusal from the machine means, in words rather than a status code.
 # The model reads these and has to know what to do next, so every one says
 # that. Keyed by the status the guest sends in its UIEND.

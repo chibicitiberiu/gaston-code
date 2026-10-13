@@ -267,6 +267,9 @@ TOOL_CATS = {
                              K.RUN_SYS),
     "mcp__machine__kill": (K.RUN_ELSE,),
     "mcp__machine__ui": (K.SCREEN_SEE,), "mcp__machine__shot": (K.SCREEN_SEE,),
+    # Reading a capture is seeing, not driving: it takes the same picture
+    # `shot` does and transforms it on this side.
+    "mcp__machine__ocr": (K.SCREEN_SEE,),
     "mcp__machine__input": (K.SCREEN_DRIVE,),
     # Reading what was last copied is seeing the machine; replacing it is
     # driving it, and the person at the keyboard cannot get back what it
