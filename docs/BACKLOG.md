@@ -2971,8 +2971,16 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
   bridge strips that line only from what the agent sees.
 - **A Windows 95 comctl32 4.00 run.** The sheet uses the V1 structures for
   it (and found the array-stride bug that way on 98); no 95 machine was run.
-- **The Tools page's Add asks four one-line questions** rather than one form,
-  and has no Browse for the marker file.
+- ~~**The Tools page's Add asks four one-line questions** rather than one
+  form, and has no Browse for the marker file.~~ **DONE 2026-10-13, stage 4.**
+  One dialog with the four fields, and Browse resolves comdlg32 at the call
+  the way `Attach file` does. Four modals in a row was wrong for one record
+  in a way that is worth naming: you could not see what you had already
+  typed, could not go back to fix the first answer without abandoning all of
+  it, and Cancel on the third carried on with the first two anyway, because
+  only the name's return was ever checked. The name is still the one
+  required field -- refused in the dialog, with the cursor already in it,
+  which is the thing a form can do and a sequence of questions cannot.
 
 ---
 

@@ -1,6 +1,7 @@
 /* optsheet.cpp -- see app/optsheet.h. */
 #include <windows.h>
 #include <commctrl.h>
+#include <commdlg.h>   /* OPENFILENAMEA, for the Add-a-tool Browse */
 #include <prsht.h>
 #include <stdlib.h>
 #include <string.h>
@@ -839,21 +840,159 @@ bool ToolsPage::onCommand(WORD id, WORD code, HWND ctl)
     return false;
 }
 
+/* --- Add a tool: ONE form, not four questions ------------------------------
+ *
+ * It used to be four `askLine` modals in a row. Four is wrong for one
+ * record: you cannot see what you have already said, you cannot go back to
+ * fix the first answer without cancelling all of it, and Cancel on the
+ * third leaves the first two typed for nothing -- the old code just carried
+ * on with whatever had been entered. A tool is one thing, so it is one
+ * dialog. BACKLOG 30.
+ *
+ * And Browse, because the marker file is a full path somebody was being
+ * asked to type from memory. comdlg32 is resolved at the call, the way
+ * `Attach file` does it in mainwindow.cpp. */
+
+#define ID_TA_NAME   760
+#define ID_TA_FILE   761
+#define ID_TA_BROWSE 762
+#define ID_TA_ENV    763
+#define ID_TA_TRUST  764
+
+struct AddToolState { ToolRow *row; char trust[200]; };
+
+static void addToolBrowse(HWND dlg)
+{
+    typedef BOOL (WINAPI *PFN_GETOPENFILENAMEA)(LPOPENFILENAMEA);
+    OPENFILENAMEA ofn;
+    char file[MAX_PATH];
+
+    GetDlgItemTextA(dlg, ID_TA_FILE, file, sizeof file);
+    memset(&ofn, 0, sizeof ofn);
+    ofn.lStructSize = sizeof ofn;
+    ofn.hwndOwner = dlg;
+    ofn.lpstrFilter = "Programs (*.exe;*.com;*.bat)\0*.exe;*.com;*.bat\0"
+                      "All Files (*.*)\0*.*\0\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = sizeof file;
+    ofn.lpstrTitle = "The file that is there when it is installed";
+    /* FILEMUSTEXIST, because the whole point of the marker is that its
+     * presence means the tool is installed on THIS machine. A path that is
+     * not there is still allowed -- it can be typed -- but Browse should
+     * not help anyone pick one. */
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    {
+        Dll dll(LoadLibraryA("comdlg32.dll"));
+        PFN_GETOPENFILENAMEA fn = dll.valid()
+            ? (PFN_GETOPENFILENAMEA)GetProcAddress(dll.get(),
+                                                   "GetOpenFileNameA")
+            : NULL;
+        if (fn && fn(&ofn))
+            SetDlgItemTextA(dlg, ID_TA_FILE, file);
+    }
+}
+
+static BOOL CALLBACK addToolProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    AddToolState *st = (AddToolState *)GetWindowLongA(dlg, DWL_USER);
+    switch (msg) {
+    case WM_INITDIALOG:
+        st = (AddToolState *)lp;
+        SetWindowLongA(dlg, DWL_USER, (LONG)st);
+        SendDlgItemMessageA(dlg, ID_TA_NAME, EM_LIMITTEXT,
+                            sizeof st->row->name - 1, 0);
+        SendDlgItemMessageA(dlg, ID_TA_FILE, EM_LIMITTEXT,
+                            sizeof st->row->file - 1, 0);
+        SendDlgItemMessageA(dlg, ID_TA_ENV, EM_LIMITTEXT,
+                            sizeof st->row->env - 1, 0);
+        SendDlgItemMessageA(dlg, ID_TA_TRUST, EM_LIMITTEXT,
+                            sizeof st->trust - 1, 0);
+        SetFocus(GetDlgItem(dlg, ID_TA_NAME));
+        return FALSE;
+    case WM_COMMAND:
+        if (LOWORD(wp) == ID_TA_BROWSE && HIWORD(wp) == BN_CLICKED) {
+            addToolBrowse(dlg);
+            return TRUE;
+        }
+        if (LOWORD(wp) == IDOK) {
+            GetDlgItemTextA(dlg, ID_TA_NAME, st->row->name,
+                            (int)sizeof st->row->name);
+            /* THE NAME IS THE ONLY REQUIRED ONE, and refusing here rather
+             * than on the way out is why this is a form: the field it is
+             * about is still on screen with the cursor in it. */
+            if (!st->row->name[0]) {
+                MessageBoxA(dlg, "A tool needs a short name.",
+                            "Add a tool", MB_OK | MB_ICONINFORMATION);
+                SetFocus(GetDlgItem(dlg, ID_TA_NAME));
+                return TRUE;
+            }
+            GetDlgItemTextA(dlg, ID_TA_FILE, st->row->file,
+                            (int)sizeof st->row->file);
+            GetDlgItemTextA(dlg, ID_TA_ENV, st->row->env,
+                            (int)sizeof st->row->env);
+            GetDlgItemTextA(dlg, ID_TA_TRUST, st->trust,
+                            (int)sizeof st->trust);
+            EndDialog(dlg, 1);
+            return TRUE;
+        }
+        if (LOWORD(wp) == IDCANCEL) { EndDialog(dlg, 0); return TRUE; }
+        return FALSE;
+    case WM_CLOSE:
+        EndDialog(dlg, 0);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static bool askTool(HWND parent, ToolRow &r, char *trust, unsigned trustCap)
+{
+    DlgTemplate t;
+    AddToolState st;
+    st.row = &r;
+    st.trust[0] = '\0';
+
+    t.begin(RC_DLGT_MODAL, 250, 128, "Add a tool");
+    t.item(0, 7, 7, 236, 8, (WORD)-1, RC_DLGT_STATIC,
+           "A short &name (a bridge profile name if it has one):");
+    t.item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 7, 17, 236, 12,
+           ID_TA_NAME, RC_DLGT_EDIT, "");
+    t.item(0, 7, 35, 236, 8, (WORD)-1, RC_DLGT_STATIC,
+           "A &file that is there when it is installed:");
+    t.item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 7, 45, 180, 12,
+           ID_TA_FILE, RC_DLGT_EDIT, "");
+    t.item(WS_TABSTOP, 191, 44, 52, 14, ID_TA_BROWSE, RC_DLGT_BUTTON,
+           "&Browse...");
+    t.item(0, 7, 63, 236, 8, (WORD)-1, RC_DLGT_STATIC,
+           "An &environment variable naming where it is (optional):");
+    t.item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 7, 73, 236, 12,
+           ID_TA_ENV, RC_DLGT_EDIT, "");
+    t.item(0, 7, 91, 236, 8, (WORD)-1, RC_DLGT_STATIC,
+           "Its p&rograms that may run without a second look, "
+           "comma-separated:");
+    t.item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 7, 101, 236, 12,
+           ID_TA_TRUST, RC_DLGT_EDIT, "");
+    t.item(WS_TABSTOP | BS_DEFPUSHBUTTON, 139, 119, 50, 14, IDOK,
+           RC_DLGT_BUTTON, "OK");
+    t.item(WS_TABSTOP, 193, 119, 50, 14, IDCANCEL, RC_DLGT_BUTTON, "Cancel");
+    if (!t.get()) return false;
+
+    HWND owner = GetParent(parent) ? GetParent(parent) : parent;
+    if (DialogBoxIndirectParamA((HINSTANCE)GetWindowLongA(owner,
+                                GWL_HINSTANCE), t.get(), owner,
+                                (DLGPROC)addToolProc, (LPARAM)&st) != 1)
+        return false;
+    rc_strcpy(trust, trustCap, st.trust);
+    return true;
+}
+
 void ToolsPage::add()
 {
     ToolRow r;
     char trust[200];
     memset(&r, 0, sizeof r);
-    if (!askLine(hwnd(), "Add a tool", "A short name (a bridge profile name "
-                 "if it has one):", r.name, sizeof r.name) || !r.name[0])
+    trust[0] = '\0';
+    if (!askTool(hwnd(), r, trust, sizeof trust))
         return;
-    askLine(hwnd(), "Add a tool", "A file that is there when it is "
-            "installed (full path):", r.file, sizeof r.file);
-    askLine(hwnd(), "Add a tool", "An environment variable naming where it "
-            "is (or leave empty):", r.env, sizeof r.env);
-    trust[0] = 0;
-    askLine(hwnd(), "Add a tool", "Its programs that may run without a "
-            "second look, comma-separated:", trust, sizeof trust);
     rc_strcpy(r.trusted, sizeof r.trusted, trust);
     r.user = 1;
     r.enabled = r.wasEnabled = 1;
