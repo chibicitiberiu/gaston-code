@@ -490,6 +490,15 @@ says honestly that 1,400 bytes of content bought 4,096 of padding because
 - **Writing C through a script collapses escapes.** `"\\"` in a generator
   is `"\"` in the file, and one level too many is invisible in a diff
   because the line still reads as a path join.
+- **One guest check came back negative, and that was the most useful run of
+  the stage.** `force-kill-reclaims-the-dos-vm` could not reproduce a DOS VM
+  below anything it launched -- four ways, `kids=0` every time, while
+  `vms-on-box=1`. `Processes::kill` keys both the `dos_session` refusal and
+  the new reclaim on the module being a DESCENDANT, so neither fires for a
+  session started that way, and `BACKLOG.md` 17's "a WINOA386.MOD listed as
+  its child" is now the sentence in doubt. The sibling case had been passing
+  vacuously on the guest since it was written, for the same reason.
+  `docs/measurements/forcekill-vm-20261014.txt`.
 
 ---
 
