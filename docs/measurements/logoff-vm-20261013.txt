@@ -1,0 +1,120 @@
+gremote and a logoff -- REMOTE.md P200 checklist item 12
+QEMU Win98 SE guest (retroclaude-win98), 2026-10-13, stage 4
+
+THE QUESTION
+  Does RegisterServiceProcess(0, RSP_SIMPLE_SERVICE) exempt gremote from the
+  logoff broadcast, as its log line claims -- "registered as a service
+  process; it will outlive a logoff"? If it does, acting on the logoff bit
+  in App would be dead code. If it does not, the arm is needed.
+
+  ROADMAP stage 5 held this as a P200 item. It needs one logoff on any real
+  98 box, so it was pulled into stage 4.
+
+METHOD
+  gremote was already installed and autostarted on this guest: the RunServices
+  key is in place, and the log proves it ran BEFORE any shell existed --
+  "tray: no notification area yet (no shell is running)". The 2026-09-27
+  measurement's note that the key had been removed is out of date.
+
+  Liveness was tested WITHOUT the shared secret, because gremote logs every
+  accepted connection: a bare TCP connect from the host is enough, and
+  whether gremote heard it is read from GREMOTE.LOG afterwards.
+
+  THIS MATTERS, and it is why "connect to the port" is not the test: the
+  guest is reached through a QEMU slirp hostfwd, and slirp accepts on the
+  HOST side whether or not anything in the guest is listening. The port
+  always answers. Only the guest's own log distinguishes the two.
+
+  The logoff was driven from the Start menu over QMP (Ctrl+Esc, L, Y) and
+  NOT through gremote.reboot("logoff"), which would have tested the wrong
+  path: that sets m_askedSessionEnd, and app.cpp returns early on it, so
+  gremote deliberately stays. The question is about a session end somebody
+  ELSE asked for.
+
+WHAT HAPPENED
+
+  23:22:12  gremote starts from RunServices, before the shell
+            "registered as a service process; it will outlive a logoff"
+            "listen: on 0.0.0.0:7401"
+  23:28:51  host connects; gremote logs it, refuses the garbage frame,
+            drops the link. ALIVE.
+  23:29:56  Start > Log Off > Yes
+            app: Windows asks whether the session may end (a logoff); yes
+  23:29:57  app: Windows is ending the session (a logoff); signalling every
+                 service and leaving this handler WITHOUT joining any of them
+            app: the session is ending; abandoning server unjoined
+            app: every service is signalled and abandoned; cleaning up
+            mem [exiting]: 8568K free of 32288K phys
+            === gremote exiting ===
+            app: the session-end handler is returning to Windows after 14 ms
+  23:30:56  host connects while logged off -> ConnectionResetError.
+            Nothing in the guest is listening. (slirp still accepted.)
+  23:31:xx  logged back on. No new "=== gremote starting ===" in the log,
+            no tray icon, nothing on 7401.
+
+THE ANSWER
+  RegisterServiceProcess does NOT exempt a process from the logoff broadcast
+  on Windows 98 SE. gremote received WM_QUERYENDSESSION and WM_ENDSESSION
+  with ENDSESSION_LOGOFF set, endSessionKind() named it correctly, and the
+  handler did what libcore documents for a session end somebody else asked
+  for: tore everything down and quit.
+
+  So the arm is NEEDED. It is not dead code.
+
+AND A SECOND FINDING NOBODY ASKED FOR
+  gremote DOES NOT COME BACK AT LOGON. RunServices runs once, at boot,
+  before anyone logs on -- not per session. So after a logoff the machine is
+  unreachable until it is REBOOTED, not until somebody logs in.
+
+  BACKLOG 35 says the opposite in passing -- "gremote exits with the session
+  and autostarts on logon" -- and that shaped how the Athlon's failed
+  poweroff was handled: the option of waiting for gremote to reappear when
+  somebody logged on was considered and declined. It would not have worked
+  at all.
+
+  This also sharpens what the arm buys. Today one logoff costs the machine
+  its remote access until a power cycle, which on an unattended box is the
+  whole capability.
+
+---
+
+THE ARM, AND THE SAME MEASUREMENT AGAIN
+
+  App::survivesLogoff() added (default false; gremote overrides it to the
+  result of RegisterServiceProcess). On WM_ENDSESSION with ENDSESSION_LOGOFF,
+  not asked for by us, and the derived app saying yes: return true without
+  tearing anything down.
+
+  Built, shipped to the guest, guest restarted so RunServices starts the new
+  binary before logon.
+
+  23:45:56  gremote starts, before the shell again
+            "registered as a service process; the logoff broadcast still
+             arrives and WM_ENDSESSION is declined"   (the old line claimed
+             the API's promise; this one states what happens)
+  23:48:20  probe BEFORE anyone logs on -- accepted and logged. RunServices
+            autostart confirmed from a cold boot.
+  23:48:28  logged on; tray icon added
+  23:50:20  Start > Log Off > Yes
+            app: Windows asks whether the session may end (a logoff); yes
+  23:50:21  app: Windows is ending the session (a logoff), and this process
+                 outlives one -- nothing is torn down and the message loop
+                 keeps running
+            NO "=== gremote exiting ===". Nothing abandoned, nothing joined.
+  23:51:10  probe WHILE LOGGED OFF -- "listen: connection from 10.0.2.2",
+            served, bad frame refused, link dropped. The host saw a clean
+            close (EOF) where the unfixed build gave ConnectionResetError.
+  23:51:33  logged back on: "tray: the taskbar appeared; adding the icon"
+            -- the SAME process, picking up the new session's shell. No
+            restart line anywhere.
+
+  So: gremote now genuinely outlives a logoff, and the tray re-attaches to
+  whatever shell turns up next without being told to. TrayService already
+  waited for Shell_TrayWnd, which is why that half needed no work.
+
+WHAT THIS DOES NOT COVER
+  A real shutdown or restart still tears down, by construction -- the arm
+  tests ENDSESSION_LOGOFF and nothing else, because holding services open
+  through a machine shutdown is the hang BACKLOG 23 was about. Not re-measured
+  here; the guest was restarted twice during this session through the ordinary
+  path and came back both times.

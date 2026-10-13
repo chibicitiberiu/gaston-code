@@ -204,6 +204,30 @@ bool App::onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result)
          * cleanup() has closed the log by then: it reopens the file and
          * appends. Without it the exiting banner is the final line on both a
          * clean return and a fault on the way out. */
+        /* A LOGOFF THIS PROCESS IS ENTITLED TO IGNORE.
+         *
+         * Before m_sessionEnding, before shutdown(), before anything: a
+         * service process that survives a logoff must not tear down for
+         * one, and everything below this point is teardown.
+         *
+         * Three conditions, all of them load-bearing. It must be a LOGOFF
+         * (a shutdown takes the machine with it and holding services open
+         * through that is BACKLOG 23's hang). It must not be one WE asked
+         * for, because then the handler's other arm already keeps us alive
+         * to drive it. And the derived app must say so -- see
+         * survivesLogoff()'s note for what the measurement found.
+         *
+         * Returning true without quitting is the whole mechanism: Windows
+         * asked, we answered, and nothing in libcore stops the loop. */
+        if ((lp & ENDSESSION_LOGOFF) && !m_askedSessionEnd &&
+            survivesLogoff())
+        {
+            rc_log("app: Windows is ending the session (a logoff), and this "
+                   "process outlives one -- nothing is torn down and the "
+                   "message loop keeps running");
+            return true;
+        }
+
         m_sessionEnding = true;
         {
             DWORD t0 = GetTickCount();

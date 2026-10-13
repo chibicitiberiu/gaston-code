@@ -88,7 +88,13 @@ static const UINT_PTR STAY_TIMER = 1;
  * on NT, where the whole idea does not apply -- so a failure here is logged
  * and shrugged at rather than fatal.
  */
-static void stayRunningAfterLogoff()
+/* True if this process is now exempt from being terminated with the
+ * session -- or at least claims to be. MEASURED, and the claim is only half
+ * true: the broadcast still arrives (docs/measurements/logoff-vm-20261013.txt),
+ * so App::survivesLogoff is what actually keeps us alive, and this is the
+ * condition it is keyed on. Without the registration, declining to quit
+ * would just mean being killed a moment later. */
+static bool stayRunningAfterLogoff()
 {
     typedef DWORD (WINAPI *RegisterServiceFn)(DWORD, DWORD);
     enum { RSP_SIMPLE_SERVICE = 1 };
@@ -102,14 +108,19 @@ static void stayRunningAfterLogoff()
     {
         rc_log("gremote: no RegisterServiceProcess here; this copy will "
                "stop when the session ends (NT does it this way)");
-        return;
+        return false;
     }
     if (reg(0, RSP_SIMPLE_SERVICE))
-        rc_log("gremote: registered as a service process; it will outlive "
-               "a logoff");
-    else
-        rc_log("gremote: RegisterServiceProcess refused (%lu)",
-               (unsigned long)GetLastError());
+    {
+        /* The wording used to say "it will outlive a logoff", which was
+         * the API's promise rather than this platform's behaviour. */
+        rc_log("gremote: registered as a service process; the logoff "
+               "broadcast still arrives and WM_ENDSESSION is declined");
+        return true;
+    }
+    rc_log("gremote: RegisterServiceProcess refused (%lu)",
+           (unsigned long)GetLastError());
+    return false;
 }
 
 static void exeDir(char *out, unsigned n)
@@ -136,6 +147,10 @@ protected:
     bool preTranslate(MSG &msg);
     void stopServices();
     void cleanup();
+    /* Only when the registration took. Declining the broadcast without it
+     * would mean being terminated a moment later anyway, and the log would
+     * claim something that did not happen. */
+    bool survivesLogoff() const { return m_registered; }
 
 private:
     void refuse(const char *what);
@@ -143,6 +158,7 @@ private:
 
     char m_exeDir[MAX_PATH];
     bool m_interactive;
+    bool m_registered;          /* RegisterServiceProcess said yes */
     unsigned m_stayTicks;
     ServerConfig m_config;
     ExecConfig m_exec;
@@ -157,7 +173,8 @@ private:
 };
 
 GremoteApp::GremoteApp(HINSTANCE instance)
-    : App(instance), m_interactive(false), m_stayTicks(0)
+    : App(instance), m_interactive(false), m_registered(false),
+      m_stayTicks(0)
 {
     m_exeDir[0] = '\0';
 }
@@ -263,7 +280,7 @@ bool GremoteApp::parseArgs(const char *cmdLine)
          : m_ui.automation == 1 ? "read-only: trees and screenshots, no input"
          : "off: every ui request refused",
            (int)m_ui.msaa);
-    stayRunningAfterLogoff();
+    m_registered = stayRunningAfterLogoff();
     if (!m_procs.init())
         rc_log("gremote: no Toolhelp on this machine; PS and KILL will "
                "refuse (NT 4 does this, 9x does not)");

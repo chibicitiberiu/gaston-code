@@ -207,6 +207,28 @@ public:
     void noteSessionEndAsked(bool asked) { m_askedSessionEnd = asked; }
     bool sessionEndAskedByUs() const { return m_askedSessionEnd; }
 
+    /* MAY THIS PROCESS OUTLIVE A LOGOFF? Default no, which is right for
+     * anything a logged-on person started -- the client dies with the
+     * session that opened it and should.
+     *
+     * A service process overrides it. MEASURED 2026-10-13 on the QEMU
+     * guest (docs/measurements/logoff-vm-20261013.txt), because the
+     * alternative was guessing: `RegisterServiceProcess(0,
+     * RSP_SIMPLE_SERVICE)` does NOT exempt a process from the logoff
+     * broadcast on 98 SE. gremote received WM_ENDSESSION with
+     * ENDSESSION_LOGOFF, tore everything down and quit -- correct for a
+     * session end somebody else asked for, and wrong for a process whose
+     * whole job is to be reachable when nobody is logged on.
+     *
+     * Worse than it sounds: RunServices runs once at BOOT, not per
+     * session, so gremote did not come back when somebody logged in again.
+     * One logoff cost the machine its remote access until a power cycle.
+     *
+     * ONLY A LOGOFF. A real shutdown or restart still tears down, whatever
+     * this returns -- the machine is going away and holding services open
+     * through it is the hang 23 was about. */
+    virtual bool survivesLogoff() const { return false; }
+
 protected:
     explicit App(HINSTANCE instance);
 

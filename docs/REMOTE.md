@@ -1327,7 +1327,25 @@ matters for anything with a clock in it.
   `GASTON.PRV` (`abandoning desktop` / `connection` / `main window` / `ole`
   `unjoined`). The client had the longer wait of the two, so if a desktop ever
   hung on the way down with `gaston.exe` up, this was why.
-- **Does `gremote` survive a LOGOFF, as `RegisterServiceProcess` promises?**
+- ~~**Does `gremote` survive a LOGOFF, as `RegisterServiceProcess`
+  promises?**~~ **ANSWERED 2026-10-13: no, it did not -- and it does now.**
+  `docs/measurements/logoff-vm-20261013.txt`. `RSP_SIMPLE_SERVICE` does NOT
+  keep a process out of the logoff broadcast on 98 SE: gremote took
+  `WM_ENDSESSION` with `ENDSESSION_LOGOFF`, tore down and quit, exactly as
+  the paragraph below feared. `App::survivesLogoff()` is the arm, and the
+  same measurement re-run with it shows gremote serving a connection with
+  nobody logged on, then picking up the next session's taskbar as the same
+  process.
+
+  **And a second thing, which was the worse half:** `RunServices` runs once
+  at BOOT, not per session, so gremote did not come back at the next logon
+  either. One logoff cost the machine its remote access until a reboot.
+  `BACKLOG.md` 35 says in passing that gremote "autostarts on logon"; it
+  does not, and that mistaken belief shaped how the Athlon's failed poweroff
+  was handled.
+
+  *The original note follows, because its reasoning was right.*
+
   Found while fixing the shutdown hang, and not answered by anything here.
   *A full shutdown does reach it: the VM run of 2026-09-27
   (`docs/measurements/gremote-vm-20260927.txt` §8) recorded its hidden window
@@ -1346,7 +1364,11 @@ matters for anything with a clock in it.
   restart)` from `WM_ENDSESSION`'s `lParam` -- so the measurement is a matter
   of reading the file. ACTING on the bit, by ignoring a logoff, is a
   judgement about what it means on 98 and still wants that measurement
-  first. Note this is
+  first. *(Done, both halves -- and "see whether the port still answers" was
+  not usable as written: the guest is reached through a QEMU slirp hostfwd,
+  which accepts on the host side whether or not anything in the guest
+  listens. The port always answers. Whether gremote LOGGED the connection is
+  the test.)* Note this is
   unchanged by the 2026-10-01 fix: that changed only whether the handler
   waits, never which messages lead to a quit.
 
