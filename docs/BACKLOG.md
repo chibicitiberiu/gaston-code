@@ -2842,11 +2842,17 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 
 ---
 
-## 32. ANCHOR went, and a block index is the shape it would come back in
+## 36. ANCHOR went, and a block index is the shape it would come back in
 
 **Status:** recorded 2026-10-13, stage 3b. Not a defect; a feature deleted
 with its mechanism, written down so deleting it is a decision somebody can
 find rather than a gap somebody rediscovers.
+
+**Renumbered from 32 to 36 on 2026-10-13, stage 4.** Two entries carried the
+number 32 -- this one and "Free memory falls about 16 KB per connection"
+below. Every citation outside this file (`docs/stage1-plan.md:18`,
+`docs/PROGRESS.md:4225`, and two measurement files) means that one, and
+nothing cited this one, so this is the entry that moved.
 
 `anchor_frame(page, off, preview)` told the guest where a user turn landed,
 as a page number plus a byte offset *within that page*, "so the guest can

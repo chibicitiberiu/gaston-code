@@ -19,7 +19,13 @@ decisions, and a machine nobody has run this on.
 
 ## The shape, and the one rule behind the order
 
-Six stages. They are the five that were asked for, with one change: the
+Six stages, and two that split off a stage already under way -- **3b** out of
+3 when pagination turned out to be the client's business, and **4b** out of 4
+when the driving indicator turned out not to fit in the client at all. Both
+splits were made by review rather than by size, and both are recorded where
+they happened.
+
+They are the five that were asked for, with one change: the
 **compiler-flag decision was pulled out of the optimisation stage and put before
 the refactor**, because it pays for it rather than cleaning up after it.
 
@@ -36,6 +42,7 @@ in stage 1 for that reason.
 | 3b | Pagination: the bridge stops dividing the transcript — **DONE 2026-10-13** | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
 | 3c | R7: several guest machines against one bridge — **DONE 2026-10-13** | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
+| 4b | The "agent is driving" indicator | somebody at the keyboard can see that the desktop is not theirs, and stop it, while gremote or the client is driving |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
 
@@ -415,34 +422,106 @@ client claiming another's id inherits its transcript exactly as before.
 
 The stage where `BACKLOG.md` stops holding entries whose only blocker is a
 question. Not a list to be worked top to bottom; a sitting with the file open.
+Planned in `docs/stage4-plan.md`, through two adversarial review rounds.
 
-The decisions, as they stand today:
+**This section was wrong about its own stage, and the plan says how.** The
+count, the sizes and the ownership were all taken on trust from figures a year
+of commits had moved. Corrected here because the stage's exit condition is a
+claim about this file's accuracy:
 
-- **`enc=rle8`** (`BACKLOG.md` 8, `REMOTE.md`'s one live open decision). The
-  measurement is in -- 2.8x faster and 2x larger than deflate -- and Phase 6 has
-  landed, so this is now a value in the chooser or a written-down no. If yes, it
-  is about an hour; it could be pulled into stage 1.
-- **The "agent is driving" indicator** (`BACKLOG.md` 19). Deferred as a taste
-  call: a fourth status pane, a loud transient bar, or both. Turning the
-  automation setting on and off from the menu is the same entry, and today it
-  needs a restart because the INI is read once.
-- ~~**`COMMITTED_CAP` +4,096** so `gaston.exe` can hold the guest half of the
-  automation gate.~~ **Closed 2026-10-11 without being taken.** `BACKLOG.md` 19
-  offered freeing 126 bytes of CONST or DATA as the alternative; stage 2 freed
-  31,520 of CONST alone, and the cap came down rather than up.
-- **What `KILL` means for a stranded console VM** (`BACKLOG.md` 17).
-- **The `rsrc32.dll` question** (`REMOTE.md` P200 checklist, item 9): whether
-  `SYSINFO` should report USER/GDI free resources at all, which needs Resource
-  Meter installed on the box first.
-- **Acting on the logoff bit** (`REMOTE.md` P200 checklist, item 12), which wants
-  its measurement from stage 5 first.
-- **Whether `ocr(rect)` is in scope.** It is unblocked and unbuilt, and it drags
-  Tesseract onto the bridge as a dependency. Decide rather than assume.
+- **Ten entries hold a live question, not seven.** §4's `SYNCDEL`, §6, §8,
+  §11a, §11b, §12, §17, §19, §30, §35. Five more read as open and are not:
+  §3 (there is no replay buffer at all -- `protocol.py:115` enforces
+  never-replay by never replaying), §7, §9, §23 (answered in its own title),
+  §32.
+- **The `rc_strf` sweep is not a sweep.** "~97 sites" was counted 2026-09-18;
+  it is 400 of 438 `rc_strf` sites today, or 524 counting `rc_strcpy` and
+  `rc_strncpy`, which is what the superseded figure counted. Eight of them can
+  bite. The rest stay, and a convention in `str.h` says why.
+- **The automation setting does not need a restart.** `MainWindow::optionsApply`
+  already re-applies it and already lists it among its reconnect triggers. Only
+  the menu item is missing.
+- **§18's residue is nearly closed** by the 2026-10-04 policy rework: `auto` is
+  the bridge's own table and asks the CLI for nothing. What is left is three
+  stale comments.
+- **§30 has seven leftovers, not six.**
 
-The repairs, same stage: `BACKLOG.md` 30's six leftovers from the Options work,
-the Mode menu offering modes the model cannot enter (18's residue, blocked
-upstream), 11a's transcript cache that prunes nothing, and the ~97 `rc_strf`
-sites that ignore a truncation return.
+The decisions, as they were settled 2026-10-13:
+
+- **`enc=rle8`: no, ratified.** `UIAUTOMATION.md:285` had already written the
+  conclusion from a real four-band run -- deflate beat GDI's own RLE at every
+  depth where both exist. The "2.8x faster and 2x larger" this section carried
+  has no measurement file behind it, and its likely source is a *discarded*
+  2.7x single-band number at `win/checks/probe.c:1658`, sign flipped. Two of
+  four repo documents already said no; now all four do.
+- ~~**`COMMITTED_CAP` +4,096**~~ **Closed 2026-10-11 without being taken.**
+  Stage 2 freed 31,520 bytes of CONST against the 126 needed.
+- **`KILL` and a stranded console VM** (`BACKLOG.md` 17): kill the Win32
+  descendants and let a console program end itself, extending the `dos_session`
+  refusal already beside it. One edit in libexec, which reaches both programs.
+- **The `rsrc32.dll` question** (`REMOTE.md` P200 item 9): **no**, and not for
+  the hardware reason. `SYSINFO` runs inline on gremote's control lane, whose
+  one rule is kernel32 and Winsock only, because a hung 16-bit app holding
+  Win16Mutex blocks USER and GDI from every 32-bit thread. No install clears
+  that. `PLAN.md:653` has the alternative.
+- **Acting on the logoff bit** (item 12): **measured in this stage**, not
+  deferred to stage 5. One logoff on the QEMU guest answers it, and
+  `GREMOTE.PRV` already prints which kind of session end arrived.
+- **`ocr(rect)`: in scope**, built in this stage. Tesseract is a system binary
+  rather than a dependency, degrading the way a missing Pillow already does.
+- **The "agent is driving" indicator** (`BACKLOG.md` 19) **left this stage.**
+  gremote drives the desktop independently -- `BACKLOG.md:2063` records "two
+  programs can drive one desktop" as accepted -- so the indicator belongs in
+  the shared seam both programs enter, needs its own pump thread, breaks at
+  `clickAt`'s occlusion check rather than at `isOurs`, and has to mean *stop*
+  rather than "abort this step list". That is a stage: **4b**, below.
+
+The repairs, same stage: `BACKLOG.md` 30's seven leftovers from the Options
+work, 18's three stale comments, 11a's transcript cache that prunes nothing,
+the eight `rc_strf` id sites, §23's missing `ConnectionService::signalStop()`,
+and three strings still telling the user to use a menu item that was deleted.
+
+---
+
+## Stage 4b — the "agent is driving" indicator
+
+Split out of stage 4 on 2026-10-13, by review rather than by size: the design
+in that stage would not have worked. What the review established, so none of it
+is re-derived:
+
+- **It cannot live in the client.** `RUN` goes through `rc_ui_run`
+  (`win/ui/uiengine.cpp:795`), compiled into `gaston`, `gremote` and `uicheck`.
+  An indicator in the client is absent when gremote drives, and worse in the
+  mixed case: gremote's `isOurs` compares its own pid and its tree walk excludes
+  its own pid, so the client's window becomes a node in gremote's `TREE` and a
+  click-blocker it cannot hide.
+- **It cannot be a bar row.** `PermissionBar::push`/`pop` are private, the only
+  public raise is `frame()` over six wire types, and a drive runs on the desktop
+  worker while the bar runs on the window thread.
+- **It needs its own thread and pump.** A posted cross-thread `ShowWindow` is
+  not synchronous; a `SendMessage` blocks against `joinOrLeak(m_ui, *this,
+  5000)`, which waits without pumping. The worker does not pump during a step,
+  so a button or a hotkey hosted there would be dead for up to `stepMs`.
+- **`isOurs` is not the chokepoint.** Five of its eight sites guard against
+  driving our own UI on handles the indicator can never hold. The break is
+  `clickAt`'s occlusion check: `WindowFromPoint` returns the strip, the settle
+  loop polls for it to clear, and a window raised by `SetForegroundWindow` never
+  rises above a topmost one -- so every click under it stalls with
+  `INPUT_OCCLUDED`. `HTTRANSPARENT` except the button's rect is the cheaper
+  design, and it needs one guest measurement first: whether `WindowFromPoint`
+  honours it on 98 SE.
+- **Not `WS_EX_LAYERED` or `WS_EX_NOACTIVATE`.** Style bits are a silent no-op
+  on 9x and a compile error at `WINVER=0x0400`; the load-time kill is
+  `SetLayeredWindowAttributes`, the export. `SW_SHOWNOACTIVATE` and
+  `MA_NOACTIVATE` are the mechanism.
+- **Stop must mean stop.** Cancelling the running step list is not it -- the
+  agent's next `UIRUN` resumes within a second. gremote's tray already does the
+  right thing by setting `m_ui->automation`.
+- **Injected keys fire `RegisterHotKey` hotkeys**, so the cancel chord needs a
+  denylist in the one place that synthesises keys, not a chord nobody would
+  type.
+- **Two caps move**, `COMMITTED_CAP` and `check-gremote`'s, and the second has
+  one page of slack.
 
 ---
 
