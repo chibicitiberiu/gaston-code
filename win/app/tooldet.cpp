@@ -200,8 +200,19 @@ int rc_tooldet_run(const char *exe_dir, rc_tooldet_sink sink, void *ctx)
     /* OURS FIRST, THE USER'S SECOND, and the order is the point: a section
      * in `tools.ini` is read after the shipped one, so the bridge sees the
      * user's answer last and can prefer it. */
-    if (rc_strf(ini, sizeof(ini), "%s\\tools_detect.ini", exe_dir))
-        do_ini(&s, ini, true);
+    if (rc_strf(ini, sizeof(ini), "%s\\tools_detect.ini", exe_dir)) {
+        /* SAY WHEN THE SHIPPED FILE IS NOT THERE. Without it this client
+         * reports no shells at all, and the first symptom is the agent's
+         * `ver` coming back `spawn_failed` with nothing anywhere saying
+         * why -- which is how it was found (BACKLOG 17). The bridge now
+         * says it too, but it can only report what it was told; this is
+         * the end that knows the file is missing rather than empty. */
+        if (GetFileAttributesA(ini) == 0xFFFFFFFF)
+            rc_log("tooldet: no %s -- no tools and NO SHELL will be "
+                   "reported, so every command runs as a bare program", ini);
+        else
+            do_ini(&s, ini, true);
+    }
     if (rc_strf(ini, sizeof(ini), "%s\\tools.ini", exe_dir))
         do_ini(&s, ini, false);
 

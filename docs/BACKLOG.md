@@ -1790,23 +1790,38 @@ our own window from a dialog it had not read.
   the shell prefix itself and `lost = true` in the shell's profile is the same
   fact in better form.
 
-  What is left, and is stage 1's: the wrapper is **skipped silently** when there
-  is no fs lane, no `temp` HELLO header, or the `put` fails -- `guest_exec.py`
-  logs it and the agent gets the bare 0 with nothing saying so -- and **no
-  verdict comes back** when the output cap bites or the shell dies. Builtins are
-  left alone on purpose: the shell's resident profile note already says "exit is
-  0 either way" on every request, so a per-call line would buy nothing and cost
-  context on every `echo` and `dir`. Exact exit values stay out of scope by
-  `execwrap.py`'s own decision.
+  ~~What is left, and is stage 1's: the wrapper is **skipped silently** when
+  there is no fs lane, no `temp` HELLO header, or the `put` fails, and **no
+  verdict comes back** when the output cap bites or the shell dies.~~
+  **[R -- 2026-10-13, stage 4] Both are closed, and were already closed when
+  this said otherwise.** `guest_exec.py` carries `entry.code_lost` for the
+  wrapper that never ran and `entry.wrapped and not verdict` for the one whose
+  line never came back, and both reach the agent as
+  `tools.exec.notes.unknown` -- a sentence saying the exit code is not known,
+  placed last precisely because every other branch has something more
+  specific to say. The code comment beside it cites this entry by number.
+  Builtins are left alone on purpose: the shell's resident profile note
+  already says "exit is 0 either way" on every request, so a per-call line
+  would buy nothing and cost context on every `echo` and `dir`. Exact exit
+  values stay out of scope by `execwrap.py`'s own decision.
 - **An interactive DOS prompt hangs to the timeout.** COMMAND.COM reads
   "Are you sure (Y/N)?" from CON, not stdin, so no input arrangement answers
   it (measured before libexec; the exec tool description says so). Unfixed.
-- **A client that reports no shells runs every command bare, silently.**
-  Seen when the client ran from a folder without `tools_detect.ini`: HELLO
-  listed no shells, the bridge logged only a PATH-separator warning, and the
-  agent's `ver` came back `spawn_failed` with nothing saying why. The bridge
-  should tell the agent (and log) that no shell was reported; the client
-  should log a missing `tools_detect.ini`.
+- ~~**A client that reports no shells runs every command bare, silently.**~~
+  **CLOSED 2026-10-13, stage 4.** Seen when the client ran from a folder
+  without `tools_detect.ini`: HELLO listed no shells, the bridge logged only a
+  PATH-separator warning, and the agent's `ver` came back `spawn_failed` with
+  nothing saying why. All three ends now speak:
+  `bridge/services/connection.py` warns at the handshake, naming the likely
+  cause ("a client run without its tools_detect.ini does this");
+  `guest_exec.py` appends `tools.exec.notes.no_shell` to a `spawn_failed`,
+  so the agent is told rather than left guessing; and `win/app/tooldet.cpp`
+  logs the missing file on the machine itself -- the only end that can tell
+  "absent" from "present and empty".
+
+  Two of those three were already there when this bullet was written and
+  nobody had struck it, which is the shape of defect stage 4 exists to
+  find.
 - **No process tools for the agent.** *Fixed 2026-09-27:* machine tools
   `ps` and `kill` (PSLIST/PSKILL on the client's reader thread), verified
   end to end on the VM -- a live Notepad ended, two stuck orphans reported
