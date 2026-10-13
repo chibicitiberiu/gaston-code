@@ -43,7 +43,13 @@ def test_every_case_passes(verdicts):
 #:
 #: 24 -> 29 on 2026-10-02, when `exec/cpuid.cpp` landed in libexec and brought
 #: five cases with it.
-CASE_COUNT = 29
+#: 29 -> 30 on 2026-10-14, stage 4: `force-kill-reclaims-the-dos-vm`, the
+#: other half of BACKLOG 17. It is VACUOUS UNDER WINE by construction --
+#: there is no WINOA386.MOD here, so it degrades to "a forced kill of an
+#: ordinary program still works" and prints vm=0. The line worth reading is
+#: the one from the guest, where vm=1; see
+#: docs/measurements/forcekill-vm-20261014.txt.
+CASE_COUNT = 30
 
 
 def test_every_case_ran(verdicts):

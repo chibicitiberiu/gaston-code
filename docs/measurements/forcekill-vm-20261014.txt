@@ -1,0 +1,69 @@
+BACKLOG 17's DOS VM, looked for on the guest -- and not found where the
+code looks for it
+QEMU Win98 SE guest, 2026-10-14, stage 4
+
+WHY
+  Stage 4 taught `Processes::kill` to take the Win32 descendants first and
+  then reclaim an orphaned WINOA386.MOD, so that `force` stops meaning "opt
+  into the leak". The commit said plainly that the guest half was NOT
+  proven, because WINOA386.MOD does not exist under Wine. This is that run.
+
+WHAT THE CHECK DOES
+  `force-kill-reclaims-the-dos-vm`, new in execcheck: launch a DOS session,
+  wait for a WINOA386.MOD to appear below it, force-kill, and confirm the
+  VM went too.
+
+WHAT HAPPENED -- FOUR ATTEMPTS, AND NONE OF THEM SAW A VM BELOW US
+
+  1. `execcheck --tick` (a Win32 console program, SW_HIDE, output
+     redirected):            vm=0
+  2. `COMSPEC /c dir /s C:\WINDOWS > NUL`:
+                             vm=0  kill=4 (no_such_pid)  kids=0  vms-on-box=1
+  3. `COMSPEC /c pause`:      the run produced no verdicts at all -- `pause`
+     never returns, so the REFUSAL case (which must not force, and waits for
+     the program to end by itself) sat out its budget. Fixed by giving the
+     two cases different commands.
+  4. `COMSPEC /c pause > NUL`, forced case only:
+                             vm=0  kill=4 (no_such_pid)  kids=0  vms-on-box=1
+
+  `vms-on-box=1` IS THE IMPORTANT NUMBER. A WINOA386.MOD is running -- the
+  interactive MS-DOS Prompt window used to drive this. So the module exists,
+  Toolhelp can see it, and `Processes::list` reports it.
+
+  But a DOS session we LAUNCH has no descendants (`kids=0`) and its own pid
+  is already gone when we look (`kill=4`, no_such_pid), immediately, whether
+  the command finishes in milliseconds or blocks on a keystroke forever.
+
+WHAT THAT MEANS
+  On this guest, a DOS session started through `CreateProcess` does not
+  appear as a CHILD of the launching process. Whatever pid comes back from
+  the launch is not the VM and is not its parent.
+
+  `Processes::kill` keys BOTH behaviours on finding WINOA386.MOD among the
+  target's DESCENDANTS -- the `dos_session` refusal that has been there
+  since 2026-09-27, and the reclaim added in stage 4. If a DOS session is
+  never a descendant, NEITHER PATH CAN FIRE for one started this way.
+
+  So stage 4's reclaim is unproven, and so is the refusal it extends. The
+  code is not shown to be wrong; the DETECTION PREMISE is unverified, and
+  that is worth more than the green tick this run was meant to produce.
+
+  Note the refusal was always vacuous here and said `pass`: the old case
+  launched a hidden Win32 console program with redirected output, which
+  gets no console window and so no VM, on the guest exactly as under Wine.
+  A check named for a DOS session had never seen one. It says VACUOUS now
+  when `vm=0`, so a future reader cannot mistake it for evidence.
+
+WHERE TO LOOK NEXT, AND WHY NOT HERE
+  BACKLOG 17's leak was observed through the AGENT's `exec`, not through
+  `Processes::launch`: the guest's exec path goes through COMMAND.COM with
+  a wrapper batch file and its own job plumbing, and the process tree may
+  well look different. Reproducing it there is the next step, and it wants
+  a `ps` with parent pids taken WHILE such a command runs -- which nothing
+  currently dumps.
+
+ALSO SEEN, AND NOT MINE
+  `stop-reaches-the-grandchild` FAILS on this guest -- `status=1 marker 18
+  -> 33 leaked=0` -- in every run tonight including the first, before any of
+  these changes. Untouched by them and not investigated. It passes under
+  Wine.

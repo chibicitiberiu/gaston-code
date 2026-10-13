@@ -79,6 +79,55 @@ static const char *self(char *out, unsigned cap, const char *args)
     return out;
 }
 
+/* A command that really does open a DOS session on 9x: COMSPEC running
+ * something slow enough to still be there when we look.
+ *
+ * `dir /s` over the Windows directory takes seconds on a 200MHz box and
+ * nothing on a modern one, which is fine -- the point is only that a VM
+ * exists while the check is looking, and under Wine there is no VM to find
+ * whatever we launch. Output to NUL so the session has nowhere to scroll.
+ *
+ * Falls back to a bare `command.com` if COMSPEC is unset, which cannot
+ * happen on 9x and does happen under some Wine prefixes; the case degrades
+ * to vacuous there, as it already did. */
+static const char *dosCmd(char *out, unsigned cap, bool stays)
+{
+    char shell[MAX_PATH];
+    DWORD n = GetEnvironmentVariableA("COMSPEC", shell, sizeof shell);
+    if (n == 0 || n >= sizeof shell)
+        rc_strcpy(shell, sizeof shell, "command.com");
+    /* TWO COMMANDS, because the two cases want opposite things and one
+     * command cannot serve both.
+     *
+     * `stays` means a session that is STILL THERE when the check looks --
+     * `pause`, waiting on a keystroke that never comes in a hidden window.
+     * That is the state worth force-killing, and the forced case does kill
+     * it.
+     *
+     * Otherwise a session that ENDS BY ITSELF, which is what the refusal
+     * case needs: it must not force, so something has to finish. `dir /s`
+     * is a race it often loses (measured on the guest 2026-10-14: kill=4,
+     * no_such_pid, kids=0 -- the process was gone before the first
+     * descendant walk), and the case says VACUOUS when that happens rather
+     * than passing quietly.
+     *
+     * NEVER give the refusal case `pause`: nothing ends it, the case waits
+     * out its whole budget, and the run leaves a stuck DOS box behind --
+     * which is the leak this entry is about, caused by the test for it. */
+    char win[MAX_PATH];
+    if (!GetWindowsDirectoryA(win, sizeof win))
+        rc_strcpy(win, sizeof win, "C:\\");
+    if (stays)
+        /* > NUL because the child INHERITS OUR STDOUT, and `pause` prints
+         * "Press any key to continue..." into it -- which lands in the
+         * middle of a verdict line and makes the row unparseable. Seen
+         * under Wine; it would have done the same on the guest. */
+        rc_strf(out, cap, "%s /c pause > NUL", shell);
+    else
+        rc_strf(out, cap, "%s /c dir /s %s > NUL", shell, win);
+    return out;
+}
+
 /* A marker file beside the exe. */
 static const char *marker(char *out, unsigned cap, const char *name)
 {
@@ -463,14 +512,20 @@ static void processes()
         say("kill-waits-for-the-end", inner == KILL_OK && outerEnded, detail);
     }
     {
-        /* A console program launched with a console of its own. On 98 that
-         * console is a DOS VM below it, and kill() without force must say
-         * dos_session -- killing it strands the VM (BACKLOG 17). It is
-         * never forced here; it ends by itself. Under Wine there is no VM
-         * and the kill goes through as for any program. */
+        /* A DOS session: COMSPEC running something that takes a few seconds.
+         * On 98 that is a WINOA386.MOD below us, and kill() without force
+         * must say dos_session -- killing it strands the VM (BACKLOG 17).
+         * It is never forced here; it ends by itself. Under Wine there is
+         * no VM and the kill goes through as for any program.
+         *
+         * IT USED TO LAUNCH THIS EXE WITH `--tick`, and that never produced
+         * a VM -- not under Wine, and NOT ON THE GUEST EITHER (measured
+         * 2026-10-14: `vm=0`). A hidden Win32 console program with its
+         * output redirected gets no console window, so the case named for
+         * a DOS session had never once seen one. COMSPEC does. */
         DWORD pid = 0, err = 0;
         char cmd[MAX_PATH + 32];
-        bool started = Processes::launch(self(cmd, sizeof cmd, "--tick NUL 8"),
+        bool started = Processes::launch(dosCmd(cmd, sizeof cmd, false),
                                          NULL, SW_HIDE, pid, err);
         bool vm = false;
         for (int i = 0; started && i < 30 && !vm; i++)
@@ -500,9 +555,96 @@ static void processes()
         }
         rc_strf(detail, sizeof detail, "vm=%d kill=%d ended=%d", vm, (int)k,
                 ended);
-        say("kill-refuses-a-dos-session",
-            started && (vm ? (k == KILL_DOS_SESSION && ended) : k == KILL_OK),
-            detail);
+        /* WHEN THERE IS NO VM THE CASE IS VACUOUS, and the detail says so
+         * rather than letting a reader take `pass` for evidence. Under
+         * Wine the DOS command also finishes before the kill, so
+         * no_such_pid is one of the vacuous outcomes. */
+        bool ok = vm ? (k == KILL_DOS_SESSION && ended)
+                     : (k == KILL_OK || k == KILL_PENDING ||
+                        k == KILL_NO_SUCH_PID);
+        rc_strf(detail, sizeof detail, "%svm=%d kill=%d ended=%d",
+                vm ? "" : "VACUOUS: ", vm, (int)k, ended);
+        say("kill-refuses-a-dos-session", started && ok, detail);
+    }
+    {
+        /* AND WITH FORCE, THE VM GOES TOO -- BACKLOG 17's other half, and
+         * the half only a real guest can answer.
+         *
+         * The case above proves the REFUSAL. Until 2026-10-13 `force` was
+         * simply a way to opt into the leak it describes: the program died
+         * and the WINOA386.MOD hosting its console stayed, one thread,
+         * until reboot. Processes::kill now takes the Win32 descendants
+         * first and then reclaims a VM that was below the target once
+         * nothing is above it.
+         *
+         * UNDER WINE THIS CASE IS VACUOUS and says so: there is no
+         * WINOA386.MOD, `vm` is false, and all it checks is that a forced
+         * kill of an ordinary program still works. The line that matters
+         * is the one printed on the guest, where vm=1. */
+        DWORD pid = 0, err = 0;
+        char cmd[MAX_PATH + 32];
+        bool started = Processes::launch(dosCmd(cmd, sizeof cmd, true),
+                                         NULL, SW_HIDE, pid, err);
+        bool vm = false;
+        DWORD vmPid = 0;
+        for (int i = 0; started && i < 30 && !vm; i++)
+        {
+            Sleep(100);
+            std::vector<DWORD> below;
+            ps.descendants(pid, below);
+            Gather g;
+            ps.list(g);
+            for (unsigned k2 = 0; k2 < below.size(); k2++)
+                for (unsigned j = 0; j < g.m_all.size(); j++)
+                {
+                    const char *n = strrchr(g.m_all[j].exe, '\\');
+                    n = n ? n + 1 : g.m_all[j].exe;
+                    if (g.m_all[j].pid == below[k2] &&
+                        lstrcmpiA(n, "WINOA386.MOD") == 0)
+                    { vm = true; vmPid = below[k2]; }
+                }
+        }
+        KillStatus k = started ? ps.kill(pid, true, 5000) : KILL_FAILED;
+
+        /* The VM is reclaimed AFTER the target is confirmed gone, so give
+         * it a moment and then ask whether anything still answers for it. */
+        bool vmGone = true;
+        if (vm && vmPid)
+        {
+            Sleep(1500);
+            Handle vh(OpenProcess(SYNCHRONIZE, FALSE, vmPid));
+            vmGone = !vh.valid() ||
+                     WaitForSingleObject(vh.get(), 5000) == WAIT_OBJECT_0;
+        }
+        /* WHY vm=0 IS WORTH DISTINGUISHING FROM "no DOS VM exists".
+         * `kill`'s refusal and this reclaim both key on finding
+         * WINOA386.MOD among the target's DESCENDANTS, which assumes
+         * Toolhelp's parent links hold for it on 9x. If the module is in
+         * the process list but not below us, that assumption is wrong and
+         * both paths are unreachable -- a far more useful thing to learn
+         * than a green tick. So count both. */
+        int anyVm = 0, kids = 0;
+        {
+            std::vector<DWORD> below;
+            ps.descendants(pid, below);
+            kids = (int)below.size();
+            Gather g;
+            ps.list(g);
+            for (unsigned j = 0; j < g.m_all.size(); j++)
+            {
+                const char *n = strrchr(g.m_all[j].exe, '\\');
+                n = n ? n + 1 : g.m_all[j].exe;
+                if (lstrcmpiA(n, "WINOA386.MOD") == 0)
+                    anyVm++;
+            }
+        }
+        bool ok = (k == KILL_OK || k == KILL_PENDING ||
+                   (!vm && k == KILL_NO_SUCH_PID)) && vmGone;
+        rc_strf(detail, sizeof detail,
+                "%svm=%d vmpid=%08lx kill=%d vm-gone=%d kids=%d vms-on-box=%d",
+                vm ? "" : "VACUOUS: ", vm, (unsigned long)vmPid, (int)k,
+                vmGone, kids, anyVm);
+        say("force-kill-reclaims-the-dos-vm", started && ok, detail);
     }
     {
         char self[MAX_PATH], rundll[MAX_PATH], win[MAX_PATH];

@@ -2069,8 +2069,40 @@ our own window from a dialog it had not read.
   half-dead.** Found by that run: a Win32 console program's console is a
   WINOA386.MOD listed as its child, and TerminateProcess on the program
   strands it (1 thread, like REDIR32), degrading later runs. Matters for
-  the KILL tool: kill the program's Win32 descendants and let a console
-  program end, or say that the VM stays.
+  the KILL tool: ~~kill the program's Win32 descendants and let a console
+  program end, or say that the VM stays.~~
+
+  **[R -- 2026-10-13, stage 4] DECIDED: take the whole thing down.** With
+  `force`, `Processes::kill` now terminates the Win32 descendants first
+  (children before the parent), then the target, then -- only once the
+  target is confirmed gone -- a WINOA386.MOD that was below it and that
+  nothing else is above any more. Best effort: it never turns a kill into
+  a failure, because failing is what it did before.
+
+  **[R -- 2026-10-14] AND THE GUEST RUN DID NOT CONFIRM IT, which is worth
+  more than the tick it was meant to produce.**
+  `docs/measurements/forcekill-vm-20261014.txt`. Four ways of starting a
+  DOS session on the guest, and in none of them was a WINOA386.MOD a
+  DESCENDANT of what we launched: the launched pid is already gone when we
+  look (`no_such_pid`), it has zero children, and the one VM on the box
+  belongs to the interactive prompt.
+
+  Both the refusal above and the new reclaim key on finding the module
+  among the target's descendants. **If a DOS session is never a
+  descendant, neither path can fire for one started that way**, and the
+  premise this bullet states -- "a WINOA386.MOD listed as its child" --
+  is the thing now in doubt.
+
+  The leak was originally seen through the AGENT's `exec`, which goes
+  through COMMAND.COM with a wrapper batch and its own job plumbing, so
+  the tree there may genuinely differ. **To settle it:** reproduce through
+  `exec` rather than `Processes::launch`, with a `ps` that reports parent
+  pids taken while such a command runs -- nothing dumps that today.
+
+  Worth knowing meanwhile: `kill-refuses-a-dos-session` had been passing
+  vacuously on the guest since it was written, because it launched a
+  hidden Win32 console program with redirected output, which gets no
+  console and so no VM. It prints `VACUOUS:` when it sees none now.
 - **Stop read as a failure.** *Fixed 2026-09-27:* the bridge ends a stopped
   turn as `stopped` and the client shows "Stopped." instead of "did not
   complete... may not have run at all".
