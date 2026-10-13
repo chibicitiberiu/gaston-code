@@ -3267,11 +3267,13 @@ automation tier without the rest. Not before.
 
 ---
 
-## 35. `mode=poweroff` does not power the Athlon off, and two causes fit
+## 35. `mode=poweroff` does not power the Athlon off -- CLOSED 2026-10-13
 
-**Status:** open, measured 2026-10-13. One run on the real machine, and the
-next one settles it -- this is written down because the evidence is cheap to
-lose and the run is not repeatable without walking over to the box.
+**Status:** CLOSED, stage 4. Cause 1: the machine has no usable APM under
+Windows 98 as installed. The flag is innocent and was not changed. Kept in
+full below because the reasoning is the useful part -- two causes fit one
+run, and the thing that told them apart cost nothing to ask and would have
+cost a wrong one-token commit to guess.
 
 **What happened.** `gremote.reboot("poweroff")` at the end of stage 3c's
 hardware test. The call returned, the teardown ran, and gremote went: port
@@ -3334,11 +3336,30 @@ NIC lost power, which is a real power-off and not the "safe to turn off"
 screen (that leaves Windows halted but was never the state here, since the box
 answered ping throughout). It was shut down at the keyboard.
 
-**Still wanted, and now cheap:** WHICH action did it -- the power button, or
-Start > Shut Down? If the Start menu powered it off, APM works on this machine
-and cause 2 is the live one: `win/exec/system.cpp:92` passes `EWX_POWEROFF`
-alone where Win9x wants `EWX_SHUTDOWN | EWX_POWEROFF`, and the fix is one
-token plus a `reboot("poweroff")` over the wire to prove it. If it took the
-button, cause 1 stands and `core/app.h:87` is right about this machine too --
-in which case that comment should say it was confirmed on the Athlon rather
-than only on the VM.
+**THE ANSWER, 2026-10-13: the power button.** Windows would not power the
+machine off from the Start menu, so it was switched off at the button. That
+is cause 1, and cause 2 is dead: `win/exec/system.cpp:92` passing
+`EWX_POWEROFF` alone, where the Win9x idiom is `EWX_SHUTDOWN | EWX_POWEROFF`,
+is not what kept the box powered. **The flag was not changed**, which is the
+whole point of having asked: `CLAUDE.md`'s "Wine proves the code, never the
+platform" would have been broken by a one-token commit that looked obviously
+right and fixed nothing.
+
+**What that buys, beyond closing this.** `win/core/app.h:87` stated
+"EWX_POWEROFF on a machine with no power management runs the entire teardown
+and cannot switch the machine off" from one QEMU measurement, on a guest that
+genuinely has no APM at all -- which is the weakest possible evidence for a
+claim about every machine. It now has a second measurement from an ATX board
+that certainly could have had working APM and does not, under this Windows
+install. The obligation the comment derives from it -- **an app that calls
+`ExitWindowsEx` must watch for the shutdown that did not happen** -- is
+therefore a rule about the platform rather than about the emulator, and
+gremote's watcher in `stopServices()`/`preTranslate()` is load-bearing on real
+hardware. Recorded in `app.h` itself, because that is where somebody tempted
+to delete the watcher will be standing.
+
+**What is still unmeasured, and is not this entry's business:** whether the
+Athlon has APM available at all (a BIOS setting, and whether Windows was
+installed with the ACPI or APM HAL). Nothing in this project depends on the
+answer -- we need the watcher either way -- so it is not worth a trip to the
+box.

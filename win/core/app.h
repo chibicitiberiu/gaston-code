@@ -86,7 +86,14 @@
  * AND A SESSION END CAN FAIL TO TAKE, which is the obligation that comes with
  * staying. EWX_POWEROFF on a machine with no power management runs the entire
  * teardown, cannot switch the machine off, and returns to the logon prompt --
- * also measured, on the same guest. Staying then leaves a process with every
+ * also measured, on the same guest -- AND CONFIRMED ON REAL HARDWARE on
+ * 2026-10-13, which is what makes the rest of this paragraph a rule rather
+ * than a VM's quirk: gremote.reboot("poweroff") on the Athlon XP ran the
+ * teardown, closed 7401, and left the machine powered and answering ping at
+ * the logon prompt. It took the power button. So the flag is not the bug --
+ * win/exec/system.cpp passes EWX_POWEROFF alone where the Win9x idiom is
+ * EWX_SHUTDOWN | EWX_POWEROFF, and that was the other candidate until this
+ * run ruled it out. See BACKLOG 35. Staying then leaves a process with every
  * service abandoned, nothing listening and, in gremote's case, the
  * single-instance mutex still held, so no replacement can start either: worse
  * than the hang it avoided. So AN APP THAT CALLS ExitWindowsEx MUST ALSO
