@@ -1,0 +1,52 @@
+The Options sheet at Large Fonts -- BACKLOG 30, stage 4
+QEMU Win98 SE guest, 800x600, Large Fonts (120 dpi), 2026-10-14
+
+WHY
+  BACKLOG 30 listed this as "a measurement we do not have: 230x170 DLU was
+  COMPUTED, not seen; the VM runs 800x600 small fonts and switching needs a
+  reboot of the shared VM." A dialog laid out in DLUs is only as right as
+  its arithmetic until somebody looks at it on a machine that scales them.
+
+METHOD
+  Snapshot first (vm/win98.qcow2.known-good-20261014-002539-pre-largefonts),
+  because a wrong display setting can leave a guest that will not reach a
+  desktop. Then Display Properties > Settings > Advanced > Font Size >
+  Large Fonts, and a restart.
+
+  TWO THINGS ABOUT THE RESTART, both already known and both worth repeating
+  because they cost most of the time here. Win98 on this VM WEDGES at
+  "Windows is now restarting..." and never resets -- the no-ACPI behaviour
+  [[vm-needs-stop-then-start]] records -- so it has to be destroyed and
+  started. And destroying it at that screen makes Windows boot into SAFE
+  MODE the next time, which costs another clean shutdown and cold start.
+  The working sequence is: apply, let it wedge, destroy, start (safe mode),
+  shut down cleanly from safe mode, destroy, start.
+
+WHAT THE SHEET LOOKS LIKE
+  largefonts-permissions-20261014.png -- the densest page, and it HOLDS.
+  Six tabs on one row, both Change files / Run programs columns, all eight
+  dropdowns, the screen checkbox and OK/Cancel/Apply, inside 800x600. The
+  "Ask timeout:" field sits tight against the right edge with a few pixels
+  to spare, which is the narrowest thing on the sheet and is worth knowing
+  before anything else is added to that row.
+
+  Tools, Connection and the rest are comfortable. The 230x170 DLU figure
+  stands.
+
+AND IT FOUND A BUG, WHICH IS THE POINT OF LOOKING
+  largefonts-addtool-clipped-20261014.png -- the Add-a-tool dialog this
+  stage added (E13) had its OK and Cancel buttons CUT OFF by the bottom
+  edge of the dialog.
+
+  Not a Large Fonts problem at all: the dialog was declared 128 DLU tall
+  and the buttons sit at y=119 with height 14, so they end at 133. It was
+  clipped at every font size and nobody had seen it, because the gates
+  cannot check a dialog template against its own contents and the guest
+  check for E13 had only looked at the menu items.
+
+  Fixed to 140 DLU. largefonts-addtool-fixed-20261014.png is the same
+  dialog after: both buttons whole, with margin below.
+
+LEFT AS FOUND
+  The guest is returned to Small Fonts afterwards; the sheet's other
+  consumers and every earlier measurement assume it.

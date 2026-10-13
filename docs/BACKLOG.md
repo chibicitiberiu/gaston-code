@@ -2963,9 +2963,27 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 - **The checker's SAFE cache was not built.** With the red team's exclusions
   (never for run_*, purge, files_sys, input, launch) and invalidation on any
   write, it could never hit. Latency is the warm client's job (review.py).
-- **Large Fonts.** The pages are 230x170 DLU so that the sheet fits 640x480
-  at Large Fonts, which was computed, not seen: the VM runs 800x600 small
-  fonts, and switching needs a reboot of the shared VM.
+- ~~**Large Fonts.** The pages are 230x170 DLU so that the sheet fits
+  640x480 at Large Fonts, which was computed, not seen.~~ **SEEN
+  2026-10-14, stage 4** -- `docs/measurements/largefonts-vm-20261014.txt`.
+  The figure stands: at 800x600 and 120 dpi the densest page (Permissions)
+  keeps its six tabs on one row, both columns, all eight dropdowns and
+  OK/Cancel/Apply. The narrowest thing on the sheet is the `Ask timeout:`
+  field, a few pixels off the right edge, which is worth knowing before
+  anything else joins that row.
+
+  **And looking found a bug that had nothing to do with Large Fonts**: the
+  Add-a-tool dialog added earlier in this same stage had its OK and Cancel
+  buttons clipped by the bottom edge -- declared 128 DLU tall with buttons
+  ending at 133. Wrong at every font size, invisible to every gate, and
+  invisible to the stage's own guest check, which had only looked at the
+  menu items. That is the argument for this entry having existed.
+
+  The cost, recorded because it is most of the work: Win98 on this VM
+  wedges at "Windows is now restarting..." and must be destroyed, and
+  destroying it there makes the next boot SAFE MODE. The sequence that
+  works is apply, wedge, destroy, start, shut down from safe mode, destroy,
+  start.
 - **The command log shows the exit-code wrapper's `.gaston-rc` line** at the
   end of a wrapped command's output: the log records output raw, and the
   bridge strips that line only from what the agent sees.
