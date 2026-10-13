@@ -162,9 +162,6 @@ void MainWindow::proposeWorkDir(const char *path, bool staged)
 /* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. g_pagebar
  * is the one instance, created in create_children and destroyed in
  * WM_DESTROY, the same shape as g_html. */
-/* WinMain's HINSTANCE, kept because the Server Host dialog needs it and
- * DialogBoxIndirectParam is called from a WM_COMMAND handler that has no
- * other way to reach it. */
 
 
 /* ------------------------------------------------------------------ utils */
@@ -209,6 +206,8 @@ void MainWindow::buildMenu(HWND hwnd)
 
     AppendMenuA(cfg, MF_STRING, IDM_OPTIONS, "&Options...");
     AppendMenuA(cfg, MF_STRING, IDM_PERMS, "&What can run without asking...");
+    AppendMenuA(cfg, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(cfg, MF_STRING, IDM_CLRCACHE, "C&lear cached history...");
 
     AppendMenuA(help, MF_STRING, IDM_ABOUT, "&About...");
 
@@ -1109,7 +1108,7 @@ void MainWindow::createChildren(HWND hwnd, HINSTANCE inst)
             m_html->notice(line);
         } else {
             m_html->notice("No bridge is configured. "
-                           "Use Configure -> Server Host... to set one.");
+                           "Use Configure -> Options... to set one.");
         }
     }
     else {
@@ -1385,7 +1384,10 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         if (m_chats) m_chats->draw((DRAWITEMSTRUCT *)lp);
         return TRUE;
 
-    /* Double-clicking the connection pane opens the Server Host dialog.
+    /* Double-clicking the connection pane opens Options (it sends
+     * IDM_OPTIONS -- statusbar.cpp -- which was the Server Host dialog's id
+     * before the Options sheet replaced it, and three comments plus one
+     * user-visible notice went on naming a dialog that no longer exists).
      * Double-clicking the thing that tells you where you are connected to,
      * to change where you are connected to, is the shortest path anyone will
      * look for, and `NMMOUSE::dwItemSpec` names the part -- 0 is the
@@ -1759,6 +1761,39 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             rc_options_run(hwnd, m_inst, *m_cfg, m_exeDir, this,
                            RC_OPT_CONNECTION);
             return 0;
+
+        case IDM_CLRCACHE: {
+            /* BACKLOG 11a's answer, and the entry's own preference: the
+             * complaint is "this machine is keeping something I did not ask
+             * it to keep", and a menu item answers it without this program
+             * ever deciding that a conversation is stale. Nothing here
+             * evicts on its own.
+             *
+             * Asked before done, because the cache may hold the only copy:
+             * the bridge forgets a conversation this client can still show
+             * from disk. It goes to the Recycle Bin for the same reason. */
+            char msg[320];
+            int n;
+            if (!m_cache) return 0;
+            rc_strf(msg, sizeof(msg),
+                    "Delete every cached conversation?\n\n"
+                    "This removes the copies kept on this machine so the "
+                    "transcript can be shown when the bridge is not "
+                    "reachable. It does not touch anything on the bridge.\n\n"
+                    "They go to the Recycle Bin.");
+            if (MessageBoxA(hwnd, msg, "Clear cached history",
+                            MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+                return 0;
+            n = m_cache->clear_all();
+            if (n < 0)
+                MessageBoxA(hwnd, "The cached history could not be deleted. "
+                                  "See the log for what the disk said.",
+                            "Clear cached history", MB_OK | MB_ICONWARNING);
+            else
+                status_set(2, n == 0 ? "Nothing was cached"
+                                     : "Cached history cleared");
+            return 0;
+        }
 
         case IDM_ABOUT: {
             char msg[420];

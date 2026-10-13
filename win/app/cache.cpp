@@ -10,6 +10,7 @@
 #include "core/path.h"
 #include "core/str.h"
 #include "core/rc_cpp.h"
+#include "fs/tree.h"      /* fsDeleteTree, for clear_all */
 
 /* The biggest page the guest ever asks the bridge for, plus room. The bridge
  * scales its page budget to the guest's RAM and tells it so at handshake; on
@@ -115,6 +116,7 @@ void rc_cache::open_session(const char *session_id)
         dir[0] = '\0';
         return;
     }
+    sweep_orphans();
 
     /* Which conversation to show on a cold start with no bridge. Written
      * here rather than at exit: the app is closed with the X button, and a
@@ -126,6 +128,114 @@ void rc_cache::open_session(const char *session_id)
         if (fp.valid())
             fwrite(session_id, 1, strlen(session_id), fp.get());
     }
+}
+
+/* The files in a conversation folder that nothing will ever read again.
+ *
+ * TWO KINDS, both identifiable from the NAME ALONE, which is the whole
+ * reason they are the ones swept:
+ *
+ *   P###.TMP  a page that was being written when the link dropped.
+ *             begin_page writes under the temporary name and end_page
+ *             renames, precisely so half a page is never readable as a whole
+ *             one -- but nothing ever removed the leftovers.
+ *   P###.HTM  a page written before stage 3 C2, when a page held markup
+ *             rather than records. path_for moved to .HT2 instead of adding
+ *             a FORMAT file, because a version file that throws a directory
+ *             away loses the conversation on the cold-start path. The .HTM
+ *             files were left for "BACKLOG 11a", by name, and this is it.
+ *
+ * WHAT IS DELIBERATELY NOT SWEPT: pages left over from a different window
+ * size. After the page-size setting changes the same conversation renumbers,
+ * so high-numbered files from the old size are stale -- but nothing on disk
+ * records the size a page was written at, and the obvious fix is the FORMAT
+ * file this module already refused. A marker was designed for stage 4 and
+ * dropped: the limit is not even known on the cold-start path (it is filled
+ * during connect), rc_cache cannot see it, and when the window size changes
+ * EVERY page boundary moves -- so "sweep the stale ones" means "delete the
+ * conversation", on the one path where the bridge cannot give it back. The
+ * staleness is survivable and recorded (mainwindow.cpp's restoreCache says
+ * "a page", not "the last page"); deleting somebody's transcript to tidy it
+ * is not.
+ *
+ * Runs from open_session, after the directory exists and only when the
+ * session actually changed -- open_session returns early otherwise, so this
+ * is once per conversation opened, not once per frame. */
+void rc_cache::sweep_orphans()
+{
+    static const char *const PATTERNS[2] = { "P???.TMP", "P???.HTM" };
+    char glob[MAX_PATH], victim[MAX_PATH];
+    int i, gone = 0;
+
+    if (!usable || !dir[0]) return;
+
+    for (i = 0; i < 2; i++) {
+        WIN32_FIND_DATAA fd;
+        if (!rc_strf(glob, sizeof(glob), "%s\%s", dir, PATTERNS[i]))
+            continue;
+        FindHandle h(FindFirstFileA(glob, &fd));
+        if (!h.valid()) continue;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            if (!rc_strf(victim, sizeof(victim), "%s\%s", dir, fd.cFileName))
+                continue;
+            if (DeleteFileA(victim)) gone++;
+            else rc_log("cache: cannot remove %s (%lu)", victim,
+                        (unsigned long)GetLastError());
+        } while (FindNextFileA(h.get(), &fd));
+    }
+    if (gone)
+        rc_log("cache: swept %d unreadable page file%s from %s",
+               gone, gone == 1 ? "" : "s", dir);
+}
+
+/* Everything, because the person asked. See cache.h.
+ *
+ * To the Recycle Bin, not permanently: this is the one copy of conversations
+ * the bridge may no longer have, and somebody who clicks the wrong menu item
+ * should be able to get them back. fsDeleteTree's default does that, and
+ * fs/tree.o is already in this image (rpc/fsrpc.cpp uses it), so reusing it
+ * costs nothing where a second delete primitive would cost bytes this
+ * build does not have. */
+int rc_cache::clear_all()
+{
+    TreeDone done;
+    char detail[256];
+    const char *err;
+    int folders;
+
+    if (!usable || !root[0]) return 0;
+
+    /* Whatever is open is about to stop existing. Dropping the handles first
+     * means the delete is not fighting our own writes for the file. */
+    page_fp.reset();
+    chat_fp.reset();
+
+    err = fsDeleteTree(root, false, done, detail, sizeof(detail));
+    if (err) {
+        rc_log("cache: clear failed: %s (%s)", err, detail);
+        return -1;
+    }
+    folders = (int)done.dirs;
+    rc_log("cache: cleared %lu file%s in %lu folder%s%s",
+           (unsigned long)done.files, done.files == 1 ? "" : "s",
+           (unsigned long)done.dirs, done.dirs == 1 ? "" : "s",
+           done.recycled ? " (to the Recycle Bin)" : "");
+
+    /* The root comes back immediately, and the open conversation is forgotten
+     * rather than left pointing at a directory that is gone -- the next
+     * open_session recreates it. Without this, every subsequent begin_page
+     * would fail against a stale `dir`. */
+    dir[0] = '\0';
+    sess[0] = '\0';
+    page_no = 0;
+    if (!rc_mkpath(root)) {
+        rc_log("cache: cannot recreate %s (%lu); caching is off",
+               root, (unsigned long)GetLastError());
+        usable = 0;
+        return -1;
+    }
+    return folders;
 }
 
 void rc_cache::last_session(char *out, unsigned cap) const

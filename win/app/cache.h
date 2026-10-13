@@ -22,12 +22,19 @@
  * (RANGEEND), so
  * a half-streamed answer is never restored as though it were finished.
  *
- * DISK: a page is capped at the guest's page budget (16KB on a 32MB box), so
- * a hundred-page conversation is under two megabytes. Nothing here prunes,
- * which is a decision rather than an omission -- pruning needs a policy for
- * "which conversation is stale", the answer depends on the chat list this
- * same cache is holding, and getting it wrong throws away the one copy of
- * something. Recorded in BACKLOG rather than guessed at.
+ * DISK: a page is capped at CACHE_PAGE_MAX (64KB), which end_page refuses to
+ * exceed. The old bound here said "16KB on a 32MB box, so a hundred-page
+ * conversation is under two megabytes" and stopped being true at stage 3b,
+ * when the client started choosing its own window in BLOCKS rather than the
+ * bridge choosing it in bytes.
+ *
+ * NOTHING IS EVICTED AUTOMATICALLY, and that is still a decision rather than
+ * an omission. Pruning needs a policy for "which conversation is stale", the
+ * answer depends on the chat list this same cache is holding, and getting it
+ * wrong throws away the one copy of something. What stage 4 added instead is
+ * the half that needs no policy: orphaned files are swept when their folder
+ * is opened (sweep_orphans), and the person can remove the lot on request
+ * (clear_all). Growth is still unbounded if nobody asks. BACKLOG 11a.
  */
 #ifndef RC_CACHE_H
 #define RC_CACHE_H
@@ -65,6 +72,10 @@ class rc_cache {
      * cache.cpp: a truncated page path aliases another page's file. */
     int path_for(char *out, unsigned cap, int n) const;
 
+    /* The two kinds of file in a conversation folder that nothing will ever
+     * read again, removed when that folder is opened. See cache.cpp. */
+    void sweep_orphans();
+
 public:
     /* `exe_dir` is where gaston.exe lives -- the INI and the log are
      * already there, and a cache somewhere else would be a second place to
@@ -83,6 +94,13 @@ public:
     /* The id of the conversation cached most recently, for a cold start with
      * no bridge. Empty if there is none. */
     void last_session(char *out, unsigned cap) const;
+
+    /* Everything, at the person's request -- Configure > Clear cached
+     * history. Returns the number of conversation folders removed, or -1 if
+     * the delete failed. NOT automatic and not a cap: this cache may hold
+     * the only copy of a conversation, so the person asks or it stays.
+     * BACKLOG 11a. */
+    int clear_all();
 
     /* One page, written as it arrives. `add` between the two; anything
      * outside a begin/end pair is dropped rather than guessed at. */

@@ -1,7 +1,7 @@
 /* statusbar.h -- Status bar control and indicator panes.
  *
  * Four panes:
- *   0: Connection state icon and host:port with tooltip (double-click opens Server Host dialog).
+ *   0: Connection state icon and host:port with tooltip (double-click opens Options).
  *   1: Traffic stats (rx/tx counters + speed from rc_xferstat).
  *   2: Turn activity / elapsed seconds / override text.
  *   3: Context window gauge (pie icon + percentage).

@@ -70,6 +70,7 @@
 #define IDM_OPTIONS  1110      /* was Server Host...; same id */
 #define IDM_PERMS    1111
 #define IDM_AUTOSCRL 1112
+#define IDM_CLRCACHE 1113
 #define IDM_ABOUT    1120
 
 /* Accelerator commands.
