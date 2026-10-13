@@ -297,14 +297,29 @@ use; each is a known limit rather than something forgotten.
   was actually about is gone.
 
   **What is not gone, and is not this entry's original concern:** silent
-  truncation itself. Of 105 call sites to `rc_strf`/`rc_strcpy`/`rc_strncpy`,
-  only 8 check the return value (`win/sync/sync.cpp` x3, `win/rpc/exec.cpp`
-  x2, `win/net/frameproto.cpp` x3) -- not just `win/exec.c` any more, but
-  still a small minority. `del c:\temp\*.tmp` becoming `del c:\temp\*` is
-  still possible at any of the other ~97 sites; it would now stop at a clean
-  NUL rather than reading past one. Worth a future sweep of its own if a
-  truncated value is ever found to matter silently, but it is a truncation
-  question now, not a memory-safety one.
+  truncation itself. ~~Of 105 call sites to
+  `rc_strf`/`rc_strcpy`/`rc_strncpy`, only 8 check the return value
+  (`win/sync/sync.cpp` x3, `win/rpc/exec.cpp` x2, `win/net/frameproto.cpp`
+  x3)... still possible at any of the other ~97 sites.~~ `del c:\temp\*.tmp`
+  becoming `del c:\temp\*` is still possible; it would now stop at a clean NUL
+  rather than reading past one.
+
+  **[R -- 2026-10-13, stage 4] The counts above were four years of commits out
+  of date, and `win/rpc/exec.cpp` no longer exists** (it is libexec now).
+  Re-measured: **527** production call sites across the three helpers, of
+  which **472** discard the return. `ROADMAP.md` carried "~97" from the same
+  stale reading and listed the sweep as a stage 4 repair.
+
+  **Closed as a convention plus eight fixes, not a sweep.** 472 edits to find
+  the handful that matter is the wrong shape of work, and this entry's own
+  stated trigger -- "worth a future sweep if a truncated value is ever found
+  to matter silently" -- asks for an observed failure that has not happened.
+  What replaced both: a rule in `win/core/str.h` keyed on the DESTINATION
+  rather than on the call count. A path or an id must check the return, or be
+  guarded by an explicit length precondition before the copy, or log when
+  neither is available; everything else is display and needs no ceremony. The
+  eight id sites that the wire can reach are fixed in the commit after this
+  one. The other ~464 stay, deliberately, and the rule says why.
 
 Phase 4's own list (model per-client, the effort fork leaving the chat list on
 the pre-fork session id, the real Server Host dialog, Export as HTML, the

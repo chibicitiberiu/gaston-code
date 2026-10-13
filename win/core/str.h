@@ -17,6 +17,42 @@
  * cut-off message -- and in every one the information needed to refuse was
  * available at the call site and thrown away, because `_snprintf`'s return was
  * discarded at 93 of 95 sites. A caller that must not truncate can now say so.
+ *
+ * WHEN THE RETURN MUST BE USED, AND WHEN IGNORING IT IS CORRECT
+ * (the convention, written down in stage 4 -- see BACKLOG 4).
+ *
+ * Most callers ignore it and are right to. As of 2026-10-13 there are 527
+ * production call sites across the three helpers and 472 discard the return,
+ * which is not 472 latent bugs: a `%lu` into a 16-byte buffer has a static
+ * bound, and a status line that loses its tail is cosmetic. Sweeping them all
+ * would be 472 edits to find the handful that matter, and the handful is what
+ * matters. So the rule is by DESTINATION, not by call count:
+ *
+ *   A path or an id must take one of these four forms.
+ *
+ *   1. CHECK IT. The caller can refuse, so it does. `win/app/cache.cpp` is
+ *      the model: three checked sites, each with the reason beside it, and
+ *      `path_for` returns its verdict to every caller.
+ *
+ *   2. GUARD IT FIRST, then ignore the return. `win/rpc/rpc.cpp` is the
+ *      template -- an explicit `strlen(id) >= sizeof(ctx.id)` test that drops
+ *      the request, with the reason written out: a shortened id produces a
+ *      reply the bridge cannot match, and the caller then waits out its whole
+ *      budget. After that guard the copy cannot truncate, and checking it
+ *      again would be noise.
+ *
+ *   3. LOG AND CARRY ON, where no refusal is available. Some sites have
+ *      nowhere to put a refusal -- the error reply would have to carry the
+ *      same over-long id it cannot hold. Truncating silently is still wrong;
+ *      truncating with a log line is the best the site can do.
+ *
+ *   4. IGNORE IT, because the destination is display or a log. Say so only if
+ *      it is not obvious.
+ *
+ * Anything that is NOT a path or an id is case 4 by default and needs no
+ * ceremony. The guard belongs where form 2 puts it -- before the copy, not
+ * after -- because after it you are deciding what to do with a value you have
+ * already built wrongly.
  */
 #ifndef RC_STR_H
 #define RC_STR_H

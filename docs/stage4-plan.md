@@ -124,8 +124,8 @@ available, **or** the destination is display-only — enforced for path and id d
 The fourth form is not padding: at `uirpc.cpp:139` and `:595` the refusal that would replace the
 copy **would itself have to carry the over-long id**, so those two can only log. Template:
 `win/rpc/rpc.cpp:467-473`. **Not a sweep**, and the replacement figure has to be honest about its
-denominator: 400 of 438 production `rc_strf` sites ignore the return, or **524** counting
-`rc_strcpy` and `rc_strncpy` — which is what `BACKLOG.md:300`'s superseded 105 counted. That
+denominator: **472** of **527** production sites across `rc_strf`, `rc_strcpy` and
+`rc_strncpy` discard the return — which is what `BACKLOG.md:300`'s superseded 105 counted. That
 bullet also names `win/rpc/exec.cpp`, which no longer exists (it is libexec now), and its "only 8
 check" is stale by about five times. Fix the function set, the file list and both numbers.
 **E3 does not move the image** — a header comment and backlog prose.

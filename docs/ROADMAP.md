@@ -435,9 +435,10 @@ claim about this file's accuracy:
   never-replay by never replaying), §7, §9, §23 (answered in its own title),
   §32.
 - **The `rc_strf` sweep is not a sweep.** "~97 sites" was counted 2026-09-18;
-  it is 400 of 438 `rc_strf` sites today, or 524 counting `rc_strcpy` and
-  `rc_strncpy`, which is what the superseded figure counted. Eight of them can
-  bite. The rest stay, and a convention in `str.h` says why.
+  re-measured, 472 of 527 sites across `rc_strf`, `rc_strcpy` and
+  `rc_strncpy` discard the return, which is the function set the superseded
+  figure counted. Eight of them can bite. The rest stay, and a convention
+  in `str.h` says why.
 - **The automation setting does not need a restart.** `MainWindow::optionsApply`
   already re-applies it and already lists it among its reconnect triggers. Only
   the menu item is missing.
