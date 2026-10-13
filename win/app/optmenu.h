@@ -67,18 +67,28 @@ class OptionMenus {
     HMENU m_attachMenu;
     std::vector<std::string> m_models;
     std::vector<std::string> m_efforts;
-    /* Permission mode: Manual / Accept edits / Plan. The list is the
-     * BRIDGE'S, not a table here, for the same reason the model list is --
-     * `auto` and `bypassPermissions` are withheld for measured reasons that
-     * belong beside the measurement (bridge/server.py, MODE_ORDER), not in
-     * a menu builder on a 32MB machine. */
+    /* Execution mode. The list is the BRIDGE'S, not a table here, for the
+     * same reason the model list is: which modes are offered is a safety
+     * decision that belongs beside the reasoning for it
+     * (bridge/services/options.py, MODE_ORDER), not in a menu builder on a
+     * 32MB machine.
+     *
+     * THIS USED TO SAY "Manual / Accept edits / Plan", with `auto` and
+     * `bypassPermissions` "withheld". Both halves stopped being true at the
+     * 2026-10-04 policy rework and the comment outlived them by nine months
+     * of commits. There is nothing to withhold: the CLI's permission-mode
+     * names are not on the wire any more -- they were a description of
+     * somebody else's behaviour -- and the four presets are the bridge's
+     * own (policy.py `_PRESETS`: manual, workfolder, plan, auto), plus
+     * whatever the client defines. `auto` in particular is offered, and
+     * asks the CLI for nothing, which is what lets Haiku have it. */
     std::vector<std::string> m_modes;
     /* Slash commands. Not an option -- nothing is ticked and there is no
      * current value -- but the same bridge-driven menu with the same id
      * arithmetic and the same WM_COMMAND routing, so it lives here rather
      * than as a fourth copy of that machinery somewhere else. WHICH commands
-     * appear is the bridge's decision (bridge/server.py, COMMAND_MENU): five
-     * of the fifty-three the CLI offers. */
+     * appear is the bridge's decision (bridge/services/options.py,
+     * COMMAND_MENU): a handful of the fifty-three the CLI offers. */
     struct Command
     {
         std::string id;

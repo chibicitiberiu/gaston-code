@@ -20,7 +20,8 @@ OptionMenus::OptionMenus(HWND owner, HMENU bar, FrameSender *sender,
     /* All three menus are built from what the bridge sends, so the lists can
      * change without rebuilding this binary -- which matters most for Mode,
      * where WHICH modes are offered is a safety decision made beside the
-     * measurement that justifies it (bridge/server.py, MODE_ORDER). */
+     * reasoning that justifies it (bridge/services/options.py, MODE_ORDER;
+     * server.py only re-exports it). */
     m_modelMenu = CreatePopupMenu();
     m_effortMenu = CreatePopupMenu();
     m_modeMenu = CreatePopupMenu();

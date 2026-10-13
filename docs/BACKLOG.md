@@ -1843,9 +1843,11 @@ our own window from a dialog it had not read.
 
 ## 18. A refused permission-mode change leaves the client showing the wrong mode
 
-**Status:** found 2026-09-27 while setting up the BACKLOG 16 end-to-end check.
-First two asks fixed 2026-10-01 in `bridge/services/options.py` `set_mode`.
-The "related" item below is still open.
+**Status:** the two asks that were ours are fixed (2026-10-01,
+`bridge/services/options.py` `set_mode`). The third is **WAITING ON THE SDK**
+with a named watch condition, not open for a decision -- see the bottom of
+this entry. Stage 4 recorded that distinction and swept three stale comments
+the 2026-10-04 policy rework left in the client.
 
 Picking **Auto** in the client's Mode menu with Haiku selected fails in the
 bridge:
@@ -1856,6 +1858,7 @@ bridge:
                for this model
 
 `bridge/agent/session.py` `set_permission_mode` raises, `bridge/options.py`
+(now `bridge/services/options.py`)
 logs it with a traceback, **and nothing reaches the guest**. The client goes on
 showing `Auto` in the toolbar with a tick beside it in the menu, while the
 session is still in `Manual` and asks for every single tool call.
@@ -1891,6 +1894,37 @@ What it needed:
 Related: the mode and the model are separate dropdowns whose valid
 combinations are not independent, and nothing in the client knows that.
 Still open -- see the "not done" item just above.
+
+**[R -- 2026-10-13, stage 4] The watch condition, and what the rework left
+behind.**
+
+The remaining item is not a question anybody here can answer. It waits for
+the CLI to expose a per-model list of accepted permission modes, the way
+`supportedEffortLevels` already does for effort. **That is the watch
+condition**: if such a field appears, the Mode menu filters on it and this
+entry closes; until then, accepting the refusal and resyncing is the honest
+fix, and a hand-maintained per-model table is still the staleness the
+effort handling was written to avoid. The "Related" paragraph above resolves
+to the same block.
+
+**The surface narrowed under it, which nothing recorded.** Since the
+2026-10-04 policy rework the only values that reach `set_permission_mode`
+are `default` and `plan`, and the call is skipped unless the sdk mode
+actually changes -- so the failure this entry was opened for, the CLI
+refusing `auto` for Haiku, can no longer happen: `auto` is the bridge's own
+policy table and asks the CLI for nothing
+(`tests/python/services/test_options.py`,
+`test_auto_asks_nothing_of_the_cli_so_haiku_can_have_it`). What is left is
+the Plan boundary alone.
+
+**Three comments in the client outlived all of that** and are fixed in the
+same commit as this note, because a reader who believes them is misled about
+what the menu does: `win/app/optmenu.h` described the list as "Manual /
+Accept edits / Plan" with `auto` and `bypassPermissions` "withheld" -- there
+is nothing to withhold, the CLI's mode names are not on the wire at all --
+and two more pointed at `bridge/server.py` for `MODE_ORDER` and
+`COMMAND_MENU`, which live in `bridge/services/options.py` and are only
+re-exported there.
 
 ---
 
