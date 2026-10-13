@@ -1326,8 +1326,36 @@ first is a wasted round trip on a 200MHz machine; moving root-written files
 into the folder at commit time means the sync layer relocating a file the
 agent believes it knows the path of; naming the folder in the prompt before
 it exists is exactly what `_sync_paragraph`'s docstring says sent an agent
-off to diagnose a sync fault. Wants its own measurement, against this
-transcript as the baseline.
+off to diagnose a sync fault. ~~Wants its own measurement, against this
+transcript as the baseline.~~
+
+**[R -- 2026-10-14, stage 4] RE-MEASURED, AND THE CANDIDATES DO NOT NEED
+WEIGHING** -- `docs/measurements/folder-commit-vm-20261014.txt`.
+
+The mechanism is intact: the folder is still committed by the first tool
+call, which is still the write, and the agent still aimed at the wrong
+place -- its first Write went to the PREVIOUS conversation's folder. What
+has changed is that nothing lands there any more. `permdesk` refuses a
+write outside the working copy outright:
+
+    01:19:24  auto-refused Write outside the working copy: .../CREATEA3/h...
+    01:19:27  Write under auto: allow (.../WRITEACF/hello.c is in the
+              work folder)
+
+Three seconds, no exec call, no hunt. The harm this entry recorded -- a
+file outside the mirror and exec calls spent finding it -- cannot happen
+through that guard, which the entry does not mention and may predate.
+
+**The cost moved rather than vanished.** Seven execs, every one naming
+`C:\WORK\WRITEACF`, and FOUR of them toolchain orientation: `BINW`, bare
+name, `BINNT`, `setvars.bat`. The baseline's line was "zero were toolchain
+orientation". So the open question is now about the tool inventory, not
+about when a folder is committed, and it belongs to whichever entry owns
+`tools_detect.ini`'s Watcom markers rather than to this one.
+
+Not shown: Ask-first mode, where the same write raises a prompt instead of
+an auto-refusal. The file does not reach the root either way; only the
+interruption differs.
 
 ---
 

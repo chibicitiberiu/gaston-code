@@ -1,0 +1,72 @@
+04.35 re-measured: does the first-tool-call folder commit still cost anything?
+QEMU Win98 SE guest, Haiku, Auto mode, 2026-10-14. Picture:
+folder-commit-vm-20261014.png
+
+THE BASELINE (BACKLOG 11, 04.35, from the Phase 4.18 acceptance run)
+  "5 exec calls total, of which THREE were this -- two
+  `wcl386 ... hello.c` returning Unable to open "hello.c", then a
+  `dir C:\Gaston\WRITEME4` to find where the file had actually gone. The
+  remaining two were the real work. Zero were toolchain orientation."
+
+  The mechanism: a conversation gets its folder on the first tool call, the
+  natural first tool call is the write, so the write lands in the shared
+  root and the file is outside the mirror that call just created.
+
+THE RE-RUN
+  Fresh conversation, work folder unset, one prompt: "Write a C file hello.c
+  in your work folder that prints hello, then compile it with wcl386 and run
+  it."
+
+  THE MECHANISM IS STILL THERE, exactly as described. The folder was
+  committed at 01:19:24 by the Write, before any exec:
+    bridge.workspace: work directory for 2b75baf4-...: .../WRITEACF
+                                                       (C:\WORK\WRITEACF)
+
+  AND THE AGENT DID AIM AT THE WRONG PLACE, which is the other half of the
+  prediction -- its first Write went to the PREVIOUS conversation's folder,
+  carried over in context:
+    01:19:24 permdesk: auto-refused Write outside the working copy:
+             {'file_path': '.../b2sync/CREATEA3/h...
+    01:19:27 permdesk: Write under auto: allow
+             (.../b2sync/WRITEACF/hello.c is in the work folder)
+
+  THREE SECONDS, NO EXEC CALL, NO HUNT. The refusal is in-band and names
+  the problem, so the agent re-aimed and carried on. The harm 04.35
+  recorded -- a file sitting outside the mirror and exec calls spent
+  finding it -- did not happen, because `permdesk` refuses a write outside
+  the working copy rather than letting it land.
+
+WHERE THE CALLS WENT INSTEAD
+  Seven execs, and EVERY ONE of them names C:\WORK\WRITEACF. Not one
+  touched the shared root.
+
+    x1  cd C:\WORK\WRITEACF && C:\WATCOM\BINW\WCL386.EXE hello.c
+    x2  C:\WATCOM\BINW\WCL386.EXE C:\WORK\WRITEACF\hello.c
+    x3  wcl386 C:\WORK\WRITEACF\hello.c
+    x4  C:\WATCOM\BINNT\WCL386.EXE C:\WORK\WRITEACF\hello.c
+    x5  setvars.bat        (checker approved: a prerequisite)
+    x6  C:\WORK\WRITEACF\compile.bat
+    x7  C:\WORK\WRITEACF\hello.exe   -> "hello"
+
+  FOUR OF SEVEN WERE TOOLCHAIN ORIENTATION -- BINW, then bare name, then
+  BINNT, then setvars -- against the baseline's "zero were toolchain
+  orientation". The cost did not go away; it MOVED, and it moved to a
+  different entry's territory.
+
+THE ANSWER FOR 04.35
+  Its three candidate fixes do not need weighing. The symptom they were
+  for is gone, closed by a guard the entry does not mention, and the
+  remaining question -- which wcl386 to call -- is about the tool
+  inventory, not about when a folder is committed.
+
+  Worth noting what this does NOT show: Ask-first mode, where the same
+  write would raise a prompt rather than an auto-refusal. The file still
+  does not land in the root either way; only the interruption differs.
+
+ONE THING SEEN IN PASSING
+  Haiku ran the whole thing in AUTO. BACKLOG 18 was opened because the CLI
+  refused auto for Haiku; since the 2026-10-04 policy rework auto is the
+  bridge's own table and asks the CLI for nothing. The Mode menu offered
+  all four presets and the toolbar read "Auto / Haiku" throughout -- which
+  is the stale optmenu.h comment this stage deleted, contradicted on real
+  hardware.
