@@ -41,10 +41,14 @@
  *      budget. After that guard the copy cannot truncate, and checking it
  *      again would be noise.
  *
- *   3. LOG AND CARRY ON, where no refusal is available. Some sites have
- *      nowhere to put a refusal -- the error reply would have to carry the
- *      same over-long id it cannot hold. Truncating silently is still wrong;
- *      truncating with a log line is the best the site can do.
+ *   3. LOG AND CARRY ON, where refusing would cost more than truncating.
+ *      `win/ui/uirpc.cpp`'s two run-id copies are the case: the id is used
+ *      only to match a later cancel, so truncation degrades cancellation and
+ *      nothing else -- while refusing would fail a drive that would other-
+ *      wise have worked, over a 49th character. The log line is what keeps
+ *      it from being silent. (Note this is NOT "the reply cannot carry the
+ *      id": a frame header value holds RC_MAX_VAL bytes, so it always can.
+ *      That was this convention's first draft and it was wrong.)
  *
  *   4. IGNORE IT, because the destination is display or a log. Say so only if
  *      it is not obvious.

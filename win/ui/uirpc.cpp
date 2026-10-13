@@ -136,7 +136,18 @@ void rc_uirpc_cancel(const char *id)
     /* Not the one running, so either it is still queued or it is already
      * over. Remember it; the worker checks this as it picks each request up
      * and starts that one already stopped. */
-    rc_strf(g_cancel_id, sizeof(g_cancel_id), "%s", id);
+    if (!rc_strf(g_cancel_id, sizeof(g_cancel_id), "%s", id))
+    {
+        /* BACKLOG 4's convention, form 3. A truncated id can never strcmp
+         * equal to the one the worker picks up, so this cancel is already
+         * lost -- say so, rather than leaving the caller to conclude the
+         * request was uncancellable. Refusing is not available and would not
+         * help: UICANCEL is answered immediately by the reader, and the id
+         * is the only thing that identifies what to stop. */
+        rc_log("desktop: UICANCEL id too long (%u bytes) -- this cancel "
+               "cannot match and is dropped", (unsigned)strlen(id));
+        g_cancel_id[0] = '\0';
+    }
 }
 
 /* The client's UiLink: the engine's calls as the frames the bridge parses.
@@ -358,7 +369,16 @@ static void do_tree_inproc(UiLink &link, UiContext *ctx, rc_frame *f,
             char ipath[RC_PATH_MAX];
             if (idx < 0 || idx >= shm->itemN)
                 break;
-            rc_strf(ipath, sizeof(ipath), "%s/i%ld", path, it);
+            /* Form 1: refuse the row. A truncated child path can collide
+             * with a sibling's, and the bridge builds an ancestry map keyed
+             * on these (uisel.py's by_path) -- a collision drops one node
+             * and resolves the wrong parent for the other. Dropping the row
+             * is already a thing this loop does and reports. */
+            if (!rc_strf(ipath, sizeof(ipath), "%s/i%ld", path, it))
+            {
+                sink.dropped++;
+                continue;
+            }
             w = rc_uirec_item(sink.room(), sink.left(),
                               shm->items[idx].text, ipath, path, it);
             if (!w)
@@ -592,7 +612,13 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
         InterlockedExchange(&g_run_cancel,
                             g_cancel_id[0] && !strcmp(id, g_cancel_id));
         g_cancel_id[0] = '\0';
-        rc_strf(g_run_id, sizeof(g_run_id), "%s", id);
+        /* Form 3 again, and deliberately NOT a refusal: the id matches a
+         * later cancel and does nothing else, so truncating costs
+         * cancellation while refusing would fail a drive that was going to
+         * work. Logged so an uncancellable request has a reason on disk. */
+        if (!rc_strf(g_run_id, sizeof(g_run_id), "%s", id))
+            rc_log("desktop: run id too long (%u bytes) -- this request "
+                   "cannot be cancelled", (unsigned)strlen(id));
 
         if (strcmp(f->type, "UITREE") == 0)
         {

@@ -354,7 +354,17 @@ bool UiOps::cancel(const char *id)
         InterlockedExchange(&m_stopFlag, 1);
         return true;
     }
-    rc_strf(m_stopId, sizeof(m_stopId), "%s", id);
+    if (!rc_strf(m_stopId, sizeof(m_stopId), "%s", id))
+    {
+        /* BACKLOG 4's convention, form 3 -- the client's rc_uirpc_cancel
+         * does the same for the same reason. A truncated id can never
+         * strcmp equal to the one handle() picks up, so this cancel is
+         * already lost; say so rather than leave the caller concluding the
+         * request was uncancellable. */
+        rc_log("ui: cancel id too long (%u bytes) -- cannot match, dropped",
+               (unsigned)strlen(id));
+        m_stopId[0] = '\0';
+    }
     return false;
 }
 
@@ -371,7 +381,12 @@ bool UiOps::stop(const char *id)
      * request whose id matches already stopped, which is the window a probe
      * on the guest lost eight times out of eight on the client before the
      * same fix went in there. */
-    rc_strf(m_stopId, sizeof(m_stopId), "%s", id);
+    if (!rc_strf(m_stopId, sizeof(m_stopId), "%s", id))
+    {
+        rc_log("ui: stop id too long (%u bytes) -- cannot match, dropped",
+               (unsigned)strlen(id));
+        m_stopId[0] = '\0';
+    }
     return false;
 }
 
@@ -392,7 +407,12 @@ void UiOps::handle(rc_frame *f)
     InterlockedExchange(&m_stopFlag,
                         id && m_stopId[0] && !strcmp(id, m_stopId));
     m_stopId[0] = '\0';
-    rc_strf(m_runId, sizeof(m_runId), "%s", id ? id : "");
+    /* Form 3, and deliberately not a refusal: the id matches a later stop
+     * and does nothing else, so truncating costs cancellation where
+     * refusing would fail an op that was going to work. */
+    if (!rc_strf(m_runId, sizeof(m_runId), "%s", id ? id : ""))
+        rc_log("ui: run id too long (%u bytes) -- this request cannot be "
+               "stopped", (unsigned)strlen(id));
     m_quietTicks = 0;
 
     /* The feed is started on the first request that may wait on it and left

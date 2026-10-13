@@ -147,9 +147,11 @@ unsigned long rc_syncrpc_moved(void) { return g_moved; }
  * legal in a Linux filename, and a separator-based format breaks on the first
  * one. Batches are bounded by the 64KB frame, never by a fixed entry count.
  */
+enum { SYNC_ID_MAX = 64 };   /* named so the guard in manifest() can cite it */
+
 typedef struct {
     rc_net *net;
-    char    id[64];
+    char    id[SYNC_ID_MAX];
     char    buf[RC_MAX_FRAME - 2048];
     unsigned len;
     int     n;
@@ -200,6 +202,21 @@ static void do_scan(rc_net *net, rc_frame *f)
     const char *status = "ok";
     manifest_ctx *m;
     int n, total = 0;
+
+    /* Reject rather than truncate (BACKLOG 4's convention, form 2): a
+     * shortened id produces a SYNCEND the bridge cannot match against the
+     * request it sent, and the pass then waits out its whole budget instead
+     * of failing. The refusal CAN name the id, because a frame header value
+     * holds RC_MAX_VAL bytes where this buffer holds SYNC_ID_MAX. */
+    if (id && strlen(id) >= SYNC_ID_MAX) {
+        const char *k[2]; const char *v[2];
+        k[0] = "id";     v[0] = id;
+        k[1] = "status"; v[1] = "bad_id";
+        rc_log("sync: SYNC id too long (%u bytes), dropped",
+               (unsigned)strlen(id));
+        rc_net_send(net, "SYNCEND", k, v, 2, NULL, 0);
+        return;
+    }
 
     /* One snapshot for the whole scan, so the manifest, the tree id and the
      * `root=` header all describe the SAME tree even if the UI thread

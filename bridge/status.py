@@ -123,10 +123,10 @@ class SyncStatus(str, Enum):
     (a value can be sent by more than one; `too_long`, `bad_path` and
     `no_parent` each appear under two):
 
-      * scan (SYNCEND):        OK, NO_ROOT, TOO_MANY
+      * scan (SYNCEND):        OK, NO_ROOT, TOO_MANY, BAD_ID
       * put (SYNCPUTACK):      OK, BUSY, BAD_PATH, READONLY, NO_PARENT,
                                 NO_SPACE, LOCKED, TOO_LONG, CHANGED,
-                                CRC_MISMATCH, OUT_OF_ORDER
+                                CRC_MISMATCH, OUT_OF_ORDER, BAD_ID
       * mkdir (SYNCMKDIRACK):  OK, BAD_PATH, EXISTS, IS_FILE, NO_PARENT,
                                 TOO_LONG, NO_SPACE
       * get (SYNCDATEND):      OK, BAD_PATH, LOCKED, IS_DIRECTORY, MISSING,
@@ -146,6 +146,19 @@ class SyncStatus(str, Enum):
     """
 
     OK = "ok"
+    #: The REQUEST's id did not fit the guest's buffer, so the guest refused
+    #: rather than truncating (stage 4, BACKLOG 4's convention). It matters
+    #: that this is its own word: a truncated id produces a reply that cannot
+    #: be matched to the request that caused it, so the alternative to this
+    #: status is the caller waiting out its whole budget for an answer that
+    #: already arrived under a name it does not recognise.
+    #:
+    #: Unreachable from this bridge, which mints ids far shorter than the
+    #: guest's buffers. It is named here because the guest will say it to
+    #: anything that asks, and a status the bridge cannot name parses to
+    #: UNKNOWN -- which loses the guest's own word for what happened, in the
+    #: log and to the model both.
+    BAD_ID = "bad_id"
     #: FS LANE ONLY, and it predates this enum naming it: the listing sink
     #: carries an 8KB buffer and is heap-allocated because the build gate
     #: refuses a stack frame reaching one page, so `new` failing is a real

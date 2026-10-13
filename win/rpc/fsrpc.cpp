@@ -163,7 +163,14 @@ static void do_fsput(rc_net *net, rc_frame *f)
             put_fail(net, id, "too_long");
             return;
         }
-        rc_strf(g_put.id, sizeof(g_put.id), "%s", id);
+        /* The id gets the same test the path above already had, which it did
+         * not until 2026-10-13: a truncated id produces a PUTACK the bridge
+         * cannot match, and put_fail can name the whole id because a header
+         * value holds RC_MAX_VAL bytes. BACKLOG 4's convention, form 2. */
+        if (!rc_strf(g_put.id, sizeof(g_put.id), "%s", id ? id : "")) {
+            put_fail(net, id, "bad_id");
+            return;
+        }
         g_put_crc = RawCrc();
 
         if (!sink->beginAbsolute(g_put.path, fsWorkNames())) {
