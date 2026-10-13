@@ -71,6 +71,7 @@
 #define IDM_PERMS    1111
 #define IDM_AUTOSCRL 1112
 #define IDM_CLRCACHE 1113
+#define IDM_SCREEN   1114
 #define IDM_ABOUT    1120
 
 /* Accelerator commands.

@@ -206,6 +206,7 @@ void MainWindow::buildMenu(HWND hwnd)
 
     AppendMenuA(cfg, MF_STRING, IDM_OPTIONS, "&Options...");
     AppendMenuA(cfg, MF_STRING, IDM_PERMS, "&What can run without asking...");
+    AppendMenuA(cfg, MF_STRING, IDM_SCREEN, "Let it &use this screen");
     AppendMenuA(cfg, MF_SEPARATOR, 0, NULL);
     AppendMenuA(cfg, MF_STRING, IDM_CLRCACHE, "C&lear cached history...");
 
@@ -1412,6 +1413,22 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         break;
     }
 
+    case WM_INITMENUPOPUP:
+        /* The tick is the LIVE value, never the saved one.
+         *
+         * optionsApply writes *m_cfg and saves the INI BEFORE it asks
+         * whether to drop a streaming reply for the reconnect -- so
+         * answering No leaves the setting stored and the capability
+         * unchanged until the next connection. A tick read from m_cfg would
+         * then claim a capability that is not in force, which is exactly
+         * BACKLOG 18's defect: a client showing a mode the bridge refused.
+         * m_net->automation is what the refusal path itself consults. */
+        CheckMenuItem((HMENU)wp, IDM_SCREEN,
+                      MF_BYCOMMAND |
+                      ((m_net && m_net->automation != RC_AUTOMATION_NONE)
+                       ? MF_CHECKED : MF_UNCHECKED));
+        break;
+
     case WM_RC_OPENCHAT:
         if (m_chats) m_chats->openSelected();
         return 0;
@@ -1761,6 +1778,37 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             rc_options_run(hwnd, m_inst, *m_cfg, m_exeDir, this,
                            RC_OPT_CONNECTION);
             return 0;
+
+        case IDM_SCREEN: {
+            /* BACKLOG 19's other half: the setting exists in Options >
+             * Permissions and there was no quick way to reach it, which is
+             * the wrong shape for a capability somebody may want off NOW.
+             *
+             * OFF TAKES EFFECT IMMEDIATELY; on waits for the handshake. That
+             * asymmetry is not an oversight, it is the one net.h already
+             * describes -- the guest's own refusal reads n->automation live
+             * "so turning the capability off never waits for a reconnect".
+             * Nothing had ever written the field outside beforeStart, so the
+             * live read had nothing to read; this is the write that makes the
+             * claim true. Safe from here because it is an aligned int store
+             * whose only effect is an earlier refusal, which is the direction
+             * that cannot surprise anyone.
+             *
+             * The reconnect still happens, both ways, and is still what the
+             * BRIDGE needs: it splices the five screen tools into the session
+             * from guest.caps at build time, and caps only move at a
+             * handshake. Without it the agent would keep being offered tools
+             * the client has quietly stopped honouring -- it would get an
+             * honest `automation_off` refusal rather than a wrong answer, but
+             * a tool that is offered and always refused is worse than one
+             * that is not offered. */
+            ClientConfig next = *m_cfg;
+            next.automation = !next.automation;
+            if (!next.automation)
+                rc_net_set_automation(m_net, RC_AUTOMATION_NONE);
+            optionsApply(next, false);
+            return 0;
+        }
 
         case IDM_CLRCACHE: {
             /* BACKLOG 11a's answer, and the entry's own preference: the
