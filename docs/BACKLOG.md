@@ -772,10 +772,15 @@ when the mirror decision above is made -- it is the same shape of question,
 and answering one without the other leaves half of 01.35 either wrongly
 deferred or wrongly ignored.
 
-## 8. `rle8` / `rle8+deflate`, named in PLAN.md, never built
+## 8. `rle8` / `rle8+deflate`, named in PLAN.md, never built -- CLOSED 2026-10-13
 
-**Status:** open question, recorded 2026-09-18, from audit finding 03.35. Not a defect --
-nothing that exists today needs either codec -- but it is a gap PLAN.md promised and never
+**Status:** CLOSED as a **no**, stage 4. `enc=rle8` is not built and will not
+be. The ruling and its evidence are at the end of this entry; the body is kept
+because the reasoning was wrong twice in opposite directions and that is worth
+more than a one-line verdict.
+
+Recorded 2026-09-18, from audit finding 03.35. Not a defect -- nothing that
+exists today needs either codec -- but it is a gap PLAN.md promised and never
 delivered, and nothing anywhere said whether that was on purpose.
 
 `PLAN.md`'s wire-format design named `enc=raw|rle8|deflate|rle8+deflate` as the adaptive
@@ -813,18 +818,58 @@ gets an `rle8` value of its own (cheap: GDI already produces `BI_RLE8` bytes, so
 side may be close to free) or whether `deflate` alone is enough for the compressed sizes
 Phase 6 actually measures, and write down which.
 
-**The measurement is in, and it is not a flat no** (2026-09-26, gate 0.10 and
+~~**The measurement is in, and it is not a flat no** (2026-09-26, gate 0.10 and
 the Phase 0 screenshot runs). RLE8 came out **2.8x faster and 2x larger** than
 deflate on the same frame. That is a loss on a LAN, where bandwidth is free and
 the guest's CPU is not, and a win on a modem, where it is the other way round --
 which is exactly the trade the adaptive codec already chooses between for
 `EXECOUT` and friends. So `rle8` is a third value for that chooser, not a
 rejected idea, and the earlier reading of this section as "decided against" is
-wrong. Note that general guest->bridge
+wrong.~~ **Struck 2026-10-13: there is no such measurement.** See the ruling
+below. Note that general guest->bridge
 deflate compression (audit-2 03.3, 03.4, 06.7) was implemented in win/net/net.cpp for
 bulk frames (EXECOUT, SYNCDAT, SYNCENT) with adaptive throughput measurement; wire codec
 decisions (deflate vs rle8) for screenshots specifically remain deferred to Phase 6. Until
 then this is not blocking anything.
+
+---
+
+### THE RULING, 2026-10-13: no, and the paragraph above was citing nothing
+
+**It was already decided, in a document this entry never read.**
+`docs/UIAUTOMATION.md` wrote the conclusion from a real run over four bands of
+one screen: *"deflate beat GDI's own RLE at every depth where both exist, and
+deflate on raw 16bpp beat RLE8 on quantised 8bpp outright. So `enc=rle8` is not
+needed and `BACKLOG.md` 8 closes as a no."* `win/automation/shot.h` agrees in
+the shipping capture path, which sets `BI_RGB` on purpose and says the wire
+codec does the compression. Two documents said closed, two said open, and
+nobody noticed because each was read on its own.
+
+**The 2.8x figure has no measurement file behind it.** Nothing in
+`docs/measurements/` contains the string RLE; gate 0.12b's depth ladder prints
+an RLE column and its output was never saved. The nearest real number is in
+`win/checks/probe.c`, in the comment explaining why an EARLIER number was
+**discarded**: *"The first version sampled a single strip of mostly-flat
+desktop and concluded deflate beats RLE by 2.7x, which is a claim about that
+band and not about screenshots."* That is 2.7x the other way round -- deflate
+winning -- about a measurement its own author threw out. The "2.8x faster and
+2x larger" above is that number, sign flipped, promoted to a decision.
+
+**And it was never "about an hour", which is what `ROADMAP.md` promised.** The
+choice is a `bool` in three languages, not a codec selector: `Codec::
+shouldCompress` in `win/wire/connection.cpp`, `should_compress` in
+`bridge/wire/compress.py`, and the same shape again in `gremote/client.py`.
+Each has a decoder, one of which treats an unknown `enc` as raw rather than
+refusing. The encoder is unwritten -- RLE in this tree exists only in
+`win/checks/probe.c`, where GDI produces it for free inside a DIB, which is a
+different thing from a wire codec over an arbitrary frame body. Add a HELLO
+negotiation bit and it is a day, for a codec measured as worse on the link we
+have.
+
+**What would reopen it:** a modem. The trade RLE8 would win is CPU against
+bandwidth, and every link this has run on makes bandwidth the cheap side. If
+that stops being true, re-run gate 0.12b, **save the table**, and decide from
+it.
 
 ## 9. Phase 6 input/window tools -- readiness gaps found ahead of the phase
 

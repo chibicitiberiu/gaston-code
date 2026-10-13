@@ -285,7 +285,9 @@ bridge does depth reduction, palette work, diffing, OCR and PNG.
 Measured over four bands of one screen, deflate beat GDI's own RLE at every
 depth where both exist, and deflate on raw 16bpp beat RLE8 on quantised
 8bpp outright. So `enc=rle8` is not needed and `BACKLOG.md` §8 closes as a
-no. `max_bpp` remains as a quality knob — 4bpp for driving, native for
+no. **It took until 2026-10-13 for §8 to agree**, because this paragraph was
+the only place the conclusion was written and the entry was being read on its
+own — see §8's ruling for what that cost. `max_bpp` remains as a quality knob — 4bpp for driving, native for
 looking — and never as a codec choice.
 
 Region capture is the default; full screen is the exception.

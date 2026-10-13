@@ -453,7 +453,10 @@ adding them later touches every frame and handler on both sides:
   any `enc=` value it does not recognise. Whether that gap is intentional (the screenshot
   codec is Phase 6 and hasn't landed, so there may be nothing to compress with `rle8` yet)
   or a forgotten scope cut is recorded as an open question in `BACKLOG.md` §8, not decided
-  here.
+  here. **[R -- 2026-10-13] Decided: a no.** Deflate beat GDI's own RLE at
+  every depth where both exist, so `enc=` ships as `raw|deflate` and the two
+  `rle8` values named above are a design that measurement refused rather than
+  a gap. `BACKLOG.md` §8.
 
 **[R] Protocol error handling (missing entirely from the first draft).** The first draft
 said: malformed header, unknown `TYPE`, repeated key, truncated body → `ERROR\ncode=\nmsg=`

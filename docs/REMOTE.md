@@ -653,7 +653,8 @@ leaving it at 0 is a change to somebody's machine that outlives us.
   8bpp display that is a third of 24bpp and no GDI conversion. Needs retro-agent's
   palette fix (a fresh memory DC has only the 20 static colours). The current
   `app/screenshot.cpp` writes to a file handle, so it is rewritten onto a sink,
-  not just moved. `BI_RLE8` stays the open question of `BACKLOG.md` 8.
+  not just moved. `BI_RLE8` was the open question of `BACKLOG.md` 8, closed as a no on
+  2026-10-13.
 
 ## Python client
 
@@ -1360,4 +1361,7 @@ matters for anything with a clock in it.
   never set `enc=deflate`. Turning it on means importing
   `bridge/wire/compress.py`, which is stdlib-only and already keeps one
   persistent stream per direction.
-- **`BI_RLE8`** for screenshots (`BACKLOG.md` 8).
+- ~~**`BI_RLE8`** for screenshots (`BACKLOG.md` 8).~~ **Closed as a no,
+  2026-10-13.** Deflate beat GDI's own RLE at every depth where both exist
+  (`UIAUTOMATION.md`, Screenshots). This list carried it as live against two
+  other documents that had already closed it.
