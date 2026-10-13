@@ -41,7 +41,7 @@ in stage 1 for that reason.
 | 3 | The markup moves to the client — **DONE 2026-10-12** | a second client could be written without touching the bridge |
 | 3b | Pagination: the bridge stops dividing the transcript — **DONE 2026-10-13** | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
 | 3c | R7: several guest machines against one bridge — **DONE 2026-10-13** | two guests hold two mirrors and two baselines at once |
-| 4 | The recorded decisions, the UI inconsistencies, the small repairs | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
+| 4 | The recorded decisions, the UI inconsistencies, the small repairs — **DONE 2026-10-14** | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
 | 4b | The "agent is driving" indicator | somebody at the keyboard can see that the desktop is not theirs, and stop it, while gremote or the client is driving |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
@@ -418,7 +418,80 @@ client claiming another's id inherits its transcript exactly as before.
 
 ---
 
-## Stage 4 — the recorded decisions, the inconsistencies, the small repairs
+## Stage 4 — the recorded decisions, the inconsistencies, the small repairs — DONE 2026-10-14
+
+Planned in `docs/stage4-plan.md` through two adversarial review rounds (40
+defects, then 37). Eighteen commits, `92f49cb..`.
+
+**Exit condition, met and VERIFIED BY SWEEPING rather than asserted:**
+`BACKLOG.md` holds no entry whose only blocker is an unanswered question.
+Nine rulings, six confirmations, four named watch conditions.
+
+**The stage's own text was the first thing it had to correct.** It claimed
+seven blocked entries; a sweep found more, and five of the seven were
+described wrongly. The `rc_strf` "~97 sites" was counted before the tree
+quadrupled (472 of 527 discard the return, and eight of them can bite). The
+automation setting had not needed a restart since the Options sheet landed.
+§18's residue was three stale comments. `enc=rle8` rested on a figure with
+no measurement file behind it -- the nearest real number is a *discarded*
+one with the sign flipped -- while two other documents had already closed
+it as a no.
+
+**What running it found that reading it did not.** Four real defects, none
+of them visible to lint, test-fast, wine-smoke or either review round:
+
+- The cache sweep shipped with `"%s\%s"` -- one backslash, an invalid
+  escape, so the glob had no path separator and matched nothing. Found by
+  planting an orphan on the guest. `check-sources` now rejects it.
+- The Add-a-tool dialog clipped its own OK and Cancel: 128 DLU tall with
+  buttons ending at 133, wrong at every font size. Found by the Large Fonts
+  measurement BACKLOG 30 had been asking for.
+- `SyncStatus.BAD_ID` -- a new guest status broke the cross-language
+  vocabulary agreement. Found by wine-smoke.
+- `policy.TOOL_CATS` was missing `ocr`, so a mode with the screen Off could
+  not have hidden it. Found by a test whose docstring says exactly why it
+  exists.
+
+**Three measurements, and two overturned something.**
+
+- **The logoff bit** (`REMOTE.md` item 12), pulled out of stage 5 because it
+  needed one logoff on any 98 box. `RegisterServiceProcess` does NOT exempt
+  a process from the logoff broadcast, so the arm was needed rather than
+  dead code -- and `RunServices` runs at BOOT, not per session, so gremote
+  did not come back at the next logon either. One logoff cost the machine
+  its remote access until a reboot, and `BACKLOG.md` 35 says the opposite in
+  passing. gremote outlives a logoff now, and picks up the next session's
+  taskbar as the same process.
+- **04.35's folder commit.** The mechanism survives and the harm does not:
+  `permdesk` refuses a write outside the working copy, so the agent re-aimed
+  in three seconds at zero exec cost. The cost MOVED -- four of seven execs
+  were toolchain orientation, against a baseline of zero.
+- **Large Fonts.** The 230x170 DLU figure stands.
+
+**And `ocr(rect)` is built**, third in the ladder and saying so in its own
+description: on the guest it read "Let ityse this scien" where `ui` returns
+"Let it use this screen" exactly.
+
+**The image cap went up one page**, 498,425 -> 506,617, and the Makefile
+says honestly that 1,400 bytes of content bought 4,096 of padding because
+`_DATA` ended 192 bytes short of a boundary.
+
+### What is worth knowing afterwards
+
+- **A stale backlog is worse than a short one.** Six entries read as open
+  while carrying their own answers -- a title still saying "needs a
+  decision" a month after the work shipped, a "Three remain:" above three
+  struck bullets, a `from=` bullet describing a replay buffer deleted in
+  September. Most of this stage was reading, not writing.
+- **Three of the four code defects were in code written during this stage**,
+  and all three were caught by running the thing on the real machine rather
+  than by reviewing it. The fourth was caught by a test that existed because
+  somebody had been bitten before.
+- **Writing C through a script collapses escapes.** `"\\"` in a generator
+  is `"\"` in the file, and one level too many is invisible in a diff
+  because the line still reads as a path join.
+
+---
 
 The stage where `BACKLOG.md` stops holding entries whose only blocker is a
 question. Not a list to be worked top to bottom; a sitting with the file open.
@@ -535,16 +608,25 @@ it found that `[Ctrl+A]` selects all in the text editor there and nothing at
 all in the guest's, which the prose had been stating as a property of the
 platform.
 
-The bring-up happened in stage 1, so this is the measurements. Eight of the
-twelve `REMOTE.md` P200-checklist bullets are unanswered:
+The bring-up happened in stage 1, so this is the measurements. ~~Eight~~
+**Six** of the twelve `REMOTE.md` P200-checklist bullets are unanswered --
+stage 4 took two of them, and the count was out by one before that:
 
 `bind` after a restart in `TIME_WAIT`; the tray icon end to end through a real
 logon cycle, which is the one part of `win/remote/tray.cpp` with no test behind
-it; gremote's memory idle and under load, with and without the client; the
-`rsrc32.dll` question; shutdown with gremote running, where the hang was seen on
+it; gremote's memory idle and under load, with and without the client;
+shutdown with gremote running, where the hang was seen on
 this machine and only this machine can confirm the fix; shutdown with the client
-running; whether gremote survives a LOGOFF as `RegisterServiceProcess` promises;
-and prevent-sleep runs 2 and 3, which need APM the QEMU guest does not have.
+running; and prevent-sleep runs 2 and 3, which need APM the QEMU guest does not
+have.
+
+**Taken in stage 4, both because neither actually needed the P200:**
+item 12, whether gremote survives a LOGOFF, which needed one logoff on any
+real 98 box -- it did not survive, and `RunServices` runs at boot rather
+than per session, so it did not come back at the next logon either
+(`docs/measurements/logoff-vm-20261014.txt`); and item 9, the `rsrc32.dll`
+question, settled as a no on the control lane's kernel32-and-Winsock rule,
+which no install can clear.
 
 Plus gate 0.5c (deflate throughput, still provisional), the six measurements
 `UIAUTOMATION.md` says only the P200 can answer, `BACKLOG.md` 26 -- which closes

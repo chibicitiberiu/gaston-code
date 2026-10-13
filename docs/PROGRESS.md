@@ -3,13 +3,25 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 4 — the recorded decisions and the
-small repairs.** Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12,
-stages 3b and 3c on 2026-10-13. Phase 5 (Attach) shipped; 5.1 is
-below, and 5.2/5.3 went in without a write-up of their own. Phase 6 is
-part-built: `ui`, `input`, `shot`, `focus`, `launch`, `ps`, `kill` and the
-clipboard pair are live and measured on real hardware, while `ocr` and the
-inline transcript screenshot are not. `ROADMAP.md` is the order the rest of it goes in.
+**Current goal: `ROADMAP.md` stage 5 — the P200, and the optimisation it
+justifies.** Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12,
+stages 3b and 3c on 2026-10-13, stage 4 on 2026-10-14. **Stage 4b** — the
+"agent is driving" indicator — was split out of stage 4 by review rather
+than by size and is unplanned; its findings are in `ROADMAP.md`.
+
+Phase 5 (Attach) shipped; 5.1 is below, and 5.2/5.3 went in without a
+write-up of their own. Phase 6 is part-built: `ui`, `input`, `shot`,
+`focus`, `launch`, `ps`, `kill`, the clipboard pair **and `ocr` (stage 4)**
+are live and measured on real hardware; the inline transcript screenshot is
+not. `ROADMAP.md` is the order the rest of it goes in.
+
+**One of stage 5's twelve P200 bullets is already answered**: acting on the
+logoff bit (item 12) was pulled forward into stage 4, because it needed one
+logoff on any real 98 box rather than the P200 specifically. It found that
+`RegisterServiceProcess` does not exempt a process from the logoff
+broadcast, and that `RunServices` runs at boot rather than per session — so
+before stage 4, one logoff cost the machine its remote access until a
+reboot.
 
 Phases 0–5 are done and demoed on the real guest (the QEMU Win98 SE domain, and
 since 2026-10-01 the Athlon XP box over `gremote`; Phase 1.9's **Pentium 200**
