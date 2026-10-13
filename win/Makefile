@@ -1057,6 +1057,31 @@ check-sources:
 	   echo "   FAIL: use rc_strcpy/rc_strncpy/rc_strf (win/core/str.h)"; \
 	   exit 1; \
 	 else echo "   ok: none"; fi
+	@echo "=== invalid escapes in string literals ==="
+	@# A BACKSLASH BEFORE A CHARACTER THAT IS NOT AN ESCAPE is undefined,
+	@# and the compilers here quietly drop the backslash rather than warn.
+	@# In a path format that is not a typo, it is a MISSING SEPARATOR:
+	@# "%s\%s" built <dir><name> with nothing between them, so a glob
+	@# matched no file and a sweep silently did nothing. Found on the guest,
+	@# 2026-10-13, after lint, test-fast, wine-smoke and two review rounds
+	@# had all passed it -- there is nothing to see unless the code runs on
+	@# a real path.
+	@#
+	@# It comes from writing C through a script: "\\" in the generator is
+	@# "\" in the file, and one level of collapse too many is invisible in
+	@# a diff. The valid set is the C89 list plus \x and octal.
+	@bad=$$(grep -rnE '"[^"]*\\[^\\nrtbfav0xq'"'"'"?%][^"]*"' \
+	        $(CURDIR) --include='*.c' --include='*.cpp' --include='*.h' \
+	        2>/dev/null | grep -v third_party || true); \
+	 bad2=$$(grep -rn '%s\\%s' $(CURDIR) --include='*.c' --include='*.cpp' \
+	        --include='*.h' 2>/dev/null | grep -v third_party \
+	        | grep -v '%s\\\\%s' || true); \
+	 if [ -n "$$bad2" ]; then \
+	   echo "$$bad2"; \
+	   echo "   FAIL: \\% is not an escape -- the backslash is dropped and"; \
+	   echo "         the path separator with it. Write \\\\ in C."; \
+	   exit 1; \
+	 else echo "   ok: no dropped separators"; fi
 
 check-%: $(BUILD)/%.exe
 	@echo "=== identity ==="; file $(BUILD)/$*.exe

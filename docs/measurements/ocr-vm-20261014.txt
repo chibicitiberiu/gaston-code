@@ -1,0 +1,51 @@
+ocr(rect) against a real Win98 screen -- stage 4, E10
+QEMU Win98 SE guest, 2026-10-14. Picture: ocr-vm-20261014.png
+
+INPUT
+  The guest's own 640x480 desktop with the client's Configure menu open,
+  as the 8bpp uncompressed BMP the capture path actually sends
+  (win/automation/shot.cpp sets biCompression = BI_RGB on purpose, and the
+  wire codec does the compression). 481,078 bytes -- the same full-screen
+  figure BACKLOG 28 records for a cancelled capture.
+
+  Tesseract 5.5.3 / leptonica 1.87.0, --psm 6, fed unscaled.
+
+WHAT CAME BACK (first lines)
+  [=! Gaston Code (io
+  File | Configure Mode Model Effort Commands Help
+  Page 1/1 (Live) ry Dy New chat
+  Ge ¥ Letityse this scien =| 1x!
+  late a file called YMFILE.TXT in your work folder
+  eee |taining the single word vm. Use the machine tools.
+  | mep_machine_put_tile path: c:\vORK\MMPILE.1xt
+  Put File - CAWORK\WMFILE.TXT
+  path | c:\WORK\vupzLE. xt
+  content | va
+
+WHAT IT PROVES, AND WHAT IT ARGUES
+  It works: the window title, the whole menu bar, "Page 1/1 (Live)", "New
+  chat", the block headings and most of the prose come back readable, which
+  is what PLAN.md predicted -- Win98 does not antialias UI text, so plain UI
+  text is unusually good input.
+
+  AND IT IS THE BEST ARGUMENT FOR THE TOOL BEING THIRD IN THE LADDER, which
+  is a thing worth having in evidence rather than in prose. The menu item
+  reads "Let ityse this scien". `ui` returns "Let it use this screen",
+  exactly, from WM_GETTEXT, for a fraction of the tokens. A model that
+  reaches for `ocr` where a control exists has paid more to get less, and
+  the tool's own description leads with that.
+
+  The failures cluster exactly where you would expect and where it does not
+  matter much: proportional text at small sizes, the path strings inside
+  the tool-call card (c:\vORK\MMPILE.1xt), and the taskbar. The fixed-pitch
+  monospace blocks fare worst of all, which is the opposite of the naive
+  guess.
+
+THE DEGRADE PATH, MEASURED BY ACCIDENT
+  The first attempt fed an RLE8-compressed BMP (ImageMagick's default for a
+  palette BMP) and leptonica refused it: "cannot read compressed BMP files".
+  to_text logged the refusal and returned None, the tool answered with the
+  no_engine sentence, and nothing raised -- which is the contract to_png
+  established for a missing Pillow, working on a path nobody designed it for.
+  The guest never sends a compressed BMP, so this is not a gap; it is the
+  failure mode being exercised for free.

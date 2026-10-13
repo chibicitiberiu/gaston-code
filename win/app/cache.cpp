@@ -171,13 +171,13 @@ void rc_cache::sweep_orphans()
 
     for (i = 0; i < 2; i++) {
         WIN32_FIND_DATAA fd;
-        if (!rc_strf(glob, sizeof(glob), "%s\%s", dir, PATTERNS[i]))
+        if (!rc_strf(glob, sizeof(glob), "%s\\%s", dir, PATTERNS[i]))
             continue;
         FindHandle h(FindFirstFileA(glob, &fd));
         if (!h.valid()) continue;
         do {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-            if (!rc_strf(victim, sizeof(victim), "%s\%s", dir, fd.cFileName))
+            if (!rc_strf(victim, sizeof(victim), "%s\\%s", dir, fd.cFileName))
                 continue;
             if (DeleteFileA(victim)) gone++;
             else rc_log("cache: cannot remove %s (%lu)", victim,
