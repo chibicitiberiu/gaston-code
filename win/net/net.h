@@ -161,6 +161,21 @@ unsigned rc_net_page_blocks(rc_net *n);
 /* 1 if everything stopped and was freed (or there was nothing to stop); 0
  * if a thread would not stop, its Connection was left alive and `leaked` is
  * now set. */
+/* THE NON-BLOCKING HALF OF rc_net_stop, for Service::signalStop.
+ *
+ * Signals the RPC worker and kills any child process it is waiting on, and
+ * returns at once. Idempotent and safe on a connection that never started,
+ * so the two-pass shutdown can call it unconditionally; rc_net_stop calls
+ * the same thing again as its phase 1.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO IS SEND THE FIN. That is
+ * Connection::signalStop, and moving it here would clear `m_running` --
+ * which is the flag a send bails on, so every ack the worker's shutdown
+ * drain composes would fail to leave. That is the exact bug the three-phase
+ * order in rc_net_stop was written to fix (01.51), and it stays fixed.
+ * BACKLOG 23 item 4. */
+void rc_net_signal_stop(rc_net *n);
+
 int  rc_net_stop(rc_net *n);
 int  rc_net_send(rc_net *n, const char *type,
                  const char *const *keys, const char *const *vals, int nkv,

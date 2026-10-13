@@ -694,6 +694,16 @@ int rc_net_send_ui(rc_net *n, const char *type, const char *const *keys,
                       RC_SEND_WAIT_UI);
 }
 
+void rc_net_signal_stop(rc_net *n)
+{
+    if (!n || !n->started) return;
+    /* Phase 1's signal, without phase 1's wait. rc_rpc_stop clears a flag,
+     * cancels any running job (killing a child that could outlive us) and
+     * sets an event -- nothing here blocks. rc_net_stop runs it again; it
+     * is idempotent by construction. */
+    rc_rpc_stop();
+}
+
 int rc_net_stop(rc_net *n)
 {
     int rpcj;

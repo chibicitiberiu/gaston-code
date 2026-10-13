@@ -2567,19 +2567,30 @@ Closing this needs services that can be *un*-signalled, or a `reinit` the
 lifecycle does not have, which is a bigger change than the hang warranted.
 
 **4. `ConnectionService::signalStop()` does not exist, so the client's fast
-path sends no FIN.** The `Service` contract is two passes -- `signalStop()`
-never blocks, `join()` waits -- but `ConnectionService` declares only `join()`
-and hands the whole thing to `rc_net_stop`, which signals, drains and joins in
-one call. On the ordinary path that is merely unusual; on the session-ending
-path it means the connection is abandoned with *nothing* having been signalled,
-so the bridge learns the link is gone when the process dies rather than from a
-FIN. Harmless -- the bridge treats a dropped link as a dropped link -- and not
-fixed here on purpose: splitting `rc_net_stop` into a signal half and a join
-half means reordering the three phases whose order `net.cpp` documents at
-length as the thing that was wrong before (clearing `running` first silently
-threw away every ack the RPC worker's drain composed). Worth doing when
-somebody is in that file anyway, with `wirecheck` watching. `gremote` does not
-have the problem: `ServerService::signalStop` is a flag and nothing else.
+path sends no FIN** -- **DONE 2026-10-13, stage 4, and the FIN is still not
+what moved.** The `Service` contract is two passes -- `signalStop()` never
+blocks, `join()` waits -- and `ConnectionService` declared only `join()`,
+handing everything to `rc_net_stop`, which signals, drains and joins in one
+call. On the ordinary path that was merely unusual; on the session-ending
+path, where `App` abandons a service rather than joining it, *nothing* was
+signalled at all.
+
+`rc_net_signal_stop` is the non-blocking half now, and it is `rc_rpc_stop`
+and nothing else: the worker is told and **any child process it launched is
+killed**. That is the part worth having on the abandoned path -- an
+`exec`'d program outliving the shutdown is a real leak, where the missing
+FIN never was (the bridge treats a dropped link as a dropped link).
+
+**The FIN deliberately stays in `join()`.** Sending it early means calling
+`Connection::signalStop`, which clears `m_running` -- the flag a send bails
+on -- so every ack the worker's shutdown drain composes would fail to leave.
+That is exactly the bug the three-phase order was written to fix (01.51),
+and this entry warned about reintroducing it. The warning was right and the
+split goes around it rather than through it; `rc_net_signal_stop`'s own
+comment carries the reason. Verified with `wirecheck`, as asked.
+
+`gremote` does not have the problem: `ServerService::signalStop` is a flag
+and nothing else.
 
 **Not a gap, recorded so it is not re-derived:** `shutdown(sock, SD_SEND)` does
 not wake a blocking `recv` on the local socket -- it half-closes the *sending*
