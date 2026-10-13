@@ -181,11 +181,22 @@ were justified by it more heavily than the number deserved.
 
 Recorded so they are not rediscovered. None are reachable in normal use today.
 
-- **`from=` on the guest.** The guest never sends it, so the bridge's replay
-  buffer is dead code in production; `PERMSTATE` covers the case that mattered.
-  Implementing it properly needs per-frame seq tracking *and* a decision about
-  what a re-delivered `EXEC` means. `EXEC` and `EXECKILL` are already sent with
-  `stamp=False` so that day cannot arm a command re-run.
+- ~~**`from=` on the guest.** The guest never sends it, so the bridge's
+  replay buffer is dead code in production; `PERMSTATE` covers the case
+  that mattered. Implementing it properly needs per-frame seq tracking
+  *and* a decision about what a re-delivered `EXEC` means. `EXEC` and
+  `EXECKILL` are already sent with `stamp=False` so that day cannot arm a
+  command re-run.~~ **STALE since 2026-09-18 and struck 2026-10-14, stage
+  4: there is no replay buffer to be dead.** `bridge/wire/replay.py`, the
+  `from=` branch, `seq` stamping and the `stamp=` kwarg were all deleted
+  (5's first bullet). `protocol.py` states what replaced them -- "the
+  never-replay invariant for EXEC/EXECKILL/SYNC\* is enforced by never
+  replaying anything".
+
+  So the decision this bullet wanted can never be needed here: nothing can
+  re-deliver an `EXEC`. The same question for a re-delivered `SYNCDEL` IS
+  live, because deletions genuinely do not propagate yet, and it is
+  answered in 4.
 - **Concurrent turns.** `_handle` spawns a task per `INPUT` with no guard, so
   two `INPUT`s produce two turns on one client — and one prompt bar.
   Pre-existing; Stage A is just where it first has a visible failure mode.
@@ -253,8 +264,22 @@ use; each is a known limit rather than something forgotten.
 - **Deletions do not propagate.** By decision, not omission: a rename is a
   create plus a delete, and the delete does not travel, so `git mv` leaves the
   old path on the guest. It is reported and never silently resurrected or
-  removed. Closing it needs `SYNCDEL` and a decision about what a re-delivered
-  delete means.
+  removed. Closing it needs `SYNCDEL` ~~and a decision about what a
+  re-delivered delete means~~.
+
+  **[R -- 2026-10-14, stage 4] The decision is taken, so only the work is
+  left: a re-delivered `SYNCDEL` is ANSWERED FROM THE RECORDED RESULT AND
+  NEVER RE-EXECUTED.** A delete is not idempotent in the way it looks --
+  re-running one on a path the person has since recreated destroys the new
+  file, which is the one outcome this project never accepts. So the id is
+  the unit: a `SYNCDEL` whose id has an answer gets that answer again, and
+  only an unknown id is new work.
+
+  Note the symmetrical question for `EXEC` is NOT open and never will be:
+  there is no replay buffer at all (`bridge/wire/protocol.py`, "the
+  never-replay invariant ... is enforced by never replaying anything"), so
+  nothing can re-deliver one. 3's `from=` bullet pairs with this one and is
+  stale for the same reason.
 - **Bash can still reach `.gaston/`.** `Edit`, `Write` and `NotebookEdit` are
   refused there now, and the baseline is outside `--cwd` by a startup check --
   but `permissions.py` deliberately does not parse command lines, so `sed -i`
@@ -348,7 +373,10 @@ lock-serialised -- `Connection::signalStop` (`win/wire/connection.cpp`) argues a
 idle blocking `recv` -- the race is removed by joining the reader and sender
 before `closesocket`, and leaking the socket if a thread will not exit.
 
-Three remain:
+~~Three remain:~~ **None remain -- all three below are struck, and this
+line said otherwise until stage 4 swept it (2026-10-14). A heading that
+contradicts every bullet under it is exactly what makes a sweep of this
+file unreliable, which is the thing stage 4's exit condition depends on.**
 
 - ~~**The replay buffer is still dead and still stamping.**~~ **Closed
   2026-09-18.** `bridge/wire/replay.py`, the unreachable `from=` branch, `seq`
@@ -581,14 +609,24 @@ item (2) is specifically the CLIENT's `rpc.cpp`; item (3) is bridge Python.
 **To close it, in order:** (1) `win/xfer.c` with the sink/source pair above,
 maybe 150-250 lines given `do_put`/`do_get` are already ~130 combined and
 mostly reusable; (2) `id_matches_family`/`rc_rpc_submit` grow a third queue
-class if Export or upload need to run independently of `exec` -- decide this
-when the first of the three callers is actually built, not before; (3)
+class if Export or upload need to run independently of `exec` -- ~~decide
+this when the first of the three callers is actually built, not before~~
+**[R -- 2026-10-14, stage 4] NO THIRD CLASS, and this closes on the entry's
+own condition rather than overriding it: the first of the three callers IS
+built. Export as HTML landed 2026-09-19 (see this entry's own note above)
+and it did not need the general primitive, does not contend for the job
+slot, and has run in production since. The condition said decide when a
+caller exists; one exists and wants nothing. What would reopen it is a
+caller that must run WHILE an `exec` is in flight -- upload is the likely
+one -- and that is a different sentence from "if Export needs it". The
+stale cite goes with it: `id_matches_family` is `rpc.cpp:914`, not
+`:595-614`.**; (3)
 `_send_html` gains an END frame and a status; (4) each caller (Export,
 upload, screenshot strips) becomes a thin wrapper. None of the three callers
 is built yet, so there is no size estimate for the whole thing worth stating
 beyond "the primitive is smaller than any one caller and should come first."
 
-## 7. The sync baseline is bound to one machine, and R7 needs a decision
+## 7. The sync baseline is bound to one machine -- R7's decision, TAKEN and BUILT
 
 **[R] ANSWERED 2026-09-18: one mirror per CHAT.** The three options below were
 one per client, one shared with a per-guest baseline dimension, or one with a
@@ -639,7 +677,7 @@ settled with it:
   The QEMU guest and the Athlon (`machine=TIBI`) are two machines with two ids,
   both reachable today, so the one item here that looked blocked on hardware is
   not. Whether the machine id and this section's baseline identity are the same
-  id is still §21's open question, and stage 3c is where it gets answered.
+  id was §21's open question, and stage 3c is where it got answered.
   **ANSWERED 2026-10-13: they stay separate.** `machine` says WHO and
   `tree_id` exists to refuse a swapped or reformatted disk; unifying them
   means deciding which of the two behaviours the single id keeps and giving
@@ -685,8 +723,21 @@ and never matched, and both users were told "synchronisation has stopped"
 twice a minute. Each distinct reason is now announced once until a pass
 succeeds.
 
-**The design question is not.** Before R7 can give the bridge a dict of
-guests, someone has to decide what a mirror MEANS with more than one machine:
+~~**The design question is not.** Before R7 can give the bridge a dict of
+guests, someone has to decide what a mirror MEANS with more than one
+machine:~~
+
+**[R -- 2026-10-14, stage 4] STRUCK. It was answered above on 2026-09-18
+(one mirror per CHAT), BUILT on 2026-10-13 as stage 3c, and left standing
+here in the present tense for a month -- where a sweep of this file reads
+it as open. That is the defect this stage exists to find, and it was in the
+entry whose own header says ANSWERED.**
+
+**The three options below are kept struck rather than deleted**, because
+which ones were rejected and why is the useful part; the answer picked none
+of them, by bounding mirrors by chats instead of by clients times chats.
+
+*The original text follows.*
 
 * **One mirror per client.** Each guest gets its own `--sync-state` and its
   own subtree. Simple, and the baseline logic needs no change at all -- but
@@ -702,9 +753,16 @@ guests, someone has to decide what a mirror MEANS with more than one machine:
 The first is a weekend. The second is a redesign of `sync.py`'s state table,
 which five review rounds went into. The third is somewhere between.
 
-**To close it:** pick one, and write down why, before `self._guest` becomes
-`self._guests`. Doing it in the other order means discovering the answer from
-whichever tests break.
+~~**To close it:** pick one, and write down why, before `self._guest`
+becomes `self._guests`. Doing it in the other order means discovering the
+answer from whichever tests break.~~ **DONE, in that order: the answer was
+written down 2026-09-18 and `self._guest` became `self._guests` in stage
+3c, 2026-10-13.** Struck in stage 4 along with the question above it.
+
+**And the advice held.** The keying change is what exposed the live bug
+3c's first commit fixed -- `is_reconnect = self.guest is not None` asked
+whether a GuestSession existed, never whose -- which is precisely the shape
+of "discovering the answer from whichever tests break", avoided.
 
 **Implementation blockers, once the question above is answered.** Recorded
 2026-09-18 from audits 02.3, 04.18, 04.19, 04.20, 04.21, 04.22, 04.35 and
@@ -828,10 +886,11 @@ beat is that one, on the machine that took it.
   near-zero guest cost) came in during Phase 0's screenshot experiments. Nothing recorded a
   decision either way.
 
-**To close it:** when Phase 6's screenshot capture lands, decide whether the wire codec
+~~**To close it:** when Phase 6's screenshot capture lands, decide whether the wire codec
 gets an `rle8` value of its own (cheap: GDI already produces `BI_RLE8` bytes, so the guest
 side may be close to free) or whether `deflate` alone is enough for the compressed sizes
-Phase 6 actually measures, and write down which.
+Phase 6 actually measures, and write down which.~~ **Done -- deflate alone
+is enough. See the ruling at the end of this entry.**
 
 ~~**The measurement is in, and it is not a flat no** (2026-09-26, gate 0.10 and
 the Phase 0 screenshot runs). RLE8 came out **2.8x faster and 2x larger** than
@@ -941,6 +1000,11 @@ control on screen. **`PLAN.md`'s Phase 6 tool table now carries both as a
 requirement** rather than leaving the tool a bare name, since this is a case
 of the design being underspecified rather than the code being absent.
 
+**[R -- 2026-10-14, stage 4] DISCHARGED IN CODE, not just in the design
+note:** `scope` and `max_nodes` are shipped properties of the `machine_ui`
+tool's schema (`bridge/agent/tools.py`), so the decision this item wanted
+"before the first call" was made and built. Confirmed, not re-decided.
+
 **Inline screenshots need the chunked-transfer primitive, not a new one.**
 04.28: the transcript renders under MSHTML/IE5 (`win/app/htmlview.cpp`), and
 IE did not support `data:` URIs until IE8 -- confirmed, `htmlview.cpp:426,452`
@@ -968,6 +1032,22 @@ block Phase 6's *first* tool -- one more hand-rolled copy costs nothing new --
 but should happen before the *second* Phase 6 tool lands, or the duplication
 this finding is about doubles again.
 
+**[R -- 2026-10-14, stage 4] THE DEADLINE PASSED AND NOTHING BROKE, which
+is itself the answer to re-examine rather than a reason to keep repeating
+the warning.** Phase 6 shipped `ui`, `input`, `shot`, `focus`, `launch`,
+`ps`, `kill` and the clipboard pair, and stage 4 added a ninth (`ocr`) --
+every one of them a caller of the same hand-rolled shape this asked to be
+extracted before the SECOND tool. The duplication did not double: the
+screen tools go through `ui.shot`/`UiService` rather than through
+`run_on_guest`, so the five copies are still five.
+
+So the item stands as WORK -- `GuestRpc.call` is still the right shape and
+`exec_lock` is still a field where a property belongs -- but its stated
+trigger was wrong about what would multiply, and a trigger that has fired
+eight times without the predicted cost is not a trigger. Re-stated: do it
+when a SIXTH hand-rolled copy of allocate-id/send/await/handle/kill is
+about to be written.
+
 **The bar has no state for "the agent is driving."** 01.37: PLAN.md itself
 calls this "probably the answer, and it is not designed yet" -- a fourth
 `g_bar_mode` value after `BAR_NONE`/`BAR_PERM`/`BAR_HALT`
@@ -979,6 +1059,23 @@ about 45 characters at 640x480 (`win/app/main.cpp:78,88,1391-1394`), while
 PLAN.md's `send_action_sequence` design wants the bar to render a compact
 multi-step summary (`type "hello" -> click [OK] -> wait "Notepad"`). Same
 bar, same gap, two audits.
+
+**[R -- 2026-10-14, stage 4] BOTH BELONG TO STAGE 4b, and the cites here
+are stale.** The driving indicator was planned into stage 4, taken apart by
+review and split out as its own stage -- `ROADMAP.md`'s 4b section has the
+findings: it cannot live in the client at all (gremote drives the desktop
+too), it cannot be a `BAR_*` row (`push`/`pop` are private and the drive
+runs on another thread), and it needs its own pump thread. So this is not
+"not designed yet" any more; it is designed and scheduled.
+
+01.10's single-line `SS_ENDELLIPSIS` control goes with it, since whatever
+renders "the agent is driving" is the thing that would render a multi-step
+summary.
+
+The cites are from before the bar became a class: `win/app/main.cpp` is 326
+lines now and holds none of this. `BAR_PERM`/`BAR_HALT` are
+`win/app/bar.h`, and that header already reserves the third kind in
+writing.
 
 **Closed, not open: the stack-frame guard IS reachable from top-level `make
 check`.** 01.39 restated a real memory-safety fact -- `win/sync/sync.cpp:100-116`
@@ -1183,13 +1280,38 @@ channel is `PermissionResultAllow.updated_permissions`, which needs a prompt
 to attach to. So a restored rule could only be re-applied on the FIRST allow
 of a new session, and until then the user is asked anyway.
 
-**To close it, decide first, then build:** whether "approve once" should mean
-something for `mcp__machine__exec`, which is the tool it is actually wanted
-for. That is the stop-asking-mode decision the 4.1j plan deferred by name --
-"the guard is built and exercised first; what gates on it is a separate
-decision once you have lived with it" -- and `bridge/agent/cmdguard.py` is the
-thing that would have to gate it. Building the storage before that decision
-would produce a feature that works only where it is not needed.
+~~**To close it, decide first, then build:** whether "approve once" should
+mean something for `mcp__machine__exec`, which is the tool it is actually
+wanted for.~~ That is the stop-asking-mode decision the 4.1j plan deferred
+by name -- "the guard is built and exercised first; what gates on it is a
+separate decision once you have lived with it" -- and
+`bridge/agent/cmdguard.py` is the thing that would have to gate it.
+Building the storage before that decision would produce a feature that
+works only where it is not needed.
+
+**[R -- 2026-10-14, stage 4] DECIDED, and the decision is smaller than the
+question looks, because the question was asked before the closure at the
+top of this entry existed.**
+
+"Approve once" for `exec` ALREADY WORKS, by a different mechanism than the
+one this text is about. The bar's "This chat" button grants the call's
+CATEGORY, and `RUN_WORK` and `RUN_BUILT` are `exec` classifications --
+running a trusted program in the work folder, and one exact program built
+there. It is kept in the conversation's settings and survives a rebuild.
+So the thing the 4.1j plan wanted is in place.
+
+**What is refused is persisting a CLI `updated_permissions` rule**, and
+the reason is in this entry's own "other half" paragraph: there is no
+control request for setting rules, so a restored rule could only re-apply
+on the FIRST allow of a new session -- i.e. after the moment it was needed.
+A rule that silently does nothing until it suddenly does is the staleness
+18 refused a per-model mode table for, and it would be worse here because
+it is about what may run unasked.
+
+So: no storage, no cmdguard gate, and nothing further to build. **The
+watch condition** is the same one 18 has -- if the SDK grows a way to
+assert a permission rule without a prompt to attach it to, this is worth
+reopening, and not before.
 
 ## 11a. The transcript cache prunes nothing
 
@@ -1209,18 +1331,50 @@ deletes the one thing that survives a disconnection, which is the whole
 reason the cache exists. A wrong prune is silent and unrecoverable; unbounded
 growth is visible in a `DIR` and costs megabytes.
 
-**To close it:** either a total-bytes cap with oldest-directory-first
+~~**To close it:** either a total-bytes cap with oldest-directory-first
 eviction keyed on the directory's own mtime (no chat list involved, which is
-the point), or a "Clear cached history" item next to Configure > Server Host.
-The second is smaller and answers the real complaint, which is "this machine
-is keeping something I did not ask it to keep".
+the point), or a "Clear cached history" item next to Configure > Server
+Host. The second is smaller and answers the real complaint, which is "this
+machine is keeping something I did not ask it to keep".~~
+
+**[R -- 2026-10-13, stage 4] THE SECOND, for the reason this entry gives**
+-- Configure > "Clear cached history...", with a confirmation, to the
+Recycle Bin. (Next to Options, not "Server Host": that item was renamed
+when the Options sheet replaced the dialog, and three other places in the
+client still said otherwise until this stage swept them.)
+
+**The cap was planned and dropped**, and the reasons are worth keeping
+because they are not the ones this bullet anticipated: `fsDeleteTree`
+recycles by default, so a byte cap is never satisfied and re-fires daily
+deleting more each time; nothing in this tree reads a DIRECTORY's mtime, so
+the proposed eviction key is unmeasured on FAT32; and it would be the only
+code in the project that deletes a conversation nobody asked to delete.
+
+**What WAS added is the half that needs no policy at all:** orphaned files
+are swept when their folder is opened -- `P###.TMP` from a dropped link and
+pre-stage-3 `P###.HTM`, both identifiable from the name alone. Growth is
+still unbounded if nobody asks; that is now a stated choice rather than an
+omission.
 
 **Also not built, and the same call:** paging BACKWARDS through a cached
 conversation while disconnected. The pages are all there and `page_count()`
-already reports how many, but the page bar's buttons send `GETPAGE` over a
+already reports how many, but the page bar's buttons send `GETBLOCKS` over a
 socket, and making them silently mean something else when the socket is down
-is a control that lies about what it does. The restored view shows the last
+is a control that lies about what it does. The restored view shows a cached
 page and says plainly that it is not live.
+
+**[R -- 2026-10-14, stage 4] DECIDED: no, and the sentence above is the
+reason rather than a worry about one.** One control, two meanings, chosen
+by whether a socket happens to be up, is the defect shape this project
+refuses elsewhere -- it is why the client never ticks a mode optimistically
+and why the page bar shows "(Live)" at all.
+
+**What would change it** is a control that says what it is doing: a
+separate offline-history view, or the page bar labelled for cached reading
+when there is no link. That is a UI design, not a wire feature, and nobody
+has wanted it yet.
+
+(The frame is `GETBLOCKS` since stage 3b; this bullet said `GETPAGE`.)
 
 ## 11. Smaller Phase 4/5 gaps found ahead of their phases, not yet closed
 
@@ -1263,7 +1417,26 @@ wrong: `win/checks/probe.c:75-93` already resolves it through `rsrc32.dll`
 and reports system/GDI/USER separately. But on this Win98 SE install the
 answer is `rsrc32.dll not present`, measured 2026-09-19 -- the Resource Meter
 is not installed, so there is no USER/GDI percentage to read without
-installing it first. What WAS measured, with only the app running (launched
+installing it first.
+
+**[R -- 2026-10-14, stage 4] AND INSTALLING IT WOULD NOT HELP `SYSINFO`,
+which is the related question `REMOTE.md`'s P200 checklist item 9 asked.
+The answer there is NO, and not for the missing-DLL reason.** `SYSINFO` is
+answered INLINE ON GREMOTE'S CONTROL LANE, whose one rule is kernel32 and
+Winsock only (`win/remote/control.h`) -- because on 9x a hung 16-bit app
+holding Win16Mutex blocks USER and GDI from every 32-bit thread, and that
+lane carries the heartbeat. `rsrc32.dll`'s export reaches 16-bit `USER.EXE`,
+so no install clears that; the op is refused, not the measurement.
+
+Stated as the inference it is: the LANE RULE is verified and written down,
+the thunk is the reason it applies and `PLAN.md` marks that route
+"(unverified)". Either way `SYSINFO` is the wrong place. `PLAN.md` already
+proposes what to report instead -- our own GDI object counts plus working
+set, neither of which needs a 9x-only dynamic resolve.
+
+A probe off that lane (`win/checks/probe.c` already does it) remains
+perfectly fine for anyone who installs the Resource Meter and wants a
+number. What WAS measured, with only the app running (launched
 from Start > Run, no DOS box, no Explorer window): **5208 KB free at window
 creation, 4568 KB after the chat list, 4580 KB after a page**, against the
 2420/1060 marks recorded when the chat list landed. The toolbars are not a
@@ -1484,10 +1657,33 @@ a mirrored folder. Guarding that on sync actually being initialised is a small,
 testable change. `ensure_sync_flush` needs no guard added; it already returns
 early without a mirror (`:2849-2852`).
 
-**To close it:** decide whether the agent restarts the bridge itself (the
-supervisor) or a human does; decide what happens when two MCP clients each want
-to own one bridge daemon (pidfile-and-attach, or refuse the second and say who
-holds it); then build rootless execution, `init_sync_root`, the embedded
+~~**To close it:** decide whether the agent restarts the bridge itself (the
+supervisor) or a human does; decide what happens when two MCP clients each
+want to own one bridge daemon (pidfile-and-attach, or refuse the second and
+say who holds it);~~ **[R -- 2026-10-14, stage 4] BOTH DECIDED. What is left
+is work, not a question.**
+
+1. **The agent restarts the bridge, through the supervisor.** The obvious
+   objection -- an agent that kills the bridge its own session runs on
+   loses the conversation it would report the failure into -- is the exact
+   failure the design above removes: the supervisor owns the bridge as a
+   CHILD and proxies to it, and `bridge_status`/`bridge_restart`/
+   `bridge_logs` answer while the bridge is down, because the supervisor
+   never dies. Refusing on that ground would have been refusing the
+   feature for the problem it solves. It also retires the `pkill -f` habit
+   that has already cost this project a wrong process more than once.
+2. **Two MCP clients: refuse the second and say who holds it.** Not
+   pidfile-and-attach. This project's rule elsewhere is reject rather than
+   evict (stage 3c's admission, gremote's single-instance mutex), and
+   silent attachment is worse here than anywhere else: the second client
+   would be driving a machine it did not configure, under settings it
+   cannot see, with the first client's permission prompts going to
+   somebody else's screen. A refusal naming the holder is one line of
+   diagnosis; a shared daemon is a class of confusion.
+
+   The pidfile is still needed -- to KNOW who holds it, and to say so.
+
+**Then** build rootless execution, `init_sync_root`, the embedded
 endpoint, and the stdio supervisor, in that order. The updater stub is
 independent of all of it and can land whenever the guest reflash loop becomes
 the bottleneck.
@@ -2131,13 +2327,38 @@ the failure mode of a source-level check written against one spelling.
 fourth pane with `set_override`, or `win/app/bar.h`'s loud transient bar, or
 both. The argument for the bar is that during a click or a keystroke sequence
 the agent is competing with the person for the keyboard and has just stolen the
-foreground; the argument against a quiet pane is the foreground flap below. Not
-taken here because it is a taste decision the user asked to keep.
+foreground; the argument against a quiet pane is the foreground flap below.
+~~Not taken here because it is a taste decision the user asked to keep.~~
 
-Turning the setting on or off from a MENU is part of the same piece of work and
-is also not done: the INI is read once at startup, so today a change needs a
-restart. `net->automation` is read live by the refusal path specifically so a
-menu item can make "off" immediate when somebody builds one.
+**[R -- 2026-10-14, stage 4] TAKEN, and then taken apart.** The call was
+made -- a loud, visible indicator rather than a quiet pane -- and planning
+it into stage 4 showed that NEITHER option above can work: both put the
+indicator inside Gaston's own window, and a drive calls
+`SetForegroundWindow` on its target, so the window saying "the agent is
+driving" is behind the application being driven for the whole drive.
+
+It is **stage 4b** now, with its own section in `ROADMAP.md` carrying what
+the review established: it belongs in `rc_ui_run`, the seam BOTH programs
+enter, because gremote drives the desktop too; it needs its own pump
+thread; it breaks at `clickAt`'s occlusion check rather than at `isOurs`;
+and Stop has to mean STOP -- cancelling the running step list is not it,
+since the agent's next call resumes within a second.
+
+So this is scheduled work, not a taste call being deferred.
+
+~~Turning the setting on or off from a MENU is part of the same piece of work
+and is also not done: the INI is read once at startup, so today a change needs
+a restart.~~ **DONE 2026-10-13, stage 4** -- Configure > "Let it use this
+screen", ticked from the LIVE value and routed through `optionsApply`.
+
+Two corrections this made: the INI-read-once claim had not been true since
+the Options sheet landed (`optionsApply` re-applies the setting and already
+listed it among its reconnect triggers), and `net->automation` being "read
+live by the refusal path specifically so a menu item can make off immediate"
+was only half built -- NOTHING wrote the field outside `beforeStart`, so the
+live read had nothing to read. The menu item is the write that makes that
+sentence true. Turning it ON still reconnects, because the bridge splices
+the screen tools in from `guest.caps` at session build time.
 
 **2. `gaston.exe` cannot hold the guest half at the current cap.** Measured
 with `make -C win check-gaston`:
@@ -2585,6 +2806,17 @@ a person typed -- the client saves settings when they change, not at exit --
 but a future op whose reply matters more than the shutdown's promptness would
 have to earn its wait, and say so here.
 
+**[R -- 2026-10-14, stage 4] CONFIRMED AS A CHOICE, and it is not an open
+question -- the heading says so and the sentence above names the condition
+that would reverse it, which is what a closed decision looks like.**
+Recorded here only because a sweep of this file for "entries blocked on a
+question" keeps catching it.
+
+Stage 4 did touch this path (item 4 below, `ConnectionService::signalStop`)
+and deliberately did not change what is flushed: the non-blocking half
+kills a child process, which is a leak, and does not wait for anything,
+which is the rule.
+
 **3. `WM_QUERYENDSESSION` still does nothing but agree.** The tempting
 optimisation is to start signalling there, since the gap before `WM_ENDSESSION`
 is free time in which threads could actually wind down cleanly. It is not safe
@@ -2979,18 +3211,44 @@ should be earned back.
 
 Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 
-- **Allowed or preferred models per mode.** Asked for while planning because
-  Haiku refused the CLI's Auto; our own Auto removed that reason (it never
-  asks the CLI for a mode), so this waits for a reason of its own. The likely
-  shape is "preferred model for this mode", not an allow-list.
-- **"Allow for this chat" for screen input.** The plan keyed a typing grant
-  to the target window's process; the bridge does not know which window a
-  step list reaches until the guest resolves it, and a grant over every
-  window is the blanket licence the red team warned about. So `screen_drive`
-  is not in `policy.GRANTABLE` until the guest reports the target.
-- **The checker's SAFE cache was not built.** With the red team's exclusions
-  (never for run_*, purge, files_sys, input, launch) and invalidation on any
-  write, it could never hit. Latency is the warm client's job (review.py).
+- ~~**Allowed or preferred models per mode.**~~ **[R -- 2026-10-14, stage
+  4] NO, to both readings.** Asked for while planning because Haiku refused
+  the CLI's Auto; our own Auto removed that reason (it never asks the CLI
+  for a mode), and this entry then parked it with "the likely shape is
+  'preferred model for this mode', not an allow-list".
+
+  Neither shape is wanted. **A mode says what may happen without asking; a
+  model says who is doing it.** They are separate choices and each menu
+  shows what is in force. An allow-list makes the Mode menu silently
+  constrain the Model menu; a preferred default makes the Model menu show a
+  value the Mode menu chose. Both put a value in front of the person that
+  something else picked, which is 18's defect shape -- a client displaying
+  a state it did not set.
+
+  Verified in passing while measuring 04.35 on the guest: Haiku ran a whole
+  compile-and-run turn in Auto, with all four presets offered.
+  `docs/measurements/folder-commit-vm-20261014.txt`.
+
+  **What would reopen it** is a mode whose work genuinely cannot be done by
+  the model in force -- not a convenience, a capability gap.
+- **"Allow for this chat" for screen input** -- **a WATCH CONDITION, not an
+  open question** (restated 2026-10-14, stage 4). The plan keyed a typing
+  grant to the target window's process; the bridge does not know which
+  window a step list reaches until the guest resolves it, and a grant over
+  every window is the blanket licence the red team warned about. So
+  `screen_drive` is not in `policy.GRANTABLE` until the guest reports the
+  target.
+
+  Nothing here is undecided: `bridge/agent/policy.py` already records the
+  rule in the code, beside `GRANTABLE`, in the same words. The condition
+  that would change it is named -- the guest reporting its target -- and
+  until then there is nothing to decide and nothing to build.
+- ~~**The checker's SAFE cache was not built.**~~ **Answered in this bullet
+  since it was written, and confirmed 2026-10-14:** with the red team's
+  exclusions (never for run_*, purge, files_sys, input, launch) and
+  invalidation on any write, it could never hit. Latency is the warm
+  client's job (review.py). A leftover that states its own reason for not
+  existing is not an open item.
 - ~~**Large Fonts.** The pages are 230x170 DLU so that the sheet fits
   640x480 at Large Fonts, which was computed, not seen.~~ **SEEN
   2026-10-14, stage 4** -- `docs/measurements/largefonts-vm-20261014.txt`.
@@ -3015,8 +3273,29 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 - **The command log shows the exit-code wrapper's `.gaston-rc` line** at the
   end of a wrapped command's output: the log records output raw, and the
   bridge strips that line only from what the agent sees.
-- **A Windows 95 comctl32 4.00 run.** The sheet uses the V1 structures for
-  it (and found the array-stride bug that way on 98); no 95 machine was run.
+
+  **[R -- 2026-10-14, stage 4] NOT a guest-side repair, and stage 4 looked
+  at doing it as one and stopped.** The sentinel is defined on the bridge
+  (`execwrap.py`), the command log is written ON THE GUEST by the RPC
+  worker, chunk by chunk with nothing buffered (`cmdlog.h`). Stripping it
+  there would make the client learn a bridge-side wrapper convention --
+  against "the guest transforms nothing" and against the
+  client-declares/bridge-holds-nothing split -- and it could not be done
+  reliably anyway, because a line can straddle two chunks.
+
+  So it is a BRIDGE-SIDE DESIGN QUESTION: keep the verdict off the
+  command's stdout altogether, which means changing how `execwrap` returns
+  it (a file read over the fs lane is the obvious candidate) rather than
+  filtering it afterwards. Recorded as work with a known shape; nothing
+  here is waiting on a decision.
+- **A Windows 95 comctl32 4.00 run** -- **BLOCKED ON HARDWARE THAT DOES NOT
+  EXIST HERE, and it becomes a stage 6 install-kit caveat** (2026-10-14,
+  stage 4). The sheet uses the V1 structures for it (and found the
+  array-stride bug that way on 98); no 95 machine was run, and there is
+  none to run. Not an unanswered question: the work is defined, the
+  blocker is a machine. Stage 6 ships to people who may have one, so it is
+  recorded there as a known-untested platform rather than held here as an
+  open item.
 - ~~**The Tools page's Add asks four one-line questions** rather than one
   form, and has no Browse for the marker file.~~ **DONE 2026-10-13, stage 4.**
   One dialog with the four fields, and Browse resolves comdlg32 at the call
@@ -3062,6 +3341,12 @@ arithmetic the page bar already does (`index / per_page + 1`). One frame, one
 header, and a guest-side list of them -- which is the part that never existed:
 there was no UI for jumping to an anchor, which is why nothing read the frame.
 Build the UI first, or it is a wire feature with no consumer again.
+
+**[R -- 2026-10-14, stage 4] CONFIRMED as the ruling, not as advice.** That
+sentence IS the decision: no frame without a consumer. Nothing about this
+entry is waiting on an answer -- it is waiting on somebody wanting
+jump-to-anchor, which is a different state and one a sweep of this file
+should not mistake for an open question.
 
 ## 31. The bridge renders the markup, so the wire is IE4/5-shaped
 
@@ -3495,7 +3780,8 @@ state needs somebody at the keyboard. The machine was left that way.
 and the two causes want opposite work: one is a one-token change here, the
 other is a fact about that machine's BIOS and Windows configuration.
 
-**To close it, in this order, on the Athlon:**
+~~**To close it, in this order, on the Athlon:**~~ *(Done -- see the ruling
+at the end of this entry. Kept because the order was right.)*
 
 1. Shut it down from the Start menu by hand. If Windows powers the machine
    off, APM works and cause 1 is dead -- it is the flag.
@@ -3551,3 +3837,31 @@ Athlon has APM available at all (a BIOS setting, and whether Windows was
 installed with the ACPI or APM HAL). Nothing in this project depends on the
 answer -- we need the watcher either way -- so it is not worth a trip to the
 box.
+
+---
+
+## 37. One flaky test in the remote suite, seen once and not chased
+
+**Status:** recorded 2026-10-14, stage 4. Not blocked on a question; blocked
+on seeing it again.
+
+`tests/python/remote/test_update.py::test_the_old_build_is_kept_under_a_name_a_person_can_type`
+failed once in a full `pytest tests/python/remote` run, then passed in
+isolation and passed on a clean re-run of the whole suite. Nothing in that
+stage's commit touched `gupdate` or the update path.
+
+**Written down because the alternative is somebody chasing it from
+scratch.** A test that fails once in a suite and never alone is usually
+ordering or a shared temp path, and `gupdate`'s tests move real files around
+a staging directory -- so the first thing to look at is whether two of them
+can pick the same name, not whether the updater is wrong.
+
+**NOT the same thing as the two mass failures this session**, which were
+also in this suite and were both self-inflicted: a second Wine suite running
+beside it, and a QEMU hostfwd holding port 7401, which is the port the
+suite's own gremote binds. Rule out the environment before reading a
+traceback here.
+
+**To close it:** see it a second time, with the seed and the order recorded
+(`-p no:randomly` to pin, if the ordering is random), or decide it was one of
+the two above and strike this.
