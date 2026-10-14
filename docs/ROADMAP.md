@@ -577,7 +577,7 @@ The decisions, as they were settled 2026-10-13:
 - **`ocr(rect)`: in scope**, built in this stage. Tesseract is a system binary
   rather than a dependency, degrading the way a missing Pillow already does.
 - **The "agent is driving" indicator** (`BACKLOG.md` 19) **left this stage.**
-  gremote drives the desktop independently -- `BACKLOG.md:2063` records "two
+  gremote drives the desktop independently -- `BACKLOG.md:2488` records "two
   programs can drive one desktop" as accepted -- so the indicator belongs in
   the shared seam both programs enter, needs its own pump thread, breaks at
   `clickAt`'s occlusion check rather than at `isOurs`, and has to mean *stop*
@@ -593,8 +593,10 @@ and three strings still telling the user to use a menu item that was deleted.
 ## Stage 4b — the "agent is driving" indicator
 
 Split out of stage 4 on 2026-10-13, by review rather than by size: the design
-in that stage would not have worked. What the review established, so none of it
-is re-derived:
+in that stage would not have worked. **Planned 2026-10-14**
+(`docs/stage4b-plan.md`), after three more review rounds against the tree --
+one on the sketch, two on the plan -- which between them falsified six claims
+and then eleven more. What they established, so none of it is re-derived:
 
 - **It cannot live in the client.** `RUN` goes through `rc_ui_run`
   (`win/ui/uiengine.cpp:795`), compiled into `gaston`, `gremote` and `uicheck`.
@@ -614,21 +616,52 @@ is re-derived:
   `clickAt`'s occlusion check: `WindowFromPoint` returns the strip, the settle
   loop polls for it to clear, and a window raised by `SetForegroundWindow` never
   rises above a topmost one -- so every click under it stalls with
-  `INPUT_OCCLUDED`. `HTTRANSPARENT` except the button's rect is the cheaper
-  design, and it needs one guest measurement first: whether `WindowFromPoint`
-  honours it on 98 SE.
+  `INPUT_OCCLUDED`.
+- **`HTTRANSPARENT` is not the answer**, which is the correction to the first
+  version of this list. The `WM_NCHITTEST` walk is documented thread-scoped --
+  "the underlying windows in the same thread" -- and every window the strip
+  covers is in another process. So the strip **steps aside** for the duration of
+  a step instead, one bracket per action step in `StepRunner`, and
+  `HTTRANSPARENT` is at most an optimisation the guest probe looks for.
 - **Not `WS_EX_LAYERED` or `WS_EX_NOACTIVATE`.** Style bits are a silent no-op
   on 9x and a compile error at `WINVER=0x0400`; the load-time kill is
   `SetLayeredWindowAttributes`, the export. `SW_SHOWNOACTIVATE` and
-  `MA_NOACTIVATE` are the mechanism.
-- **Stop must mean stop.** Cancelling the running step list is not it -- the
-  agent's next `UIRUN` resumes within a second. gremote's tray already does the
-  right thing by setting `m_ui->automation`.
+  `MA_NOACTIVATE` are the mechanism -- and **never activating is load-bearing**,
+  not politeness: `steps.cpp:464` fails every typing step with `refused_self`
+  when the foreground is ours, so a strip that can take the foreground breaks
+  the feature it belongs to. That, with no child control to hold focus, is the
+  answer to "transparent to the keyboard".
 - **Injected keys fire `RegisterHotKey` hotkeys**, so the cancel chord needs a
-  denylist in the one place that synthesises keys, not a chord nobody would
-  type.
-- **Two caps move**, `COMMITTED_CAP` and `check-gremote`'s, and the second has
-  one page of slack.
+  denylist where keys are synthesised. The live hole is `tap key=f12 mods=7`:
+  `tapKey` discards `keyDown`'s return (`input.cpp:806-820`), so a guard in
+  `keyDown` alone would report `ok` having typed nothing. `typeText` and
+  `pressKey` have no production caller at all.
+- **Stop must mean stop**, and what that means was decided by the user on
+  2026-10-14: cancel the run and do what the UI's Stop button does. In the
+  client that is an `INTERRUPT` frame, which ends the turn. It is **not enough
+  on its own**: `bridge/services/coordinator.py` kills every pending `exec` on
+  INTERRUPT and nothing pending on the ui lane, and
+  `test_server_integration.py:2190-2197` records why that loop exists -- the SDK
+  does not cancel an in-flight tool call, measured on the guest. A second
+  `ui(run=...)` batched into the same message would drive a second after the
+  Stop, so the bridge gains the same loop for the ui lane. gremote has no turn
+  and no Stop button; there the equivalent gesture is the tray's own, so Stop
+  also sets the automation level to 0.
+- **It is owned by the App in both programs, not by `UiContext` and not by
+  `UiOps`.** `UiContext`'s constructor runs on the main thread in the client,
+  and `UiOps` is a member of `Session`, made fresh per TCP connection -- which
+  would mean a new thread, a repeat class registration and a fresh hotkey on
+  every reconnect, and a leaked session holding the chord for the life of the
+  process. Everything in `libautomation` reaches it through an abstract
+  `DriveOverlay`, so `indicator.o` stays out of `uicheck`, `autocheck` and the
+  probes; and the indicator never names the wire, because `libautomation` may
+  not.
+- **Two caps move**, `COMMITTED_CAP` and `check-gremote`'s, and three sections
+  are charged, not one: gaston has 150 bytes before `AUTO`'s next 512-byte step
+  and 146 in `.idata`, gremote 330 and 129 -- and gremote needs about thirteen
+  imports it does not have today. A single `_BSS` page slide exceeds both caps'
+  slack on its own, so the first commit after the plan is a shape-final trial
+  link that can end the stage on cost.
 
 ---
 

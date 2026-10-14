@@ -2513,12 +2513,24 @@ focus change or step list, taken by both `win/ui/uiservice.cpp` and
 because it is new shared state between two programs bought against a collision
 nobody has had.
 
-**One nearby hazard that did get code.** `TrackPopupMenu` on gremote's tray
-icon runs a modal loop that captures the input queue, so a step list running
-while somebody opens that menu loses its keystrokes to the menu and
-`Input::focus` reports `not_foreground` for a reason nothing would otherwise
-log. The tray owns the loop, so it says so, and the ui lane refuses while the
-menu is up.
+**One nearby hazard, and the claim that it got code was false.**
+`TrackPopupMenu` on gremote's tray icon runs a modal loop that captures the
+input queue, so a step list running while somebody opens that menu loses its
+keystrokes to the menu and `Input::focus` reports `not_foreground` for a reason
+nothing would otherwise log.
+
+~~The tray owns the loop, so it says so, and the ui lane refuses while the menu
+is up.~~ **[R -- 2026-10-14, stage 4b planning] NEITHER HALF IS TRUE.** There is
+no gate and no log: `win/remote/tray.cpp:319-323` is
+`SetForegroundWindow(m_window.hwnd())`, `TrackPopupMenu(... TPM_RETURNCMD |
+TPM_NONOTIFY ...)`, `PostMessageA(WM_NULL)`, and nothing -- no flag, no lock, no
+message, no `rc_log` -- reaches `UiOps` or any other lane. So the hazard is
+exactly as described above and entirely unmitigated, which also means the
+escape hatch "open the tray menu and turn automation off" is least reliable
+during the drive it would be used to stop. Found by reviewing stage 4b's plan,
+not by running anything; the entry is corrected rather than the code, because
+the fix is the `GastonDesktopDriver` mutex above or a flag the tray raises
+around its own modal loop, and neither is this stage's.
 
 ## 20. `DRIVES` spins the floppy motor -- CLOSED 2026-10-01
 
