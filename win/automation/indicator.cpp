@@ -395,6 +395,14 @@ void DriveIndicator::threadBody()
         if (m_quit)
             PostMessageA(strip.hwnd(), WM_CLOSE, 0, 0);
         rc_log("indicator: up, cancel with %s", m_chordText);
+        /* THE FIRST DRIVE IS THE ONE THAT STARTS THIS THREAD, and it has
+         * already called driveStarting -- which posted its wake to an
+         * m_hwnd that was still null, because this window did not exist
+         * yet. Without this the clock never starts on that first run and
+         * the strip stays hidden through the whole of it: seen on the
+         * guest, a step list that drove for four seconds with the window
+         * created, the hotkey registered and nothing on screen. */
+        strip.wake();
 
         while (GetMessageA(&msg, NULL, 0, 0) > 0)
         {

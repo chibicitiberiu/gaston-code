@@ -1,0 +1,99 @@
+The driving indicator, on the guest
+===================================
+2026-10-14, QEMU guest (Win98 SE, 800x600, Small Fonts, 32MB), gremote
+self-updated to stage 4b's build and driven from the host with the gremote
+python client over a QMP hostfwd on 7401.
+
+gremote and not the client, because gremote can be driven directly: a step
+list goes through the same rc_ui_run the client's agent would use, so the
+seam, the strip, both cancel routes and the screenshot bracket are all
+exercised without a conversation. What that does NOT cover is named at the
+end.
+
+WHAT WAS SEEN
+-------------
+  indicator-vm-20261014-driving.png       the desktop while a list ran
+  indicator-vm-20261014-strip.png         the strip, close up
+  indicator-vm-20261014-shot-is-clean.png a SHOT taken while it was up
+
+The strip sits bottom right, above the taskbar, at 442,541-794,566 on an
+800x600 screen: "Gaston Remote is controlling the desktop" and a raised
+button reading "Stop  Ctrl+Alt+Shift+F11". Nothing is clipped, the text is
+the system GUI font, and the whole thing is 352x25.
+
+1. IT APPEARS WHILE A LIST DRIVES, AND NOT OTHERWISE
+-----------------------------------------------------
+  a 5000ms list    up, 1.5s in                        seen
+  a 1000ms list    still up 1.0s after it ENDED       seen (the dwell)
+  the same         gone 4.5s after it ended           seen
+  a 60ms list      never appeared                     seen
+
+The dwell is what makes back-to-back tool calls read as one drive rather
+than a strobe, and the 250ms show delay is what keeps a one-step `focus`
+from flashing a topmost window over everything on a P200.
+
+2. BOTH WAYS TO CANCEL IT WORK, AND THEY MEAN THE SAME THING
+-------------------------------------------------------------
+  Ctrl+Alt+Shift+F11, sent through QMP mid-list:
+      the 12s list answered `cancelled` 0.8s later
+      the next request was refused `automation_off`
+  the Stop button, clicked with a real mouse at 710,553:
+      the 12s list answered `cancelled` 0.7s later
+      the next request was refused `automation_off`
+
+The second line of each pair is the half that matters. Cancelling the list
+is not stopping: the caller's next `run` would start another one within a
+second, which is what ROADMAP 4b recorded as the reason this feature exists
+at all. In gremote, Stop reaches the tray and turns screen automation off --
+that menu item is this program's Stop button, and it is the gesture the user
+asked Stop to be the equivalent of.
+
+The button is acted on at WM_LBUTTONDOWN, not BN_CLICKED, because while the
+agent is driving the pointer is being teleported between a real button's
+down and its up.
+
+3. A SCREENSHOT TAKEN WHILE IT IS UP COMES BACK WITHOUT IT
+-----------------------------------------------------------
+A `shot` inside the dwell: 481,078 bytes, and the band where the strip sits
+is bare desktop. The strip hides, the desktop under it is invalidated and
+given SETTLE_MS to repaint, the capture runs, and it comes back.
+
+AND THIS IS WHERE THE RUN FOUND A BUG, which is the point of running it.
+The first attempt had the strip IN the picture. The hide was being asked for
+and granted -- the log, with a diagnostic added for the question, showed
+`mine 442,541-794,566 frame 0,0-800,600` -- so the fault was upstream: the
+strip had only just appeared. See 4.
+
+4. THE BUG THE GUEST FOUND: THE FIRST DRIVE NEVER SHOWED THE STRIP
+-------------------------------------------------------------------
+Before this run, a drive on a freshly started gremote created the window,
+registered the hotkey, logged "indicator: up" -- and showed nothing. Four
+seconds of driving with nothing on screen.
+
+`driveStarting` starts the indicator's thread and then posts it a wake, and
+on the first drive it posts that wake to an HWND that is still null: the
+window does not exist yet, because the thread creating it is seconds behind
+on a 32MB machine (440ms, measured here). With no wake the clock never
+started and the strip never evaluated whether to show.
+
+Fixed by having the thread wake ITSELF once the window exists, which is also
+the only moment it can be sure there is one. The second drive always worked,
+which is exactly the shape of bug that ships: every test that ran twice
+passed.
+
+WHAT THIS RUN DOES NOT COVER
+-----------------------------
+- THE CLIENT'S HALF. gaston raises the same strip through the same seam
+  (uicheck pins that headlessly), but its Stop posts WM_RC_INTERRUPT to the
+  main window, which presses the Stop button and sends INTERRUPT -- and that
+  path has been read, not run. It needs a conversation and an agent that
+  decides to drive the screen.
+- TWO STRIPS AT ONCE. Both programs can run and both can drive
+  (BACKLOG.md:2488), so two strips can be up, each occluding the other's
+  targets, each with its own chord. Recorded, not exercised.
+- LARGE FONTS AND 640x480. The strip's width is computed with
+  GetTextExtentPoint32 rather than laid out by eye, but the only font size
+  seen is Small at 800x600. The Add-a-tool dialog had been clipped at every
+  font size until stage 4 looked at it.
+- A FULL-SCREEN DOS SESSION owns the display on 9x, so the strip is absent
+  exactly when the most destructive driving happens.
