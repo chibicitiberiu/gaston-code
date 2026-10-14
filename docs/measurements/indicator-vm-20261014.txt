@@ -81,13 +81,54 @@ the only moment it can be sure there is one. The second drive always worked,
 which is exactly the shape of bug that ships: every test that ran twice
 passed.
 
+5. THE CLIENT'S HALF, RUN THE LONG WAY ROUND
+---------------------------------------------
+gaston raises the same strip through the same seam, but its Stop is its own:
+a post of WM_RC_INTERRUPT to the main window, handled on the window thread,
+pressing the Stop button the person actually meant. That had been read and
+not run, so it was run.
+
+The build was installed as C:\GASTON\G4B.EXE and started, "Let it use this
+screen" was found UNTICKED on the Configure menu -- stage 4's item, telling
+the truth -- and turning it on reconnected and brought the five screen tools
+back into the session. Haiku was then asked for one `input` call with a
+9000ms wait, which raised the permission bar ("Use your machine's keyboard
+and mouse: pause 9000 ms"); Allow was clicked, and:
+
+  indicator-vm-20261014-client.png     the client's strip, over its window
+
+The strip says "Gaston is controlling the desktop" and offers
+"Stop  Ctrl+Alt+Shift+F12" -- different words and a different chord from
+gremote's, which is what keeps two of them apart when both programs run.
+
+Then the chord, and the client's log says exactly what was wanted:
+
+    23:15:42.590 indicator: up, cancel with Stop  Ctrl+Alt+Shift+F12
+    23:15:56.260 indicator: Stop pressed at the keyboard
+    23:15:56.320 stop requested
+
+60 milliseconds from the indicator's own thread to `ComposeBox::doStop`,
+which is the Stop button's own log line and the INTERRUPT frame going out.
+That is the whole client-only path, on real hardware.
+
+WHAT THE RUN COULD NOT SEE, AND WHY
+------------------------------------
+The agent did not report `cancelled`; it reported that the machine had
+disconnected. That is BACKLOG 38, reproducing underneath the test: the
+client's log shows `sync: scan s11646 -> no_root` then `s11647` a second
+later, and the bridge's shows a complete HELLO-and-attach once per second
+for the whole run. The bridge's own view at 23:15:56 is `ui frame UIEND for
+u1, which nobody awaits` -- the guest's cancelled reply arriving after the
+connection it belonged to had already been torn down and replaced.
+
+So what the BRIDGE does with that INTERRUPT could not be observed here, and
+is covered instead by test_stop_stops_a_running_step_list_and_the_one_behind_it,
+which was verified by removing each half and watching it fail. 38 was
+already running before this test started and is the user's open item; it was
+not caused by anything in this stage.
+
 WHAT THIS RUN DOES NOT COVER
 -----------------------------
-- THE CLIENT'S HALF. gaston raises the same strip through the same seam
-  (uicheck pins that headlessly), but its Stop posts WM_RC_INTERRUPT to the
-  main window, which presses the Stop button and sends INTERRUPT -- and that
-  path has been read, not run. It needs a conversation and an agent that
-  decides to drive the screen.
 - TWO STRIPS AT ONCE. Both programs can run and both can drive
   (BACKLOG.md:2488), so two strips can be up, each occluding the other's
   targets, each with its own chord. Recorded, not exercised.
