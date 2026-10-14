@@ -35,6 +35,7 @@ class SessionCoordinator:
         workspace: Any = None,
         guest_exec: Any = None,
         attachment: Any = None,
+        ui: Any = None,
         spawn: Callable[[Any], None] | None = None,
     ) -> None:
         self.connection = connection
@@ -45,6 +46,7 @@ class SessionCoordinator:
         self.workspace = workspace
         self.guest_exec = guest_exec
         self.attachment = attachment
+        self.ui = ui
         # Defaulted, not Optional: every caller supplies Bridge._spawn,
         # and a None here would only ever be a TypeError at the first
         # turn rather than at construction.
@@ -209,6 +211,16 @@ class SessionCoordinator:
         guest.turn_stopped = True
         for exec_id in list(guest.exec_pending):
             self.guest_exec.kill_exec(guest, exec_id)
+        # And the desktop. Same reason as the exec loop above -- the SDK
+        # does not cancel an in-flight tool call, so the coroutine that
+        # would send UICANCEL never wakes up -- but with a sharper edge:
+        # this is a mouse and a keyboard moving on a machine somebody is
+        # sitting at, and Stop may well have been pressed ON the strip that
+        # says so. The flag raised on the guest stops the list the client's
+        # own indicator was cancelling; this stops one driven from anywhere
+        # else, and `turn_stopped` stops the next one taking the lock.
+        if self.ui:
+            await self.ui.stop_drives(guest)
         if guest.claude:
             await guest.claude.interrupt()
 

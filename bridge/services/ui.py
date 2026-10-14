@@ -169,6 +169,18 @@ class UiService:
         keep the desktop lane, and the keys it holds, for the rest of its
         time."""
         async with guest.ui_lock:
+            # The lock is a QUEUE, and that is what this is here for. A
+            # model can put two `ui` calls in one assistant message; the
+            # second waits here while the first drives. If Stop arrives in
+            # between, cancelling the list in flight is only half of it --
+            # the one waiting would take the lock a moment later and drive
+            # a desktop the person just asked to be left alone. The SDK
+            # does not cancel an in-flight tool call when a turn is
+            # interrupted (test_stop_kills_a_running_command measured it on
+            # the guest), so nothing else is going to stop this one.
+            if guest.turn_stopped:
+                raise UiError("stopped", "the person pressed Stop before "
+                                         "this step list started")
             guest.ui_seq += 1
             ui_id = f"u{guest.ui_seq}"
             fut = asyncio.get_running_loop().create_future()
@@ -199,6 +211,30 @@ class UiService:
             finally:
                 guest.ui_pending.pop(ui_id, None)
         return headers, bytes(call.data)
+
+    async def stop_drives(self, guest: GuestSession) -> int:
+        """UICANCEL every step list in flight. Stop, from the person.
+
+        The exec lane has had this since the beginning (`kill_exec` from
+        `on_interrupt`) for the reason recorded in
+        test_stop_kills_a_running_command: interrupting a turn does not
+        cancel the tool call that is running, so the coroutine that would
+        have sent the cancel never wakes up. The ui lane had the same hole
+        and a worse consequence -- an uncancelled list keeps typing and
+        clicking on a desktop somebody is sitting in front of.
+
+        Only `run`. A tree or a screenshot in flight is reading, it will
+        answer in a moment, and cancelling it would throw away an answer
+        the agent is about to be told it can no longer have.
+        """
+        stopped = 0
+        for ui_id, call in list(guest.ui_pending.items()):
+            if call.kind != "run":
+                continue
+            log.info("stop: cancelling the step list %s", ui_id)
+            await self._cancel(guest, ui_id)
+            stopped += 1
+        return stopped
 
     async def _cancel(self, guest: GuestSession, ui_id: str) -> None:
         try:

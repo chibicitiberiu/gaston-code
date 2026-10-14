@@ -30,6 +30,7 @@ from harness import (  # noqa: F401
 from bridge import server as srv
 from bridge.files import paths
 from bridge.server import Bridge
+from bridge.services.ui import UiError
 from bridge.view import blocks
 
 
@@ -2216,6 +2217,51 @@ async def test_stop_kills_a_running_command(harness):
                                       "code": "1", "bytes": "0"}))
     result = await asyncio.wait_for(task, 5)
     assert result["isError"] is True
+    await harness.close(writer)
+
+
+async def test_stop_stops_a_running_step_list_and_the_one_behind_it(harness):
+    """Pressing Stop must reach the desktop, not just the model.
+
+    The same hole as the command above, with a sharper edge: an uncancelled
+    step list goes on typing and clicking on a machine somebody is sitting
+    at, and Stop was very likely pressed ON the strip that says the desktop
+    is being driven. So INTERRUPT sends UICANCEL for every `run` in flight.
+
+    And the one queued behind it, which is the half that is easy to miss. A
+    model can put two `ui` calls in one assistant message; the second is
+    waiting on guest.ui_lock, and without `turn_stopped` it would take the
+    lock the moment the first one answered and drive on.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge.connection.guest
+    ui = harness.bridge.ui
+
+    first = asyncio.create_task(
+        ui.run(guest, b"wait\tms=60000\n", timeout_ms=90000, step_ms=30000))
+    f = await _recv(harness, reader, "UIRUN")
+    ui_id = f.headers["id"]
+
+    # A second call, queued behind the first on the lane's lock.
+    second = asyncio.create_task(
+        ui.run(guest, b"type\ttext=hello\n", timeout_ms=9000, step_ms=3000))
+    await asyncio.sleep(0)
+
+    await harness.send(writer, Frame("INTERRUPT", {}))
+    cancel = await _recv(harness, reader, "UICANCEL")
+    assert cancel.headers["id"] == ui_id
+
+    # The guest answers the cancel, which releases the lane.
+    await harness.send(writer, Frame("UIEND", {"id": ui_id,
+                                               "status": "cancelled"}))
+    headers, _ = await asyncio.wait_for(first, 5)
+    assert headers["status"] == "cancelled"
+
+    # The one behind it never goes out.
+    with pytest.raises(UiError) as caught:
+        await asyncio.wait_for(second, 5)
+    assert caught.value.status == "stopped"
     await harness.close(writer)
 
 

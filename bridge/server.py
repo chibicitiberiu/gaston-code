@@ -224,6 +224,7 @@ class Bridge:
             workspace=self.workspace,
             guest_exec=self.guest_exec,
             attachment=self.attachment,
+            ui=self.ui,
             spawn=self._spawn,
         )
 

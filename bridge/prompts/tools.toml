@@ -321,6 +321,11 @@ script_timeout = '''
 The list ran out of its overall time before this step; nothing after it ran. Raise `timeout`, or split the list.'''
 cancelled = '''
 Stopped before it finished, because something asked it to be. A list releases anything it was holding; a tree or a screenshot keeps what already arrived, which was true when it was sent, but is not the whole of it.'''
+# A SEPARATE status from `cancelled`, because the agent's next move differs.
+# A cancel may be a timeout; this one is a person. It is also the answer to a
+# call that never ran at all -- the one queued behind the list they stopped.
+stopped = '''
+The person at the keyboard stopped this. Nothing was done. They were watching the screen being driven and asked it to stop, so do not start it again: say what you were doing and wait to be told what they want instead.'''
 focus_lost = '''
 Another window came to the front, so the list stopped rather than type into it. Look at what is in front (`ui` with `scope: "foreground"`), deal with it, then `focus` the window you meant and carry on.'''
 bad_char = '''
