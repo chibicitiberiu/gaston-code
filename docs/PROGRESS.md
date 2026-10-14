@@ -4277,12 +4277,18 @@ program's step-aside reaches only its own window; and `BACKLOG.md` 38's
 reconnect loop, which ran underneath the client's own guest test and turned
 a cancelled run into "the machine disconnected".
 
-Not run: Large Fonts, which needs a restart on 9x and whose cost on this VM
-stage 4 already recorded (a wedge at "Windows is now restarting", a destroy,
-a boot into Safe mode). The width is measured with `GetTextExtentPoint32A`,
-clamped to the work area, and drawn with `DT_END_ELLIPSIS`, so the failure
-mode there is a shortened sentence rather than a clipped window -- an
-argument, and the measurement file says so.
+Large Fonts was run too, the next morning (2026-10-15), because the argument
+for skipping it was the shape of reasoning stage 4 kept getting caught by.
+At 120 dpi the strip is **426x28** against 352x25 at 96, nothing clipped: the
+width tracks the DPI because it is measured with `GetTextExtentPoint32A`
+rather than laid out. The prediction beforehand was "about 440" -- close
+enough to have been believed, which is not the same as known.
+
+It also found a cheaper route than the one stage 4 recorded: answer NO when
+Windows offers to restart and shut down from the Start menu instead. The
+guest wedges at "Windows is shutting down" rather than at "Windows is now
+restarting", and a domain destroyed there boots normally instead of into
+Safe mode. Two cycles, no Safe mode.
 
 
 ## Stage 4 -- the recorded decisions, the inconsistencies, the small repairs (2026-10-13/14)

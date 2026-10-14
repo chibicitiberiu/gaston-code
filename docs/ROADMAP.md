@@ -727,6 +727,14 @@ re-derived:
 - **BACKLOG 38 is still there and is now easy to reproduce**: it ran
   underneath the client's own guest test, a full HELLO-and-attach once per
   second, and turned a cancelled run into "the machine disconnected".
+- **The strip scales with the DPI, measured: 426x28 at 120 against 352x25 at
+  96, nothing clipped.** The width is taken with `GetTextExtentPoint32A`
+  rather than laid out, which is the whole reason it survives a font size
+  nobody designed it against. And there is a cheaper way through a 9x font
+  change than stage 4 recorded: answer NO to the restart offer and shut down
+  from the Start menu, because a domain destroyed at "Windows is shutting
+  down" boots normally where one destroyed at "Windows is now restarting"
+  comes back in Safe mode.
 - **Finishing the verification found a defect the stage had called a known
   gap.** Two programs driving put both strips in the same corner and the
   wider one covered the other, so the screen named one program while two

@@ -182,18 +182,39 @@ the taskbar, nothing clipped, 352 of 640 pixels wide
 (indicator-vm-20261014-640x480.png). Changed through Display Properties and
 changed back; the guest is at 800x600 as it was found.
 
-WHAT THIS RUN DOES NOT COVER
------------------------------
-- LARGE FONTS (120 dpi). It is the one item of the plan's verification not
-  run, because the font size needs a restart on 9x and stage 4's own Large
-  Fonts run recorded what that costs on this VM: a wedge at "Windows is now
-  restarting", a destroy, and a boot into Safe mode. Not worth doing
-  unasked at the end of a session.
+10. LARGE FONTS (120 dpi) -- 2026-10-15
+----------------------------------------
+Run the next morning rather than argued, because the argument below is
+exactly the shape of reasoning stage 4 got caught by.
 
-  What bounds the risk meanwhile: the width is MEASURED with
-  `GetTextExtentPoint32A` rather than laid out, it is clamped to the work
-  area (`if (w > work.right - work.left - EDGE * 2)`), and the text draws
-  with `DT_END_ELLIPSIS`, so the failure mode is a shortened sentence rather
-  than a clipped window. 352px at 96 dpi is about 440 at 120, which still
-  fits the 640 screen measured above with 200 to spare. That is an argument,
-  not a measurement, and it is written here as one.
+  indicator-vm-20261015-largefonts.png        the desktop at 120 dpi
+  indicator-vm-20261015-largefonts-strip.png  the strip, close up
+
+                        96 dpi        120 dpi
+    strip width         352           426          x1.21
+    strip height         25            28          x1.12
+    screen              800x600       800x600
+    taskbar top         567           567
+
+Nothing clipped: the sentence, the button and the chord are all whole, and
+the strip sits above the taskbar as it does at 96 dpi. The width tracks the
+DPI because it is MEASURED with `GetTextExtentPoint32A` rather than laid out
+in pixels -- which is the whole reason it was written that way.
+
+The prediction made before the run was "about 440"; it is 426. Close enough
+to have been believed, and that is not the point: it was not known.
+
+METHOD, and it avoids the Safe-mode detour stage 4 recorded. Snapshot first
+(`vm/win98.qcow2.known-good-20261015-000327-pre-largefonts-4b`). Then
+Display Properties > Settings > Advanced > Font Size > Large Fonts, and when
+Windows asks to restart, answer NO and shut down from the Start menu
+instead: it wedges at "Windows is shutting down" rather than at "Windows is
+now restarting", and a domain destroyed THERE boots normally rather than
+into Safe mode. Two cycles, no Safe mode, about fifteen minutes.
+
+640x480 AT 120 dpi was not seen, and does not need to be: the width depends
+on the font, not on the screen -- 426 measured here against 628 usable
+pixels there -- and `place()` clamps to the work area with `DT_END_ELLIPSIS`
+behind it, so the bounded failure is a shortened sentence rather than a
+clipped window. The two measurements that could have surprised (the text
+metrics at 120 dpi, and the layout at 640 wide) have each been taken.
