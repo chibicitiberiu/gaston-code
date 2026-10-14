@@ -490,15 +490,22 @@ says honestly that 1,400 bytes of content bought 4,096 of padding because
 - **Writing C through a script collapses escapes.** `"\\"` in a generator
   is `"\"` in the file, and one level too many is invisible in a diff
   because the line still reads as a path join.
-- **One guest check came back negative, and that was the most useful run of
-  the stage.** `force-kill-reclaims-the-dos-vm` could not reproduce a DOS VM
-  below anything it launched -- four ways, `kids=0` every time, while
-  `vms-on-box=1`. `Processes::kill` keys both the `dos_session` refusal and
-  the new reclaim on the module being a DESCENDANT, so neither fires for a
-  session started that way, and `BACKLOG.md` 17's "a WINOA386.MOD listed as
-  its child" is now the sentence in doubt. The sibling case had been passing
-  vacuously on the guest since it was written, for the same reason.
+- **The last guest check took five wrong runs, and every one was the
+  harness.** `force-kill-reclaims-the-dos-vm` finally passed with `vm=1`,
+  `kill=0`, `vm-gone=1`, `vms-on-box=0` on a freshly booted box -- the
+  reclaim works. What stood in the way: running execcheck from a DOS prompt
+  (where its own parent is a VM and a console it opens reuses that one, so
+  nothing is ever a child -- `--detached-to` exists for this and said so),
+  and then launching COMMAND.COM to force the issue (a 16-bit program,
+  denied by a different rule, with a pid `launch` does not usefully
+  return). The sibling case had been passing VACUOUSLY on the guest since
+  it was written, for the first reason.
   `docs/measurements/forcekill-vm-20261014.txt`.
+- **And `BACKLOG.md` 17's "degrading later runs" got demonstrated by
+  accident.** The run before the reboot carried three VMs leaked by those
+  experiments; five unrelated cases failed with them present and all thirty
+  passed once the box was clean. That is the claim measured rather than
+  asserted, and the argument for the reclaim in one line.
 
 ---
 

@@ -1,69 +1,76 @@
-BACKLOG 17's DOS VM, looked for on the guest -- and not found where the
-code looks for it
+BACKLOG 17's DOS VM: the refusal and the reclaim, confirmed on the guest
 QEMU Win98 SE guest, 2026-10-14, stage 4
 
-WHY
-  Stage 4 taught `Processes::kill` to take the Win32 descendants first and
-  then reclaim an orphaned WINOA386.MOD, so that `force` stops meaning "opt
-  into the leak". The commit said plainly that the guest half was NOT
-  proven, because WINOA386.MOD does not exist under Wine. This is that run.
+THE RESULT, FIRST
+  On a freshly booted guest, execcheck run DETACHED:
 
-WHAT THE CHECK DOES
-  `force-kill-reclaims-the-dos-vm`, new in execcheck: launch a DOS session,
-  wait for a WINOA386.MOD to appear below it, force-kill, and confirm the
-  VM went too.
+    rows 30   FAILS 0
+    pass  kill-refuses-a-dos-session      vm=1 kill=3 ended=1
+    pass  force-kill-reclaims-the-dos-vm  vm=1 vmpid=fffeb799 kill=0
+                                          vm-gone=1 kids=0 vms-on-box=0
 
-WHAT HAPPENED -- FOUR ATTEMPTS, AND NONE OF THEM SAW A VM BELOW US
+  vm=1          a WINOA386.MOD was found as a DESCENDANT of the launched
+                console program -- BACKLOG 17's premise, confirmed.
+  kill=3        KILL_DOS_SESSION. The refusal added 2026-09-27 fires.
+  kill=0 with force, vm-gone=1, vms-on-box=0
+                the stage 4 reclaim works: the program goes, the VM goes
+                with it, and the machine is left with none.
 
-  1. `execcheck --tick` (a Win32 console program, SW_HIDE, output
-     redirected):            vm=0
-  2. `COMSPEC /c dir /s C:\WINDOWS > NUL`:
-                             vm=0  kill=4 (no_such_pid)  kids=0  vms-on-box=1
-  3. `COMSPEC /c pause`:      the run produced no verdicts at all -- `pause`
-     never returns, so the REFUSAL case (which must not force, and waits for
-     the program to end by itself) sat out its budget. Fixed by giving the
-     two cases different commands.
-  4. `COMSPEC /c pause > NUL`, forced case only:
-                             vm=0  kill=4 (no_such_pid)  kids=0  vms-on-box=1
+  So E8's guest half is proven. It took five wrong runs to get there and
+  every one of them was the harness, not the code.
 
-  `vms-on-box=1` IS THE IMPORTANT NUMBER. A WINOA386.MOD is running -- the
-  interactive MS-DOS Prompt window used to drive this. So the module exists,
-  Toolhelp can see it, and `Processes::list` reports it.
+WHAT WENT WRONG ON THE WAY, BECAUSE IT IS THE USEFUL PART
 
-  But a DOS session we LAUNCH has no descendants (`kids=0`) and its own pid
-  is already gone when we look (`kill=4`, no_such_pid), immediately, whether
-  the command finishes in milliseconds or blocks on a keystroke forever.
+  1. RUN FROM A DOS PROMPT, THE CASES CANNOT WORK. Started from an MS-DOS
+     Prompt this program's own parent is a WINOA386.MOD, and a console it
+     opens REUSES that VM instead of making one -- so nothing appears as a
+     child and the cases saw vm=0. `--detached-to FILE` exists precisely
+     for this and its comment has said so since it was written: "a console
+     parent's DOS children share its console ... The client is a GUI
+     process; detached is the same." It was simply not the mode being used.
 
-WHAT THAT MEANS
-  On this guest, a DOS session started through `CreateProcess` does not
-  appear as a CHILD of the launching process. Whatever pid comes back from
-  the launch is not the VM and is not its parent.
+     `inside_a_dos_vm()` now detects it and both cases print
+     "VACUOUS (run from a DOS box)" rather than a pass.
 
-  `Processes::kill` keys BOTH behaviours on finding WINOA386.MOD among the
-  target's DESCENDANTS -- the `dos_session` refusal that has been there
-  since 2026-09-27, and the reclaim added in stage 4. If a DOS session is
-  never a descendant, NEITHER PATH CAN FIRE for one started this way.
+  2. AND THE SIBLING CASE HAD BEEN VACUOUS ON THE GUEST SINCE IT WAS
+     WRITTEN, for the same reason, reporting `pass` with vm=0. A check
+     named for a DOS session had never seen one. Both say VACUOUS now when
+     they find no VM.
 
-  So stage 4's reclaim is unproven, and so is the refusal it extends. The
-  code is not shown to be wrong; the DETECTION PREMISE is unverified, and
-  that is worth more than the green tick this run was meant to produce.
+  3. COMMAND.COM IS THE WRONG TARGET. Trying to force the VM into
+     existence, the cases were switched to launching COMSPEC. That is a
+     16-bit DOS program, so `kill` denies it without force by an entirely
+     different rule, and -- measured -- the pid `Processes::launch` returns
+     for one is not usable: the kill came back DENIED because the pid was
+     our own. BACKLOG 17 is about a WIN32 CONSOLE program whose console is
+     a VM, which is what `--tick` already was.
 
-  Note the refusal was always vacuous here and said `pass`: the old case
-  launched a hidden Win32 console program with redirected output, which
-  gets no console window and so no VM, on the guest exactly as under Wine.
-  A check named for a DOS session had never seen one. It says VACUOUS now
-  when `vm=0`, so a future reader cannot mistake it for evidence.
+  4. THE PROCESS TABLE SETTLED IT, and nothing dumped parent pids before.
+     `--ps` and `--ps-dos` were added for that. From a GUI parent:
 
-WHERE TO LOOK NEXT, AND WHY NOT HERE
-  BACKLOG 17's leak was observed through the AGENT's `exec`, not through
-  `Processes::launch`: the guest's exec path goes through COMMAND.COM with
-  a wrapper batch file and its own job plumbing, and the process tree may
-  well look different. Reproducing it there is the next step, and it wants
-  a `ps` with parent pids taken WHILE such a command runs -- which nothing
-  currently dumps.
+       fffeb759 fffffadd C:\GASTON\EXECCHK.EXE          (parent EXPLORER)
+       fffda9b9 fffeb759 C:\WINDOWS\SYSTEM\WINOA386.MOD (parent US)
 
-ALSO SEEN, AND NOT MINE
-  `stop-reaches-the-grandchild` FAILS on this guest -- `status=1 marker 18
-  -> 33 leaked=0` -- in every run tonight including the first, before any of
-  these changes. Untouched by them and not investigated. It passes under
-  Wine.
+     From a DOS prompt, the VM is instead our PARENT and a launched
+     COMMAND.COM adds nothing. One listing, two contexts, whole answer.
+
+  5. THE FLOPPY SERVES STALE BLOCKS when the image changes under a running
+     guest, exactly as the CD does -- a copy reported "1 file(s) copied"
+     and the guest kept the old binary. Eject and reinsert, as vmship.sh
+     says for hdc.
+
+AND A CLAIM OF 17's PROVED BY ACCIDENT
+  The run before the reboot had THREE leaked VMs on the box, left by the
+  COMMAND.COM experiments above, and five unrelated cases failed with it:
+  stop-reaches-the-grandchild (leaked=1), sink-gone-stops-it (30s),
+  cancel-mid-run, launch-and-descendants, kill-waits-for-the-end. After a
+  reboot, with vms-on-box=0, all thirty pass.
+
+  That is BACKLOG 17's "degrading later runs" demonstrated rather than
+  asserted -- and it is the reason the reclaim this stage added is worth
+  having.
+
+  It also disposes of a failure recorded earlier tonight as unexplained:
+  `stop-reaches-the-grandchild` was not failing on this guest. It fails
+  when run from a DOS prompt, and it fails on a box carrying stranded VMs.
+  On a clean box, detached, it passes.

@@ -2079,30 +2079,36 @@ our own window from a dialog it had not read.
   nothing else is above any more. Best effort: it never turns a kill into
   a failure, because failing is what it did before.
 
-  **[R -- 2026-10-14] AND THE GUEST RUN DID NOT CONFIRM IT, which is worth
-  more than the tick it was meant to produce.**
-  `docs/measurements/forcekill-vm-20261014.txt`. Four ways of starting a
-  DOS session on the guest, and in none of them was a WINOA386.MOD a
-  DESCENDANT of what we launched: the launched pid is already gone when we
-  look (`no_such_pid`), it has zero children, and the one VM on the box
-  belongs to the interactive prompt.
+  **[R -- 2026-10-14] CONFIRMED ON THE GUEST, both halves.**
+  `docs/measurements/forcekill-vm-20261014.txt`. On a freshly booted box,
+  run detached: `vm=1` (the WINOA386.MOD IS a descendant, so this bullet's
+  premise holds), `kill=3` KILL_DOS_SESSION for the refusal, and with
+  force `kill=0 vm-gone=1 vms-on-box=0` -- the program goes, the VM goes
+  with it, and the machine is left with none. Thirty cases, no failures.
 
-  Both the refusal above and the new reclaim key on finding the module
-  among the target's descendants. **If a DOS session is never a
-  descendant, neither path can fire for one started that way**, and the
-  premise this bullet states -- "a WINOA386.MOD listed as its child" --
-  is the thing now in doubt.
+  **It took five wrong runs to get there and every one was the harness.**
+  Worth recording because the same traps are still there:
 
-  The leak was originally seen through the AGENT's `exec`, which goes
-  through COMMAND.COM with a wrapper batch and its own job plumbing, so
-  the tree there may genuinely differ. **To settle it:** reproduce through
-  `exec` rather than `Processes::launch`, with a `ps` that reports parent
-  pids taken while such a command runs -- nothing dumps that today.
+  - Run from a DOS PROMPT the cases cannot work at all: this program's own
+    parent is then a WINOA386.MOD and a console it opens REUSES that VM
+    instead of creating one, so nothing appears as a child.
+    `--detached-to` exists for exactly this and its comment has said so
+    since it was written. `inside_a_dos_vm()` now detects the bad context
+    and the cases print `VACUOUS (run from a DOS box)` instead of `pass`.
+  - `kill-refuses-a-dos-session` had been passing VACUOUSLY on the guest
+    since it was written, for that reason -- a check named for a DOS
+    session that had never once seen one.
+  - COMMAND.COM is the wrong target: it is a 16-bit DOS program, denied by
+    a different rule, and the pid `Processes::launch` returns for one is
+    not usable. This bullet is about a WIN32 CONSOLE program.
 
-  Worth knowing meanwhile: `kill-refuses-a-dos-session` had been passing
-  vacuously on the guest since it was written, because it launched a
-  hidden Win32 console program with redirected output, which gets no
-  console and so no VM. It prints `VACUOUS:` when it sees none now.
+  **And the degradation this bullet claims got demonstrated by accident.**
+  The run before the reboot had three VMs leaked by those experiments, and
+  five unrelated cases failed with them present -- the grandchild stop, the
+  sink timeout, cancel-mid-run, launch-and-descendants, kill-waits. After a
+  reboot, with `vms-on-box=0`, all thirty pass. "Degrading later runs" is
+  measured now, not asserted, and it is the reason the reclaim is worth
+  having.
 - **Stop read as a failure.** *Fixed 2026-09-27:* the bridge ends a stopped
   turn as `stopped` and the client shows "Stopped." instead of "did not
   complete... may not have run at all".

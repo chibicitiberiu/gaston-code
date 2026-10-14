@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <process.h>
 #include <stdio.h>
+#include <io.h>      /* dup2, for --ps-dos FILE */
 #include <stdlib.h>
 #include <string.h>
 #include <string>
@@ -39,6 +40,7 @@ static void say(const char *name, bool pass, const char *detail)
     printf("%s\t%s\t%s\n", pass ? "pass" : "FAIL", name, detail);
     fflush(stdout);
 }
+
 
 /* Keeps what the job hands over. */
 class Collect : public OutputSink
@@ -99,7 +101,15 @@ static const char *dosCmd(char *out, unsigned cap, bool stays)
     /* TWO COMMANDS, because the two cases want opposite things and one
      * command cannot serve both.
      *
-     * `stays` means a session that is STILL THERE when the check looks --
+     * ONLY --ps-dos USES THIS NOW. Both verdict cases launch a WIN32 CONSOLE
+ * program (`--tick`) instead, because that is what BACKLOG 17 is about: a
+ * console program whose console is a VM. Launching COMMAND.COM was a
+ * detour -- it is a 16-bit DOS program, so `kill` denies it without force
+ * by a different rule entirely, and the pid `launch` returns for one is
+ * not usable (measured: kill came back DENIED because the pid was our
+ * own).
+ *
+ * `stays` means a session that is STILL THERE when the check looks --
      * `pause`, waiting on a keystroke that never comes in a hidden window.
      * That is the state worth force-killing, and the forced case does kill
      * it.
@@ -426,6 +436,44 @@ public:
     std::vector<ProcessInfo> m_all;
 };
 
+/* ARE WE RUNNING INSIDE A DOS BOX? It decides whether the two DOS-session
+ * cases can test anything at all.
+ *
+ * Measured on the guest, 2026-10-14: started from an MS-DOS Prompt, this
+ * program's parent IS a WINOA386.MOD, and a COMMAND.COM it launches REUSES
+ * that VM rather than making one -- so no new VM appears as a child and
+ * the cases see nothing. Started from Start > Run, the parent is Explorer
+ * and a launched COMMAND.COM produces a WINOA386.MOD that IS our child,
+ * which is what BACKLOG 17 describes and what the agent's `exec` does,
+ * since it runs from the client and the client is a GUI process.
+ *
+ * So a run from a DOS prompt cannot answer the question, and saying so is
+ * better than reporting a pass nobody can interpret. `--detached-to FILE`
+ * is the mode that gets this right, and its own comment has said why since
+ * it was written -- it was simply not the mode being used. */
+static bool inside_a_dos_vm(Processes &ps)
+{
+    Gather g;
+    ps.list(g);
+    DWORD me = GetCurrentProcessId();
+    for (int hops = 0; hops < 8; hops++)
+    {
+        DWORD parent = 0;
+        for (unsigned i = 0; i < g.m_all.size(); i++)
+            if (g.m_all[i].pid == me) parent = g.m_all[i].ppid;
+        if (!parent) return false;
+        for (unsigned i = 0; i < g.m_all.size(); i++)
+            if (g.m_all[i].pid == parent)
+            {
+                const char *n = strrchr(g.m_all[i].exe, '\\');
+                n = n ? n + 1 : g.m_all[i].exe;
+                if (lstrcmpiA(n, "WINOA386.MOD") == 0) return true;
+            }
+        me = parent;
+    }
+    return false;
+}
+
 static void processes()
 {
     char detail[160];
@@ -525,7 +573,7 @@ static void processes()
          * a DOS session had never once seen one. COMSPEC does. */
         DWORD pid = 0, err = 0;
         char cmd[MAX_PATH + 32];
-        bool started = Processes::launch(dosCmd(cmd, sizeof cmd, false),
+        bool started = Processes::launch(self(cmd, sizeof cmd, "--tick NUL 8"),
                                          NULL, SW_HIDE, pid, err);
         bool vm = false;
         for (int i = 0; started && i < 30 && !vm; i++)
@@ -559,11 +607,14 @@ static void processes()
          * rather than letting a reader take `pass` for evidence. Under
          * Wine the DOS command also finishes before the kill, so
          * no_such_pid is one of the vacuous outcomes. */
+        bool inVm = inside_a_dos_vm(ps);
         bool ok = vm ? (k == KILL_DOS_SESSION && ended)
                      : (k == KILL_OK || k == KILL_PENDING ||
                         k == KILL_NO_SUCH_PID);
         rc_strf(detail, sizeof detail, "%svm=%d kill=%d ended=%d",
-                vm ? "" : "VACUOUS: ", vm, (int)k, ended);
+                vm ? "" : (inVm ? "VACUOUS (run from a DOS box): "
+                                : "VACUOUS: "),
+                vm, (int)k, ended);
         say("kill-refuses-a-dos-session", started && ok, detail);
     }
     {
@@ -583,7 +634,7 @@ static void processes()
          * is the one printed on the guest, where vm=1. */
         DWORD pid = 0, err = 0;
         char cmd[MAX_PATH + 32];
-        bool started = Processes::launch(dosCmd(cmd, sizeof cmd, true),
+        bool started = Processes::launch(self(cmd, sizeof cmd, "--tick NUL 20"),
                                          NULL, SW_HIDE, pid, err);
         bool vm = false;
         DWORD vmPid = 0;
@@ -642,8 +693,10 @@ static void processes()
                    (!vm && k == KILL_NO_SUCH_PID)) && vmGone;
         rc_strf(detail, sizeof detail,
                 "%svm=%d vmpid=%08lx kill=%d vm-gone=%d kids=%d vms-on-box=%d",
-                vm ? "" : "VACUOUS: ", vm, (unsigned long)vmPid, (int)k,
-                vmGone, kids, anyVm);
+                vm ? "" : (inside_a_dos_vm(ps)
+                           ? "VACUOUS (run from a DOS box): "
+                           : "VACUOUS: "),
+                vm, (unsigned long)vmPid, (int)k, vmGone, kids, anyVm);
         say("force-kill-reclaims-the-dos-vm", started && ok, detail);
     }
     {
@@ -718,6 +771,93 @@ static void system()
  * they behave the same under cmd.exe, COMMAND.COM or no shell. */
 static int child(int argc, char **argv)
 {
+    /* --ps: the process table with PARENT PIDS, which nothing else dumps.
+     *
+     * Added 2026-10-14 to settle a question the checks could not: BACKLOG
+     * 17 says a console program's DOS VM is "a WINOA386.MOD listed as its
+     * child", and `Processes::kill` keys both its refusal and its reclaim
+     * on finding one among the target's DESCENDANTS -- but on the guest
+     * nothing we launch ever has any. Either the parent links do not hold
+     * for a VM, or the VM is not where the premise says. One listing
+     * answers it, and no check can because a check has to assert. */
+    if (argc >= 2 && strcmp(argv[1], "--ps") == 0)
+    {
+        Processes ps;
+        if (!ps.init())
+        {
+            printf("no toolhelp\n");
+            return 1;
+        }
+        Gather g;
+        ps.list(g);
+        printf("pid      ppid     exe\n");
+        for (unsigned i = 0; i < g.m_all.size(); i++)
+            printf("%08lx %08lx %s\n",
+                   (unsigned long)g.m_all[i].pid,
+                   (unsigned long)g.m_all[i].ppid,
+                   g.m_all[i].exe);
+        return 0;
+    }
+    /* --ps-dos: the same table, but taken while a DOS session WE LAUNCHED
+     * is alive, which is the case `kill` actually guards. The interactive
+     * listing shows the VM as a PARENT; this says whether a launched one
+     * looks the same, and what pid CreateProcess handed back. */
+    if (argc >= 2 && strcmp(argv[1], "--ps-dos") == 0)
+    {
+        /* `--ps-dos FILE` writes there instead of stdout, so this can be
+         * started from Start > Run -- i.e. with EXPLORER as the parent and
+         * no DOS VM above us. That turned out to be the whole question:
+         * run from a DOS prompt, our COMMAND.COM reuses the VM we are
+         * already inside and no new one appears. The agent's `exec` runs
+         * from the client, which is a GUI process, so the GUI parent is
+         * the case worth looking at. */
+        /* WRITTEN THROUGH A FILE*, NOT BY REDIRECTING STDOUT. Started from
+         * Start > Run there is no usable console, `fileno(stdout)` is not a
+         * real descriptor and dup2 fails -- which produced an empty file
+         * and no clue why, 2026-10-14. */
+        FILE *out = stdout;
+        File owned(argc >= 3 ? fopen(argv[2], "w") : 0);
+        if (argc >= 3)
+        {
+            if (!owned.valid()) return 1;
+            out = owned.get();
+        }
+        Processes ps;
+        if (!ps.init()) { fprintf(out, "no toolhelp\n"); return 1; }
+        char cmd[MAX_PATH + 32];
+        DWORD pid = 0, err = 0;
+        bool ok = Processes::launch(dosCmd(cmd, sizeof cmd, true),
+                                    NULL, SW_HIDE, pid, err);
+        fprintf(out, "launched=%d pid=%08lx err=%lu cmd=%s\n", (int)ok,
+                (unsigned long)pid, (unsigned long)err, cmd);
+        Sleep(3000);
+        Gather g;
+        ps.list(g);
+        fprintf(out, "pid      ppid     exe\n");
+        for (unsigned i = 0; i < g.m_all.size(); i++)
+            fprintf(out, "%08lx %08lx %s\n",
+                    (unsigned long)g.m_all[i].pid,
+                    (unsigned long)g.m_all[i].ppid,
+                    g.m_all[i].exe);
+        fflush(out);
+        /* Leave nothing behind: the session is `pause` and waits forever. */
+        for (unsigned i = 0; i < g.m_all.size(); i++)
+        {
+            const char *n = strrchr(g.m_all[i].exe, '\\');
+            n = n ? n + 1 : g.m_all[i].exe;
+            if (lstrcmpiA(n, "WINOA386.MOD") == 0 &&
+                g.m_all[i].ppid == GetCurrentProcessId())
+            {
+                Handle h(OpenProcess(PROCESS_TERMINATE, FALSE,
+                                     g.m_all[i].pid));
+                if (h.valid()) TerminateProcess(h.get(), 1);
+                fprintf(out, "cleaned %08lx\n",
+                        (unsigned long)g.m_all[i].pid);
+                fflush(out);
+            }
+        }
+        return 0;
+    }
     if (argc >= 3 && strcmp(argv[1], "--print") == 0)
     {
         printf("%s\n", argv[2]);
