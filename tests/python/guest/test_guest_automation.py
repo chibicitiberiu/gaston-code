@@ -44,7 +44,18 @@ def test_every_case_passes(verdicts):
 #: on a control that is not an Edit.
 #:
 #: 179 -> 180: wait_text by the selector's rules, ignoring case.
-CASE_COUNT = 180
+#:
+#: 180 -> 186 on 2026-10-14: the driving indicator's cancel chord, refused
+#: to everything synthesised (ROADMAP stage 4b). A keybd_event fires a
+#: RegisterHotKey hotkey exactly as a real key does, so a step list could
+#: otherwise press the person's own Stop -- or hold the chord down and make
+#: it useless at the moment it is wanted. Both programs' chords are refused
+#: by both programs, because RegisterHotKey is first-come and a list cannot
+#: know which one got it. Three of the six are negative: a bare F12, two of
+#: the three modifiers, and another F-key with all three must all still
+#: type, or the denylist has quietly taken an ordinary chord away from the
+#: agent.
+CASE_COUNT = 186
 
 
 def test_every_case_ran(verdicts):

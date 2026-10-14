@@ -27,6 +27,7 @@ import conftest
 from bridge.agent import prompts
 
 INPUT_CPP = Path(conftest.REPO) / "win" / "automation" / "input.cpp"
+INPUT_H = Path(conftest.REPO) / "win" / "automation" / "input.h"
 
 
 def _guest_names() -> set[str]:
@@ -100,11 +101,20 @@ def test_the_modifier_bits_are_not_windows_own():
     """`MOD_SHIFT`, `MOD_CONTROL` and `MOD_ALT` are winuser.h macros for
     RegisterHotKey with DIFFERENT values (`MOD_ALT` is 1 there, 4 here). Watcom
     caught the collision as a syntax error; had the names merely shadowed, every
-    modifier would have been silently wrong."""
-    src = INPUT_CPP.read_text()
-    assert "KEYMOD_SHIFT = 1" in src
-    assert re.search(r"\bMOD_SHIFT\s*=", src) is None, (
+    modifier would have been silently wrong.
+
+    In input.h since 2026-10-14, not input.cpp: `tapKey` and `tapChar` are
+    public and take these bits, so a caller outside that file had to write
+    the numbers -- and stage 4b added one (the cancel-chord refusal, which
+    a check calls directly). The collision is now MORE likely rather than
+    less, because the header that defines KEYMOD_ is included beside the
+    RegisterHotKey the indicator calls."""
+    hdr = INPUT_H.read_text()
+    assert "KEYMOD_SHIFT = 1" in hdr
+    assert re.search(r"\bMOD_SHIFT\s*=", hdr) is None, (
         "the modifier enum is back on Windows' own macro names")
+    assert "KEYMOD_SHIFT = 1" not in INPUT_CPP.read_text(), (
+        "two definitions of the modifier bits is how the two drift")
 
 
 #: Parsed by `parseKeyBody`, not looked up in KEY_NAMES.

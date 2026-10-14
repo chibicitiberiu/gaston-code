@@ -54,6 +54,20 @@ public:
     virtual void resume() = 0;
 };
 
+/* The cancel chords: Ctrl+Alt+Shift+F12 in the client, F11 in gremote.
+ *
+ * Two, because both programs can run at once (BACKLOG 19, "two programs
+ * can drive one desktop") and RegisterHotKey is first-come -- one chord
+ * would mean the second program silently has no keyboard cancel at all.
+ *
+ * Here rather than in the indicator, because the OTHER half of a global
+ * hotkey is that a synthesised keystroke fires it just as a real one does:
+ * keybd_event is indistinguishable at the far end. Both are therefore
+ * refused to every step list, in BOTH programs, and that refusal reads
+ * these names. F-keys and not letters so the denylist costs the agent
+ * nothing it is likely to want. */
+enum { RC_CHORD_VK_CLIENT = VK_F12, RC_CHORD_VK_REMOTE = VK_F11 };
+
 class StopSink
 {
 public:

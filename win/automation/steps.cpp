@@ -65,6 +65,7 @@ static const char *inputStatus(InputResult x)
     case INPUT_BAD_KEY:        return "bad_key";
     case INPUT_BAD_CHAR:       return "bad_char";
     case INPUT_FOCUS_LOST:     return "focus_lost";
+    case INPUT_REFUSED_CHORD:  return "refused_chord";
     default:                   return "failed";
     }
 }

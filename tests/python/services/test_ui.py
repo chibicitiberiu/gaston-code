@@ -14,6 +14,9 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
 
+import conftest
+
+from bridge.agent import prompts
 from bridge.guest import GuestSession
 from bridge.services.ui import UiError, UiService
 from bridge.wire.protocol import Frame
@@ -338,3 +341,26 @@ async def test_the_guests_refusal_reaches_the_caller_verbatim():
     with pytest.raises(UiError) as got:
         await task
     assert got.value.status == "no_clip_text"
+
+
+async def test_every_step_status_the_guest_sends_has_a_sentence():
+    """A status steps.cpp can send and tools.toml cannot explain reaches the
+    agent as `tools.ui.refused.unknown` -- a bare code where the sentence
+    that makes it actionable should be.
+
+    The same gap test_proc closes for processes, closed here for the step
+    runner, and it was open: `refused_chord` was added to inputStatus and
+    nothing would have noticed if its prose had not been written. The other
+    direction is deliberately NOT checked -- tools.toml carries statuses
+    from the engine and the bridge as well as from this table.
+    """
+    import re
+    src = pathlib.Path(conftest.HERE, "win", "automation",
+                       "steps.cpp").read_text()
+    body = src[src.index("static const char *inputStatus"):]
+    body = body[:body.index("\n}")]
+    sent = set(re.findall(r'return "([a-z_]+)"', body))
+    sent.discard("ok")
+    assert sent, "found no statuses in inputStatus"
+    have = set(prompts.all()["tools"]["ui"]["refused"])
+    assert not (sent - have), sorted(sent - have)

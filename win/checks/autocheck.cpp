@@ -15,6 +15,7 @@
 #include "automation/watch.h"
 #include "automation/wait.h"
 #include "automation/input.h"
+#include "automation/overlay.h"
 #include "automation/msaa.h"
 #include "automation/calldeadline.h"
 #include "automation/shot.h"
@@ -1350,6 +1351,49 @@ void inputRefusals(void)
         say("keys-refuses-ctrl-alt-del-even-as-one-token",
             in.typeText(mine, "[Ctrl+Alt+Delete]", bad,
                         sizeof bad) != INPUT_OK, "never, on any path");
+    }
+
+    /* The driving indicator's cancel chord, which a synthesised keystroke
+     * fires exactly as a real one does -- so a list that typed it would
+     * press the person's own Stop, or hold it down and make it useless at
+     * the moment it is wanted.
+     *
+     * `tap` is the route that matters and the one that nearly got away:
+     * it arrives as a single step with its modifiers composed, and tapKey
+     * discards keyDown's return, so a guard in keyDown alone would refuse
+     * the keystroke and report `ok`. These go AFTER the refusals above,
+     * which type into our own window and read INPUT_REFUSED_SELF as proof
+     * the parser accepted the token -- a chord check ordered before the
+     * self-refusal would take that proof away from ten cases. */
+    {
+        KeySpec f12 = { RC_CHORD_VK_CLIENT, 0, false, false };
+        KeySpec f11 = { RC_CHORD_VK_REMOTE, 0, false, false };
+        KeySpec f10 = { VK_F10, 0, false, false };
+        const int all = KEYMOD_CTRL | KEYMOD_ALT | KEYMOD_SHIFT;
+
+        say("chord-tap-refuses-the-clients-cancel-chord",
+            in.tapKey(f12, all) == INPUT_REFUSED_CHORD,
+            "tap key=f12 mods=ctrl+alt+shift");
+        say("chord-tap-refuses-gremotes-too",
+            in.tapKey(f11, all) == INPUT_REFUSED_CHORD,
+            "both, because either program may hold the registration");
+        /* The modifiers are the whole of what makes it the chord. F12 on
+         * its own is an ordinary key an application may want. */
+        say("chord-a-bare-f12-is-not-the-chord",
+            Input::isCancelChord(RC_CHORD_VK_CLIENT, 0) == false,
+            "F12 alone is somebody's debugger");
+        say("chord-two-of-the-three-modifiers-is-not-the-chord",
+            Input::isCancelChord(RC_CHORD_VK_CLIENT,
+                                 KEYMOD_CTRL | KEYMOD_ALT) == false,
+            "Ctrl+Alt+F12");
+        say("chord-another-f-key-with-all-three-is-not-the-chord",
+            Input::isCancelChord(VK_F10, all) == false, "Ctrl+Alt+Shift+F10");
+        /* And it must not be typed as characters instead, which is the
+         * failure INPUT_BAD_KEY exists to prevent in the other direction. */
+        say("chord-a-refused-tap-types-nothing",
+            in.tapKey(f10, all) == INPUT_OK
+            && in.tapKey(f12, all) == INPUT_REFUSED_CHORD,
+            "an ordinary chord still goes, this one does not");
     }
 
     rc_strf(detail, sizeof(detail), "SendInput %s",

@@ -1,4 +1,5 @@
 #include "automation/input.h"
+#include "automation/overlay.h"
 
 #include "core/str.h"
 
@@ -426,17 +427,6 @@ static const KeyName KEY_NAMES[] = {
 };
 enum { KEY_NAMES_N = sizeof(KEY_NAMES) / sizeof(KEY_NAMES[0]) };
 
-/* Modifier bits, the same order typeText already pushes them in, and the same
- * order VkKeyScan returns them in -- which is why they are these values and
- * not Windows'.
- *
- * KEYMOD_ AND NOT MOD_: `MOD_SHIFT`, `MOD_CONTROL` and `MOD_ALT` are already
- * macros in winuser.h, for RegisterHotKey, AND THEIR BITS ARE DIFFERENT
- * (`MOD_ALT` is 1 there and 4 here). Watcom caught it as a syntax error on the
- * enum; had the names merely shadowed instead, every modifier would have been
- * silently wrong. */
-enum { KEYMOD_SHIFT = 1, KEYMOD_CTRL = 2, KEYMOD_ALT = 4 };
-
 static char lowerAscii(char c)
 {
     return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
@@ -758,13 +748,40 @@ void Input::sendKey(const KeySpec &k, bool up)
     markBit(m_heldExt, k.vk, !up && k.extended);
 }
 
+int Input::heldMods() const
+{
+    int m = 0;
+    if (testBit(m_held, VK_CONTROL) || (GetAsyncKeyState(VK_CONTROL) & 0x8000))
+        m |= KEYMOD_CTRL;
+    if (testBit(m_held, VK_MENU) || (GetAsyncKeyState(VK_MENU) & 0x8000))
+        m |= KEYMOD_ALT;
+    if (testBit(m_held, VK_SHIFT) || (GetAsyncKeyState(VK_SHIFT) & 0x8000))
+        m |= KEYMOD_SHIFT;
+    return m;
+}
+
 bool Input::ctrlAltHeld() const
 {
-    bool ctrl = testBit(m_held, VK_CONTROL)
-             || (GetAsyncKeyState(VK_CONTROL) & 0x8000);
-    bool alt = testBit(m_held, VK_MENU)
-            || (GetAsyncKeyState(VK_MENU) & 0x8000);
-    return ctrl && alt;
+    const int both = KEYMOD_CTRL | KEYMOD_ALT;
+    return (heldMods() & both) == both;
+}
+
+/* The driving indicator's cancel chord, refused to everything synthesised.
+ *
+ * A real key and a keybd_event are indistinguishable to RegisterHotKey, so
+ * a list that typed this would press the person's own Stop. BOTH programs'
+ * chords are refused by BOTH programs: either may be the one that got the
+ * registration (first come), and a step list has no way to know which.
+ *
+ * KEYMOD_ and not MOD_: winuser.h's MOD_ALT is 1 and this file's
+ * KEYMOD_ALT is 4 -- see the enum above, which Watcom caught as a syntax
+ * error and which would otherwise have been silently wrong. */
+bool Input::isCancelChord(UINT vk, int mods)
+{
+    const int all = KEYMOD_CTRL | KEYMOD_ALT | KEYMOD_SHIFT;
+    if (vk != RC_CHORD_VK_CLIENT && vk != RC_CHORD_VK_REMOTE)
+        return false;
+    return (mods & all) == all;
 }
 
 InputResult Input::keyDown(const KeySpec &k)
@@ -773,6 +790,10 @@ InputResult Input::keyDown(const KeySpec &k)
      * may have gone down in two earlier steps. */
     if (k.vk == VK_DELETE && ctrlAltHeld())
         return INPUT_FAILED;
+    /* And the cancel chord, by the same route -- four separate keydowns
+     * are a chord too. */
+    if (isCancelChord(k.vk, heldMods()))
+        return INPUT_REFUSED_CHORD;
     if (k.altGr)
     {
         KeySpec ctrl = { VK_CONTROL, 0, false, false };
@@ -808,6 +829,14 @@ InputResult Input::tapKey(const KeySpec &k, int mods)
     if (k.vk == VK_DELETE
         && (((mods & KEYMOD_CTRL) && (mods & KEYMOD_ALT)) || ctrlAltHeld()))
         return INPUT_FAILED;
+    /* THE ONE ROUTE THAT CAN ACTUALLY TYPE THE CHORD, and the reason the
+     * refusal is here rather than only in keyDown: `tap key=f12 mods=7`
+     * arrives as one step, and tapKey DISCARDS keyDown's return -- a guard
+     * there alone would refuse the keystroke and report `ok`, which is the
+     * silent lie INPUT_BAD_KEY was introduced to kill. Composed modifiers
+     * OR held ones, like the VK_DELETE line above it. */
+    if (isCancelChord(k.vk, mods | heldMods()))
+        return INPUT_REFUSED_CHORD;
     if (mods & KEYMOD_CTRL)  sendKey(SPEC_CTRL, false);
     if (mods & KEYMOD_ALT)   sendKey(SPEC_ALT, false);
     if (mods & KEYMOD_SHIFT) sendKey(SPEC_SHIFT, false);

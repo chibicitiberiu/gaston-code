@@ -271,6 +271,18 @@ occluded = '''
 That control is covered by another window even after its own window was brought to the front, so nothing was clicked -- the click would have landed on whatever is on top. What is on top: {on_top}. Move or close that window, or click something in it instead.'''
 not_foreground = '''
 The window would not come to the front, so nothing was typed -- it would have gone somewhere else.'''
+# The one refusal that is about the PERSON rather than the screen. A
+# synthesised key fires a global hotkey exactly as a real one does, so
+# typing this chord would press the stop that is theirs to press.
+# inputStatus's `default:`, and it was reaching the agent as a bare code --
+# found by the agreement test below it, not by anyone reading. The one that
+# lands here most often is `[Ctrl+Alt+Delete]`, which Input refuses outright
+# because on 9x the VMM owns it at ring 0 and the cost of being wrong is
+# somebody's machine restarting.
+failed = '''
+That step did not work, and the machine gave no reason beyond that. If it was `[Ctrl+Alt+Delete]`, that one is refused on purpose and always will be -- nothing can send it, and the person at the keyboard has to press it. Otherwise look at the screen again before retrying: something is not where it was.'''
+refused_chord = '''
+That chord is the keyboard shortcut that stops you driving this screen, so NOTHING was typed. It belongs to the person at the keyboard. If an application needs it, ask them to press it themselves.'''
 no_window = '''
 That window is gone.'''
 no_text = '''

@@ -33,8 +33,29 @@ enum InputResult
     INPUT_BAD_CHAR,
     /* The foreground left the window the caller said it was typing into.
      * Checked before every keystroke; nothing more was sent. */
-    INPUT_FOCUS_LOST
+    INPUT_FOCUS_LOST,
+    /* The cancel chord the driving indicator holds (automation/overlay.h).
+     * NOTHING WAS TYPED. A synthesised keystroke fires a RegisterHotKey
+     * hotkey exactly as a real one does, so without this the agent could
+     * press the person's own Stop -- or, worse, hold the chord down in a
+     * list and make it useless at the moment it is wanted. */
+    INPUT_REFUSED_CHORD
 };
+
+/* Modifier bits, the same order typeText already pushes them in, and the same
+ * order VkKeyScan returns them in -- which is why they are these values and
+ * not Windows'.
+ *
+ * KEYMOD_ AND NOT MOD_: `MOD_SHIFT`, `MOD_CONTROL` and `MOD_ALT` are already
+ * macros in winuser.h, for RegisterHotKey, AND THEIR BITS ARE DIFFERENT
+ * (`MOD_ALT` is 1 there and 4 here). Watcom caught it as a syntax error on the
+ * enum; had the names merely shadowed instead, every modifier would have been
+ * silently wrong. */
+enum { KEYMOD_SHIFT = 1, KEYMOD_CTRL = 2, KEYMOD_ALT = 4 };
+
+/* Moved here from input.cpp on 2026-10-14: `tapKey` and `tapChar` are
+ * public and take these bits, so a caller outside this file had to write
+ * the numbers. */
 
 enum MouseButton { BTN_LEFT = 0, BTN_RIGHT, BTN_MIDDLE };
 
@@ -114,6 +135,10 @@ public:
      * HWND comparison lets the agent type into our own input box in a
      * self-feeding loop. */
     static bool isOurs(HWND target);
+
+    /* Is this the driving indicator's cancel chord? Static and public so
+     * the refusal can be read from a check as well as applied here. */
+    static bool isCancelChord(UINT vk, int mods);
 
     /* Bring `target` forward and give it focus, attaching to its input
      * queue only if it will not come forward on its own -- and DETACHING
@@ -247,6 +272,9 @@ private:
     void  sendKey(const KeySpec &k, bool up);
     void  altNumpad(unsigned char c);
     bool  ctrlAltHeld() const;
+    /* Ctrl/Alt/Shift as KEYMOD_ bits, from what this object is
+     * holding down OR what the real keyboard has down. */
+    int   heldMods() const;
 
     /* What this object has pressed and not released. One bit per VK, one
      * more per VK for the extended flag it went down with, and the three
