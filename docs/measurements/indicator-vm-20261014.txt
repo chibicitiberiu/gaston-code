@@ -212,9 +212,30 @@ instead: it wedges at "Windows is shutting down" rather than at "Windows is
 now restarting", and a domain destroyed THERE boots normally rather than
 into Safe mode. Two cycles, no Safe mode, about fifteen minutes.
 
-640x480 AT 120 dpi was not seen, and does not need to be: the width depends
-on the font, not on the screen -- 426 measured here against 628 usable
-pixels there -- and `place()` clamps to the work area with `DT_END_ELLIPSIS`
-behind it, so the bounded failure is a shortened sentence rather than a
-clipped window. The two measurements that could have surprised (the text
-metrics at 120 dpi, and the layout at 640 wide) have each been taken.
+11. 640x480 AT 120 dpi -- THE FOURTH CORNER
+--------------------------------------------
+The combination, rather than the two axes separately. It had been argued
+from the other two and then run, because an argument is what the width was
+before any of this.
+
+  indicator-vm-20261015-640x480-largefonts.png
+
+    strip   x 208..633   width 426     taskbar top 448   screen 640x480
+
+426 wide, the SAME as at 800x600 and 120 dpi -- which is the point: the
+width tracks the font and not the screen, so the two axes really were
+independent. 207 pixels to spare, nothing clipped, the sentence and the
+chord both readable, and it sits above the taskbar as everywhere else.
+
+AND THE APPLET ITSELF DOES NOT FIT THERE. Display Properties at 640x480 and
+120 dpi is taller than the screen: its OK, Cancel and Apply are below the
+bottom edge at y 508-536 of a 480-pixel display, which is why this run had
+to reach them with Alt+A instead of a click. Worth recording because it is
+the measure of how tight that corner is -- Windows' own dialog loses to it,
+and a 426x28 strip does not.
+
+All four corners are now measured:
+
+                 96 dpi            120 dpi
+    800x600      352 x 25          426 x 28
+    640x480      fits, seen        426 wide, 207 spare

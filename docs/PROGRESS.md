@@ -4278,11 +4278,21 @@ reconnect loop, which ran underneath the client's own guest test and turned
 a cancelled run into "the machine disconnected".
 
 Large Fonts was run too, the next morning (2026-10-15), because the argument
-for skipping it was the shape of reasoning stage 4 kept getting caught by.
-At 120 dpi the strip is **426x28** against 352x25 at 96, nothing clipped: the
-width tracks the DPI because it is measured with `GetTextExtentPoint32A`
-rather than laid out. The prediction beforehand was "about 440" -- close
-enough to have been believed, which is not the same as known.
+for skipping it was the shape of reasoning stage 4 kept getting caught by --
+and then the fourth corner was run for the same reason, after it had been
+argued from the other three.
+
+                 96 dpi            120 dpi
+    800x600      352 x 25          426 x 28
+    640x480      fits, seen        426 wide, 207 spare
+
+Nothing clipped anywhere. The width tracks the DPI and not the screen,
+because it is measured with `GetTextExtentPoint32A` rather than laid out --
+which is why 800x600 and 640x480 give the same 426 at 120 dpi. The
+prediction before the first of those was "about 440": close enough to have
+been believed, which is not the same as known. Display Properties itself
+does NOT fit at 640x480 and 120 dpi -- its buttons sit below the bottom edge
+-- which is the measure of how tight that corner is.
 
 It also found a cheaper route than the one stage 4 recorded: answer NO when
 Windows offers to restart and shut down from the Start menu instead. The
