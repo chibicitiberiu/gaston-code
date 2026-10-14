@@ -2398,6 +2398,19 @@ live read had nothing to read. The menu item is the write that makes that
 sentence true. Turning it ON still reconnects, because the bridge splices
 the screen tools in from `guest.caps` at session build time.
 
+**The tick is honest when the mid-turn prompt is declined, verified on the
+guest** -- `docs/measurements/tick-honest-vm-20261014.txt`. With a turn held
+open by the permission bar, toggling the setting raises "These settings need
+a new connection, which stops the current reply"; answering No leaves the
+transcript saying "Saved. They take effect at the next connection", the turn
+still streaming, and the menu item WITHOUT its tick -- although `m_cfg` now
+says true. The capability is not in force and the menu says so.
+
+Holding the turn is the hard part and worth recording: Haiku finishes a long
+reply faster than a menu click lands, so the only reliable hold is a
+permission bar in Ask-first mode, raised by a command that CHANGES something
+(`dir` just happens, and never prompts).
+
 **One thing the menu brings with it, found on the guest and recorded as
 38:** every toggle forces a reconnect, and toggling repeatedly put the
 client into a reconnect loop -- about one connect a second -- during which

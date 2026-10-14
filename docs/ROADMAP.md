@@ -501,6 +501,15 @@ says honestly that 1,400 bytes of content bought 4,096 of padding because
   return). The sibling case had been passing VACUOUSLY on the guest since
   it was written, for the first reason.
   `docs/measurements/forcekill-vm-20261014.txt`.
+- **Every bullet of the plan's Verification section was executed in the
+  end, and the last one took the longest to stage.** The automation tick's
+  honesty when the mid-turn prompt is declined needs a toggle to land while
+  a turn is streaming -- Haiku finishes a long reply faster than a menu
+  click, so the only reliable hold is a permission bar in Ask-first mode,
+  raised by a command that CHANGES something. Held that way it passes:
+  "Saved. They take effect at the next connection", the turn still
+  streaming, and no tick on a setting `m_cfg` has already stored.
+  `docs/measurements/tick-honest-vm-20261014.txt`.
 - **And `BACKLOG.md` 17's "degrading later runs" got demonstrated by
   accident.** The run before the reboot carried three VMs leaked by those
   experiments; five unrelated cases failed with them present and all thirty

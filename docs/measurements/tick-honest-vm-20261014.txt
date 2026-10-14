@@ -1,0 +1,41 @@
+The automation tick when the mid-turn prompt is declined -- stage 4, E6
+QEMU Win98 SE guest, 2026-10-14. Pictures: tick-honest-prompt-20261014.png,
+tick-honest-declined-20261014.png
+
+THE PROPERTY UNDER TEST
+  `optionsApply` writes `*m_cfg` and saves the INI BEFORE it asks whether to
+  drop a streaming reply for the reconnect. Answering No returns early, so
+  the setting is stored and the capability is NOT in force until the next
+  connection. A tick read from `m_cfg` would then show a capability that is
+  not running -- which is BACKLOG 18's defect shape, a client displaying a
+  state it did not achieve. E6 reads `m_net->automation` instead, the same
+  field the guest's own refusal path consults.
+
+HOW THE TURN WAS HELD, WHICH IS THE WHOLE DIFFICULTY
+  The prompt only appears while `m_turn->active()`, and six earlier attempts
+  missed: Haiku finished a long "count to 250" reply before a menu click
+  could land, and the one attempt that did overlap hit the reconnect loop of
+  BACKLOG 38 instead.
+
+  What works is the PERMISSION BAR. In Ask-first mode a command that CHANGES
+  something waits for the person indefinitely, and the turn stays active the
+  whole time. `dir` is not enough -- reading just happens -- so the prompt
+  was "create a file called holdme.txt in your work folder".
+
+THE RUN
+  precondition  automation OFF, mode Ask first, a freshly started client
+                (a stale one is 38's loop and refuses everything)
+  bar up        Write: RUNDIRC2/holdme.txt -- waiting for you... 15s
+  toggle        Configure > Let it use this screen   (off -> ON)
+  prompt        "These settings need a new connection, which stops the
+                current reply. Reconnect now?"      -> No
+  after         transcript: "Saved. They take effect at the next connection."
+                the turn is STILL ALIVE: waiting for you... 54s, bar still up
+                Configure > Let it use this screen: **NO TICK**
+
+  So `m_cfg->automation` is true and saved, the capability is not in force,
+  and the menu says so. The tick is honest.
+
+WHAT THIS ALSO SHOWS, UNASKED
+  Declining preserved the streaming turn rather than killing it, which is
+  what the prompt promises and what makes answering No worth offering.
