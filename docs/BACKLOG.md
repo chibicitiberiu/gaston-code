@@ -2411,12 +2411,12 @@ reply faster than a menu click lands, so the only reliable hold is a
 permission bar in Ask-first mode, raised by a command that CHANGES something
 (`dir` just happens, and never prompts).
 
-**One thing the menu brings with it, found on the guest and recorded as
-38:** every toggle forces a reconnect, and toggling repeatedly put the
-client into a reconnect loop -- about one connect a second -- during which
-every `exec` is refused while the status bar still says connected. A
-restart clears it and a fresh client does not reproduce it. The Options
-sheet paced these apart by being modal; a menu item does not.
+**What the menu turned up, recorded as 38:** the client reconnects about
+once a second and tears down a working session each time. A toggle will
+start it -- but so will nothing at all, which is the finding: a freshly
+started client that was never toggled does the same. **The menu item is not
+the cause**, only a reliable way to provoke it. The first draft of 38 said
+otherwise and was corrected by measuring a clean client.
 
 **2. `gaston.exe` cannot hold the guest half at the current cap.** Measured
 with `make -C win check-gaston`:
@@ -3926,52 +3926,64 @@ the two above and strike this.
 
 ---
 
-## 38. Toggling the screen capability repeatedly puts the client in a reconnect loop
+## 38. The client reconnects about once a second, and clears file sharing each time
 
-**Status:** open, measured 2026-10-14, stage 4. Found by the on-guest check
-for stage 4's own menu item, which is the argument for having run it.
+**Status:** open, reproduced and localised 2026-10-14, stage 4. Found by the
+on-guest check for stage 4's menu item; **not caused by it** -- see below.
 
-**What was seen.** The bridge log shows two windows of roughly **50
-connections a minute** -- connect, HELLO, attach, drop, repeat, about once a
-second -- separated by three hours of quiet:
+**What happens.** The bridge logs roughly **one connection a second**:
+connect, HELLO, attach, drop, repeat. While it is going the machine is
+useless to the agent -- every `exec` returns `Cancelled -- the machine is
+shutting down`, in a new conversation as readily as an old one, while the
+client's status bar still says "Connected to bridge."
 
-    00:08-00:21   ~55/min   automation=steps
-    03:39-03:46   ~50/min   automation=off
+**Which end closes: THE CLIENT.** `GASTON.LOG` shows the cycle plainly, and
+the order is the answer:
 
-Both windows are while `Configure > Let it use this screen` was being
-toggled repeatedly; the quiet between them includes a full agent run
-(04.35's measurement) with the same client and no trouble at all.
+    workdir: mirroring C:\WORK\RUNDIRC2
+    rpc: watching C:\WORK\RUNDIRC2
+    chat list: 7 rows
+    workdir: file sharing is off          <- rc_workdir_apply("")
+    rpc: work directory changed to (none)
+    net: reader thread exiting (rx=4350 tx=2076)
+    net: connected to 10.0.2.2:7890
+    ...and round again
 
-Every attach logs `sync pass aborted: guest scan returned no_root`, and the
-connection closes about a second later -- though `C:\WORK` exists on the
-guest with the conversation's own folder in it, so `no_root` is a second
-oddity rather than an explanation.
+`rc_workdir_apply("")` has exactly one caller outside its own file:
+`win/app/reconnect.cpp:56`, in `Reconnector::tryConnect`. So **tryConnect is
+running while the connection is healthy** -- the reconnect timer is firing
+on a link that does not need reconnecting, and each firing tears down a
+working session. `win/app/workdlg.cpp:140` already describes this chain
+("TIMER_RECONNECT fired -> Reconnector::tryConnect -> rc_workdir_apply("")
+-> sharing...") as a known interaction.
 
-**While it is happening the machine is unusable to the agent**: every `exec`
-comes back `Cancelled -- the machine is shutting down`, in a new
-conversation as readily as the old one, while the client's status bar says
-"Connected to bridge."
+**IT IS NOT STAGE 4's MENU ITEM, and the first version of this entry said it
+was.** Measured on a freshly started client:
 
-**It is a STATE, not a condition.** Closing the client stops it (0
-connections in 30s). Starting a fresh one does not reproduce it (0
-connections in 40s, stable). So a restart clears it.
+    baseline, no toggle        0 reconnects in 30s
+    after ONE toggle          27 reconnects in 30s
+    later, fresh client,
+    no toggle at all          18 reconnects in 20s
 
-**What is NOT known, and should not be guessed:** whether the client or the
-bridge closes the socket; whether this predates stage 4; and the exact
-trigger. The hypothesis the evidence supports is rapid SUCCESSIVE
-reconnects -- each toggle forces one (the setting rides HELLO), and
-toggling again while one is in flight is now a single menu click.
+The third line is what kills the hypothesis. One toggle is enough to start
+it, but so is nothing at all -- a client started clean into the same state
+loops identically. The menu item is a way to provoke it, not the cause, and
+the "rapid successive toggles" story in the first draft of this entry was
+wrong.
 
-**Stage 4 probably did not create this, but it made it easy to reach.**
-Before the menu item the only way to change this setting was the Options
-sheet: modal, several clicks, and an OK -- which paces the reconnects
-apart. BACKLOG 19 asked for the menu item precisely so "off" could be
-immediate.
+**What every cycle also logs:** `sync: scan sNNNN -> no_root, 0 entries`
+against `C:\WORK\RUNDIRC2`, a directory that EXISTS on the guest and is
+empty. Whether the failing scan is a cause, a symptom, or unrelated is not
+established.
 
-**To close it:** reproduce deliberately -- toggle N times in M seconds from
-a fresh client and find the N that tips it -- then read `GASTON.LOG` and the
-bridge side together to see which end closes. If it is the reconnector
-retrying through a drop it caused, a short settle after an
-`optionsApply`-driven reconnect is the obvious shape; do not add one before
-knowing, since `reconnect.cpp` already has backoff that this would interact
-with.
+**To close it:** find what arms the reconnect timer while connected, and
+whether a successful attach disarms it. `optionsApply` calls
+`m_reconnector->reset()` and then `tryConnect()`, which is one suspect
+pairing, but it cannot be the only one since a client that was never
+toggled does this too. Do not add a settle or a guard before knowing --
+`reconnect.cpp` has backoff of its own and this would interact with it.
+
+**Worth saying plainly:** this is a live defect that makes the client
+unusable until restarted, and it is almost certainly older than stage 4.
+Stage 4 found it only because the plan required running the new menu item
+on the real machine.

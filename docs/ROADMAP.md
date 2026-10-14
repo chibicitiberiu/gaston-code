@@ -510,6 +510,14 @@ says honestly that 1,400 bytes of content bought 4,096 of padding because
   "Saved. They take effect at the next connection", the turn still
   streaming, and no tick on a setting `m_cfg` has already stored.
   `docs/measurements/tick-honest-vm-20261014.txt`.
+- **The on-guest work found a live defect that predates the stage.** The
+  client reconnects about once a second and clears file sharing each time,
+  which makes it useless to the agent until restarted -- `BACKLOG.md` 38,
+  reproduced and localised to `Reconnector::tryConnect` running on a healthy
+  link. Stage 4's menu item provokes it reliably but does NOT cause it: a
+  freshly started client that was never toggled loops identically. Not
+  fixed here; the diagnosis is written down and the fix wants its own
+  change.
 - **And `BACKLOG.md` 17's "degrading later runs" got demonstrated by
   accident.** The run before the reboot carried three VMs leaked by those
   experiments; five unrelated cases failed with them present and all thirty
