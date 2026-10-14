@@ -69,11 +69,14 @@ public:
         DWELL_MS        = 3000,   /* back-to-back lists are one drive      */
         TICK_MS         = 100,    /* the strip's own clock                 */
         HIDE_BUDGET_MS  = 400,    /* what a click waits for it to go       */
-        SETTLE_MS       = 120,    /* ...and what a capture waits on top,
-                                   * for the desktop under it to repaint.
-                                   * E2 measures this one on the guest:
-                                   * IsWindowVisible goes false long before
-                                   * the framebuffer is right.            */
+        /* What a capture waits on top, for the desktop under the strip
+         * to repaint. MEASURED at 12ms on the guest, for a trivial
+         * window, and kept at ten times that deliberately: the window
+         * under it in real use is a file listing or a browser repainting
+         * on another process's pump, and this is paid once per
+         * screenshot against hundreds of milliseconds of BitBlt.
+         * docs/measurements/stripprobe-vm-20261014.txt. */
+        SETTLE_MS       = 120,
         STOP_SAYS_MS    = 700     /* "Stopping..." is readable before it  */
     };
 

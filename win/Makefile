@@ -437,6 +437,22 @@ $(BUILD)/keyprobe.exe: $(KEYPROBE_OBJS)
 	  $(LINKIN)
 	@echo "built $@"
 
+# stripprobe: the four things stage 4b's indicator guesses at, none of
+# which Wine can answer because all four are about what the 9x window
+# manager does with a topmost window belonging to somebody else --
+# HTTRANSPARENT across a process boundary, the gap between a hide and the
+# framebuffer under it being right (the screenshot path sleeps a guessed
+# 120ms), RegisterHotKey's answer for Ctrl+Alt+Shift+F12, and that
+# SW_SHOWNOACTIVATE really keeps it out of the foreground (load-bearing:
+# keyboardTargetOk refuses every typing step while one of ours is in
+# front). Writes STRIPPRB.TXT beside itself.
+STRIPPROBE_OBJS = $(call objs,checks/stripprobe.cpp) $(LIBCORE)
+stripprobe: $(BUILD)/stripprobe.exe
+$(BUILD)/stripprobe.exe: $(STRIPPROBE_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
 FOCUSPROBE_OBJS = $(call objs,checks/focusprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
 focusprobe: $(BUILD)/focusprobe.exe
 $(BUILD)/focusprobe.exe: $(FOCUSPROBE_OBJS)

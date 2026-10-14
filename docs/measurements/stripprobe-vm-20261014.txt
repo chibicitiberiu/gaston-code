@@ -1,0 +1,87 @@
+What Win98 SE does with a topmost window belonging to somebody else
+===================================================================
+2026-10-14, QEMU guest (Win98 SE, 800x600, Small Fonts, 32MB), built from
+stage 4b's third commit. Run from an MS-DOS Prompt as C:\GASTON\STRIPPRB.EXE;
+output read back over COM1.
+
+Stage 4b's indicator was designed against readings of documentation, because
+every one of these is about the 9x window manager and Wine's window manager
+is the host's. Four questions, four answers, and two of them changed the
+code.
+
+    stripprobe: what the driving indicator guesses at
+    httransparent-otherthread-windowfrompoint RETURNS THE STRIP (not honoured)
+    httransparent-off-control strip (geometry ok)
+    httransparent-real-click target=0 strip=0
+    noactivate-strip-foreground not foreground (good), activations=0
+    hide-invisible-after 12ms, pixel-correct-after 12ms (before=000000)
+    hotkey-ctrl-alt-shift-f12 registered err=0
+    hotkey-ctrl-alt-shift-f11 registered err=0
+    hotkey-same-chord-twice refused err=0
+    timer-asked-10ms got 40ms apart (n=6)
+    done
+
+1. HTTRANSPARENT BUYS NOTHING, AND THE DESIGN WAS RIGHT NOT TO WANT IT
+----------------------------------------------------------------------
+`WindowFromPoint` returned the strip through a `WM_NCHITTEST` answering
+`HTTRANSPARENT` -- with the strip on another THREAD of the same process,
+which is the case the documentation says is covered ("the message is sent to
+the underlying windows in the same thread"). It is not covered here. The
+control line is what makes that readable: with the transparency turned off,
+`WindowFromPoint` returns the strip too, so the geometry was right and the
+first line is a real negative rather than a miss.
+
+The plan called this the likely answer and built the step-aside as the
+design rather than as a fallback. That was the right call, and this is the
+measurement that says so.
+
+Acted on: the three lines returning HTTRANSPARENT are gone. Code that does
+nothing on the only platform that runs it is worse than no code, because the
+next person reads it as a mechanism that works.
+
+The real-click line is INCONCLUSIVE and is left in the record as such:
+neither window counted the click. The probe clicks while neither window is
+foreground, which is the state 9x refuses input in for reasons focusprobe
+already measured (docs/measurements/focus-vm-20260927.txt). It does not
+matter to the design -- nothing relies on a click passing through -- so it
+was not chased.
+
+2. SW_SHOWNOACTIVATE HOLDS, AND THAT IS THE LOAD-BEARING ONE
+------------------------------------------------------------
+Zero activations, never foreground, after being clicked, while topmost. This
+is the invariant the feature rests on and not a matter of politeness:
+`steps.cpp`'s `keyboardTargetOk` fails EVERY typing step with `refused_self`
+while one of our own windows is in front, so a strip that could take the
+foreground would break the automation it exists to announce. It does not.
+
+3. THE HIDE REACHES THE FRAMEBUFFER AS FAST AS IT REACHES IsWindowVisible
+-------------------------------------------------------------------------
+12ms and 12ms -- the same sample. The screenshot path invalidates what the
+strip was covering and then sleeps `SETTLE_MS`, which was a guessed 120ms.
+
+NOT CHANGED, and deliberately. The number measured here is for a trivial
+repaint: one plain white window with nothing in it. The window under the
+strip in real use is a file listing, a browser or an editor, repainting on
+another process's message pump, and 120ms is ten times a measured 12 rather
+than ten times a known worst case. It is paid once per screenshot, which is
+already hundreds of milliseconds of BitBlt and wire push.
+
+4. THE CHORD REGISTERS, AND A SECOND TAKER IS REFUSED
+------------------------------------------------------
+Both Ctrl+Alt+Shift+F12 and Ctrl+Alt+Shift+F11 registered on 98 SE. F12 is
+reserved on some configurations and MOD_WIN does not exist on 9x; neither
+bit us. Registering the SAME chord twice was refused, which is the case that
+matters when gaston and gremote both run: the second program really would
+have no keyboard cancel, which is why they ask for different chords and why
+the strip prints the one it actually holds.
+
+`GetLastError` is 0 on every one of those, success and failure alike -- so
+on 9x the return value is the only signal, and a caller that logged the
+error code would log nothing useful. The code checks the return.
+
+5. WM_TIMER IS 40ms, NOT 10 AND NOT 55
+---------------------------------------
+Asked for 10ms, delivered every 40. The indicator's own clock is 100ms,
+comfortably above it, so the show delay and the dwell land within one tick
+of what they say. Worth having written down: a design that asked for a 10ms
+timer here would have got a quarter of the resolution it thought it had.

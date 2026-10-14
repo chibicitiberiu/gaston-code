@@ -233,20 +233,16 @@ LRESULT DriveIndicator::Strip::handle(UINT msg, WPARAM wp, LPARAM lp)
          * our windows is in front. */
         return MA_NOACTIVATE;
 
-    case WM_NCHITTEST:
-    {
-        POINT p;
-        p.x = (short)LOWORD(lp);
-        p.y = (short)HIWORD(lp);
-        ScreenToClient(hwnd(), &p);
-        if (PtInRect(&m_btn, p))
-            return HTCLIENT;
-        /* Documented as a same-thread walk, so across processes this is
-         * expected to buy nothing and the step-aside is what actually
-         * works. Three lines, and the guest probe says whether 9x is
-         * kinder than the documentation. */
-        return HTTRANSPARENT;
-    }
+    /* NO HTTRANSPARENT HERE, and that is a measurement rather than an
+     * omission. It would have let WindowFromPoint and a real click see
+     * through the strip to whatever it covers, which is the cheap version
+     * of the step-aside the step runner does instead. 98 SE does not
+     * honour it: WindowFromPoint returns this window through a
+     * WM_NCHITTEST answering HTTRANSPARENT, even with the strip on another
+     * thread of the same process, which is the case the documentation says
+     * is covered (docs/measurements/stripprobe-vm-20261014.txt). Code that
+     * does nothing on the only platform that runs it is worse than no
+     * code: the next person reads it as a mechanism that works. */
 
     case WM_ERASEBKGND:
     {

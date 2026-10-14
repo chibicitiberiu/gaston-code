@@ -35,6 +35,10 @@ want() {                                # skip, but out loud
 # 8.3 names throughout: the guest may see this via a driver that does not
 # surface long filenames, and a truncated name is a confusing failure.
 want "$HERE/build/win/probe.exe" "PROBE.EXE"
+# stripprobe (ROADMAP stage 4b): the four things the driving indicator
+# guesses at, every one of them about what the 9x window manager does with
+# a topmost window belonging to somebody else. Wine answers none of them.
+want "$HERE/build/win/stripprobe.exe" "STRIPPRB.EXE"
 want "$HERE/build/win/htmlspike.exe" "HTMLSPK.EXE"
 want "$HERE/build/win/execprobe.exe" "EXECPRB.EXE"
 need "$HERE/build/win/gaston.exe" "GASTON.EXE"
@@ -278,6 +282,11 @@ Gaston Code test payload
 
 SETUP.BAT     copies everything to C:\GASTON and cd's there.
 
+STRIPPRB.EXE  stage 4b: HTTRANSPARENT across a process boundary, the gap
+              between hiding a window and the pixels under it being right,
+              RegisterHotKey for Ctrl+Alt+Shift+F12, and whether
+              SW_SHOWNOACTIVATE really keeps a topmost popup out of the
+              foreground. Writes STRIPPRB.TXT beside itself.
 PROBE.EXE     the Phase 0 experiments: W-suffix imports, threads under -bm,
               16-bit EXEC capture, BI_RLE8, deflate throughput. Writes
               PROBE.LOG beside itself. "No PROBE.LOG" is itself the result:
