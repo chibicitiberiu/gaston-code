@@ -727,6 +727,14 @@ re-derived:
 - **BACKLOG 38 is still there and is now easy to reproduce**: it ran
   underneath the client's own guest test, a full HELLO-and-attach once per
   second, and turned a cancelled run into "the machine disconnected".
+- **Finishing the verification found a defect the stage had called a known
+  gap.** Two programs driving put both strips in the same corner and the
+  wider one covered the other, so the screen named one program while two
+  drove -- and the Stop a person could see belonged to the other. "Two
+  strips can be up" had been written down as accepted; what was actually
+  happening was the strip lying about who was driving. Fixed by stacking.
+  The lesson is the one stage 4 kept learning: a gap recorded from a reading
+  is not the same as a gap seen.
 
 ---
 

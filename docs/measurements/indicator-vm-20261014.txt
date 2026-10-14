@@ -127,14 +127,73 @@ which was verified by removing each half and watching it fail. 38 was
 already running before this test started and is the user's open item; it was
 not caused by anything in this stage.
 
+6. A PARAGRAPH TYPED UNDER IT ARRIVES WHOLE
+-------------------------------------------
+The keyboard invariant, end to end rather than by inference. Notepad
+maximised so its Edit covered 0,38-800,572 -- the strip's own rectangle
+among it -- then one list: focus Notepad, type 125 characters. The strip was
+up over the text area for the whole of it (indicator-vm-20261014-typing-under-it.png),
+and the Edit read back character for character.
+
+That is what `SW_SHOWNOACTIVATE` plus no child control buys. Had the strip
+been able to take the foreground, `keyboardTargetOk` would have failed the
+step `refused_self` and nothing would have been typed at all.
+
+7. A FULL-SCREEN DOS SESSION HIDES IT COMPLETELY
+-------------------------------------------------
+Alt+Enter on an MS-DOS Prompt, then a drive. The screendump comes back
+720x400 in text mode showing only the DOS session; gremote's log says
+`indicator: up`, and the step list answers `ok`. So the drive runs, the
+strip exists, and the person sees nothing.
+
+Known and not fixable from here: on 9x a full-screen DOS session owns the
+display, and no GUI window is above it. It is the one state where the most
+destructive driving happens with no indication at all. Recorded in
+ROADMAP's 4b section and BACKLOG 19.
+
+8. TWO STRIPS AT ONCE -- AND THE RUN CHANGED THE CODE
+------------------------------------------------------
+Both programs driving at the same time (the client on a 25s `input` call,
+gremote on a 6s list underneath it). Measured, from gremote's own tree,
+which excludes gremote's pid and therefore sees only the OTHER one:
+
+    client strip   GastonDriveIndicator "Gaston"  482,541-794,566
+    gremote strip                                 442,541-794,566
+
+The same corner, the same row, the same right edge. The wider of the two
+covered the other completely, so the screen said ONE program was driving
+while two were -- the strip failing at the one thing it exists for. A person
+pressing the Stop they could see would have stopped the other one.
+
+Fixed in the same session: `place()` now looks for a visible window of its
+own class and stacks a row above it. Re-run with both driving, both are
+readable, each with its own chord
+(indicator-vm-20261014-two-strips.png).
+
+That the two can see each other at all is the same fact `BACKLOG.md:2488`
+records: `excludePid` excludes only our own pid, so each program's walk --
+and each program's occlusion check -- treats the other's strip as an
+ordinary window it cannot hide.
+
+9. 640x480
+-----------
+The strip at the smallest screen this project targets: bottom right, above
+the taskbar, nothing clipped, 352 of 640 pixels wide
+(indicator-vm-20261014-640x480.png). Changed through Display Properties and
+changed back; the guest is at 800x600 as it was found.
+
 WHAT THIS RUN DOES NOT COVER
 -----------------------------
-- TWO STRIPS AT ONCE. Both programs can run and both can drive
-  (BACKLOG.md:2488), so two strips can be up, each occluding the other's
-  targets, each with its own chord. Recorded, not exercised.
-- LARGE FONTS AND 640x480. The strip's width is computed with
-  GetTextExtentPoint32 rather than laid out by eye, but the only font size
-  seen is Small at 800x600. The Add-a-tool dialog had been clipped at every
-  font size until stage 4 looked at it.
-- A FULL-SCREEN DOS SESSION owns the display on 9x, so the strip is absent
-  exactly when the most destructive driving happens.
+- LARGE FONTS (120 dpi). It is the one item of the plan's verification not
+  run, because the font size needs a restart on 9x and stage 4's own Large
+  Fonts run recorded what that costs on this VM: a wedge at "Windows is now
+  restarting", a destroy, and a boot into Safe mode. Not worth doing
+  unasked at the end of a session.
+
+  What bounds the risk meanwhile: the width is MEASURED with
+  `GetTextExtentPoint32A` rather than laid out, it is clamped to the work
+  area (`if (w > work.right - work.left - EDGE * 2)`), and the text draws
+  with `DT_END_ELLIPSIS`, so the failure mode is a shortened sentence rather
+  than a clipped window. 352px at 96 dpi is about 440 at 120, which still
+  fits the 640 screen measured above with 200 to spare. That is an argument,
+  not a measurement, and it is written here as one.

@@ -4255,11 +4255,34 @@ gap, `RegisterHotKey`, activation) and
 programs, both cancel routes, the dwell, the show delay, and a screenshot
 taken while it was up coming back without it).
 
-Recorded rather than fixed: a full-screen DOS session owns the display on 9x,
-so the strip is absent exactly when the most destructive driving happens; two
-programs driving means two strips, two chords, and one Stop that stops one of
-them; and `BACKLOG.md` 38's reconnect loop, which ran underneath the client's
-own guest test and turned a cancelled run into "the machine disconnected".
+**What finishing the verification found, after the stage looked done.** Two
+programs driving put both strips in the same corner, where the wider one
+covered the other completely -- so the screen named ONE program while two
+were driving, and the Stop a person could see belonged to the other one.
+Measured at 482,541-794,566 against 442,541-794,566, and fixed: `place()`
+stacks a row above any visible window of its own class. The strip's own
+purpose is to say what is happening, so getting that wrong was worse than a
+cosmetic defect.
+
+Also run rather than argued: a 125-character paragraph typed into a
+maximised Notepad with the strip over the text area arrives character for
+character (the keyboard invariant, which `SW_SHOWNOACTIVATE` and having no
+child control are what buy); the strip at 640x480, nothing clipped; and a
+full-screen DOS session, which hides it completely -- the drive runs, the
+log says the strip is up, and the screen is 720x400 of text mode.
+
+Recorded rather than fixed: that DOS case, because on 9x nothing is above a
+full-screen session; the occlusion half of the two-driver case, since each
+program's step-aside reaches only its own window; and `BACKLOG.md` 38's
+reconnect loop, which ran underneath the client's own guest test and turned
+a cancelled run into "the machine disconnected".
+
+Not run: Large Fonts, which needs a restart on 9x and whose cost on this VM
+stage 4 already recorded (a wedge at "Windows is now restarting", a destroy,
+a boot into Safe mode). The width is measured with `GetTextExtentPoint32A`,
+clamped to the work area, and drawn with `DT_END_ELLIPSIS`, so the failure
+mode there is a shortened sentence rather than a clipped window -- an
+argument, and the measurement file says so.
 
 
 ## Stage 4 -- the recorded decisions, the inconsistencies, the small repairs (2026-10-13/14)

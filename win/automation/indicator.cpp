@@ -132,6 +132,31 @@ void DriveIndicator::Strip::place()
 
     x = work.right - w - EDGE;
     y = m_atTop ? work.top + EDGE : work.bottom - m_h - EDGE;
+
+    /* OUT OF THE WAY OF THE OTHER PROGRAM'S STRIP, because both programs
+     * can drive one desktop (BACKLOG 19's "two programs" entry) and both
+     * compute this same corner. Measured with both up on the guest: the
+     * client's landed at 482,541-794,566 and gremote's at 442,541-794,566,
+     * so the wider one covered the other completely and the person was
+     * told that ONE program was driving while two were -- the strip
+     * failing at the one thing it is for. Each extra strip moves a row.
+     */
+    for (HWND other = FindWindowExA(NULL, NULL, IND_CLASS, NULL); other;
+         other = FindWindowExA(NULL, other, IND_CLASS, NULL))
+    {
+        RECT r;
+        if (other == hwnd() || !IsWindowVisible(other)
+            || !GetWindowRect(other, &r))
+            continue;
+        if (m_atTop)
+        {
+            if (r.top <= y && r.bottom > y)
+                y = r.bottom + 2;
+        }
+        else if (r.bottom >= y && r.top < y + m_h)
+            y = r.top - m_h - 2;
+    }
+
     SetWindowPos(hwnd(), HWND_TOPMOST, x, y, w, m_h,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 

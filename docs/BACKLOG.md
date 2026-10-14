@@ -2558,6 +2558,15 @@ knows which tool they are holding -- but recorded as a MECHANISM rather than
 as a count, because "two strips" reads like cosmetics and this one makes a
 step fail.
 
+**One half of it was fixed the same day, because it was worse than
+cosmetics.** Both strips compute the same corner, so with both up the wider
+one covered the other completely and the screen said ONE program was driving
+while two were -- measured at 482,541-794,566 and 442,541-794,566. A person
+pressing the Stop they could see would have stopped the other program.
+`place()` now stacks a row above any visible window of its own class, so both
+are readable with their own chords. The occlusion half above is NOT fixed:
+each program's step-aside reaches only its own window.
+
 **One nearby hazard, and the claim that it got code was false.**
 `TrackPopupMenu` on gremote's tray icon runs a modal loop that captures the
 input queue, so a step list running while somebody opens that menu loses its
