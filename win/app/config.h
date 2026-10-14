@@ -50,6 +50,14 @@ struct ClientConfig
      * five tools from every install that upgrades, with no error anywhere to
      * say why the agent had stopped being able to see anything. */
     bool automation;
+    /* Raise the "Gaston is controlling the desktop" strip while a step list
+     * runs. On by default, and off is for a machine nobody watches and for
+     * the test harness -- see UiConfig::indicator in remote/config.h, which
+     * carries the argument. Not on the Options sheet: it is not a
+     * preference about what the agent may do, it is whether the person is
+     * told, and the only reason to turn it off is one a person editing an
+     * INI already knows they have. */
+    bool indicator;
 
     /* --- General: defaults for NEW chats (an open one keeps its own) --- */
     char defaultModel[64];      /* "" = the bridge's */

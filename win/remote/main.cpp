@@ -340,11 +340,18 @@ bool GremoteApp::initializeServices()
     /* Before the server, which hands it down to the ui lane. A different
      * chord from the client's: both programs can run at once, whichever
      * registers first wins, and the second is told it did not. */
-    m_stop.reset(new GremoteStop(*this));
-    m_indicator.reset(
-        new DriveIndicator(m_stop.get(),
-                           "Gaston Remote is controlling the desktop",
-                           VK_F11, "Stop  Ctrl+Alt+Shift+F11"));
+    if (m_ui.indicator)
+    {
+        m_stop.reset(new GremoteStop(*this));
+        m_indicator.reset(
+            new DriveIndicator(m_stop.get(),
+                               "Gaston Remote is controlling the desktop",
+                               RC_CHORD_VK_REMOTE,
+                               "Stop  Ctrl+Alt+Shift+F11"));
+    }
+    else
+        rc_log("ui: [ui] indicator=0, so nothing will say the desktop is "
+               "being driven");
     if (!initService(m_server,
                      new ServerService(m_config, m_exec, m_ui, m_procs, *this,
                                        m_indicator.get())))

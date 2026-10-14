@@ -69,6 +69,18 @@ def test_screen_control_is_a_setting_and_defaults_to_on(tmp_path):
     assert "ok   automation-off" in out.stdout, out.stdout
 
 
+def test_the_driving_indicator_is_a_setting_and_defaults_to_on(tmp_path):
+    """ROADMAP stage 4b. ON for a missing key, and the opposite argument
+    from `automation`'s: that one defaults on because turning it off would
+    take a capability away from an upgrade, and this one defaults on
+    because the person at the keyboard being TOLD their desktop is being
+    driven is not an optimisation. `indicator=0` is for a box nobody
+    watches, and for a harness whose desktop belongs to somebody."""
+    out = _run(str(tmp_path))
+    assert "ok   indicator-off" in out.stdout, out.stdout
+    assert "ok   indicator-defaults-on" in out.stdout, out.stdout
+
+
 def test_an_unusable_automation_value_refuses_startup(tmp_path):
     """CLAUDE.md: an invalid value refuses startup. Falling back to the
     default on `automation=maybe` would be the permissive reading arrived at

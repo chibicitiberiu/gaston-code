@@ -285,9 +285,14 @@ bool ClientApp::initializeServices()
     rc_net_set_prefs(&m_net, m_prefs.text.c_str(),
                      (unsigned)m_prefs.text.size());
 
-    m_indicator.reset(new DriveIndicator(&m_stop,
-                                         "Gaston is controlling the desktop",
-                                         VK_F12, "Stop  Ctrl+Alt+Shift+F12"));
+    if (m_config.indicator)
+        m_indicator.reset(
+            new DriveIndicator(&m_stop, "Gaston is controlling the desktop",
+                               RC_CHORD_VK_CLIENT,
+                               "Stop  Ctrl+Alt+Shift+F12"));
+    else
+        rc_log("ui: [ui] indicator=0, so nothing will say the desktop is "
+               "being driven");
 
     return initService(m_window, new MainWindow(instance(), m_show, this,
                                                 &m_config, m_store.get(),

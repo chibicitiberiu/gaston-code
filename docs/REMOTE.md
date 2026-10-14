@@ -276,6 +276,10 @@ prevent_sleep=0
 ; 2 the full lane (TREE, SHOT, RUN); 1 read-only (TREE and SHOT, no input);
 ; 0 off -- every ui op refused with automation_off, on the NEXT request
 automation=2
+; 1 raises the "Gaston Remote is controlling the desktop" strip while a step
+; list runs, with a Stop button and Ctrl+Alt+Shift+F11. 0 for a box nobody
+; watches -- and for a test harness, whose desktop belongs to somebody
+indicator=1
 ; 0 skips oleacc.dll even if present
 msaa=1
 max_tree_nodes=2000

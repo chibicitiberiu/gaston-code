@@ -30,7 +30,13 @@ pytestmark = conftest.needs_guest
 SECRET = "not-the-default"
 
 
-def ini(port: int, *, automation: int = 2) -> str:
+#: `indicator=0` in every INI but one, and that is not tidiness. The strip
+#: is a real always-on-top window with a real global hotkey: under Wine it
+#: lands on the developer's own desktop, over whatever they are doing, and
+#: takes Ctrl+Alt+Shift+F11 away from them while the suite runs. The one
+#: test that turns it ON is below -- a switch whose default path no test
+#: takes is how a feature quietly stops existing.
+def ini(port: int, *, automation: int = 2, indicator: int = 0) -> str:
     return (
         "[server]\n"
         "bind=127.0.0.1\n"
@@ -40,13 +46,15 @@ def ini(port: int, *, automation: int = 2) -> str:
         "heartbeat_timeout_s=30\n"
         "[ui]\n"
         f"automation={automation}\n"
+        f"indicator={indicator}\n"
     )
 
 
-def _server(tmp_path, automation=2):
+def _server(tmp_path, automation=2, indicator=0):
     port = conftest.free_port()
     return conftest.GuestServer("gremote.exe", tmp_path,
-                                ini(port, automation=automation), port)
+                                ini(port, automation=automation,
+                                    indicator=indicator), port)
 
 
 # FUNCTION scoped, not module. gremote holds a single-instance mutex, so a
@@ -248,3 +256,51 @@ def test_inproc_is_refused_rather_than_quietly_served(remote):
     with pytest.raises(Refused) as e:
         remote.stream("TREE", {"inproc": "1", "target": "Progman"})
     assert e.value.code == "inproc_unsupported", e.value.code
+
+
+def test_the_driving_indicator_comes_up_with_a_step_list(tmp_path):
+    """The one test that turns the strip ON, because every other INI in this
+    file turns it off and a default path no test takes is how a feature
+    quietly stops existing.
+
+    What proves it came up is gremote's own log, and the line it asserts is
+    written only AFTER CreateWindowEx returned a handle -- so it is evidence
+    of a window, not of an intention. Asked that way rather than with
+    xdotool because a headless box has no X server to ask and this test's
+    news is not "no display".
+
+    The window is made on the indicator's own thread, which is the whole
+    reason that thread exists: the lane is blocked inside StepRunner::run
+    for the length of the list, so a strip hosted there could not paint, a
+    Stop button could not be clicked and the hotkey could not be answered.
+
+    Under Wine, and that proves the seam rather than the platform: it says
+    rc_ui_run raised it and the window was really created. Whether it sits
+    above a full-screen DOS box, whether SW_SHOWNOACTIVATE keeps it out of
+    the foreground on 98 SE, and whether it can be read at 640x480 are the
+    guest's to answer (docs/measurements/indicator-vm-*.txt).
+    """
+    with _server(tmp_path, indicator=1) as server:
+        with Remote("127.0.0.1", SECRET, port=server.port) as r:
+            # Long enough to be looked at: the strip waits 250ms before it
+            # appears, deliberately, so a one-step focus that finishes in
+            # 50ms does not flash a topmost window over everything.
+            run = r.run([{"wait": 1500}], timeout_ms=9000)
+            assert run.status == "ok", run
+        log = server.log()
+    assert "indicator: up" in log, log
+    assert "[ui] indicator=0" not in log, log
+
+
+def test_the_indicator_can_be_turned_off(tmp_path):
+    """And the switch works, said in the log for the same reason: a box
+    nobody watches, or a harness whose desktop is somebody's own, has to be
+    able to refuse a window that takes a global hotkey. Every other test in
+    this file depends on this path."""
+    with _server(tmp_path, indicator=0) as server:
+        with Remote("127.0.0.1", SECRET, port=server.port) as r:
+            run = r.run([{"wait": 50}], timeout_ms=9000)
+            assert run.status == "ok", run
+        log = server.log()
+    assert "[ui] indicator=0" in log, log
+    assert "indicator: up" not in log, log

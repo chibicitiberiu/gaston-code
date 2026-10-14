@@ -83,6 +83,17 @@ struct UiConfig
      * startup. */
     long automation;
 
+    /* Raise the "Gaston Remote is controlling the desktop" strip while a
+     * step list runs. On by default: the premise of this program is a box
+     * nobody can see, and the one person who CAN see it should be told
+     * when it is being driven and given two ways to stop it.
+     *
+     * Off is for a box that genuinely has nobody in front of it, and for
+     * the test harness: tests/python/remote drives real step lists through
+     * Wine with DISPLAY inherited, so a strip would land on the
+     * developer's own desktop and take a real hotkey with it. */
+    bool indicator;
+
     /* 0 means do not use oleacc even when it is there: the ui worker
      * releases it at startup, the walk falls back to the window tree, and
      * HELLO says msaa=0. True of the code since 2026-10-11; before that this

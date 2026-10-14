@@ -29,6 +29,7 @@ static const bool DEFAULT_PREVENT_SLEEP = false;
  * are the handlers' own numbers, so a gremote with no [ui] section behaves
  * exactly as the client does. */
 static const long DEFAULT_AUTOMATION = 2;
+static const bool DEFAULT_INDICATOR = true;
 static const bool DEFAULT_MSAA = true;
 static const long DEFAULT_MAX_TREE_NODES = 4000;
 static const long DEFAULT_CALL_TIMEOUT_MS = 2000;
@@ -41,7 +42,7 @@ static const char *const SERVER_KEYS[] = {
 static const char *const EXEC_KEYS[] = { "max_timeout_ms", "max_output_kb" };
 static const char *const MACHINE_KEYS[] = { "prevent_sleep" };
 static const char *const UI_KEYS[] = {
-    "automation", "msaa", "max_tree_nodes", "call_timeout_ms",
+    "automation", "indicator", "msaa", "max_tree_nodes", "call_timeout_ms",
     "script_ms", "step_ms"
 };
 
@@ -89,6 +90,7 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
     exec->maxOutputKb = DEFAULT_MAX_OUTPUT_KB;
     machine->preventSleep = DEFAULT_PREVENT_SLEEP;
     ui->automation = DEFAULT_AUTOMATION;
+    ui->indicator = DEFAULT_INDICATOR;
     ui->msaa = DEFAULT_MSAA;
     ui->maxTreeNodes = DEFAULT_MAX_TREE_NODES;
     ui->callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS;
@@ -126,7 +128,7 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
         m_ini.checkKeys("machine", MACHINE_KEYS, 1) &&
         m_ini.getBool("machine", "prevent_sleep", DEFAULT_PREVENT_SLEEP,
                       &machine->preventSleep) &&
-        m_ini.checkKeys("ui", UI_KEYS, 6) &&
+        m_ini.checkKeys("ui", UI_KEYS, 7) &&
         /* 0..2 and REFUSED outside it, not clamped. An unrecognised level
          * means the file knows something this build does not, and both
          * guesses are wrong: NONE throws away a capability somebody asked
@@ -134,6 +136,8 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
          * handshake follows the same rule for the same reason. */
         m_ini.getInt("ui", "automation", DEFAULT_AUTOMATION, 0, 2,
                      &ui->automation) &&
+        m_ini.getBool("ui", "indicator", DEFAULT_INDICATOR,
+                      &ui->indicator) &&
         m_ini.getBool("ui", "msaa", DEFAULT_MSAA, &ui->msaa) &&
         m_ini.getInt("ui", "max_tree_nodes", DEFAULT_MAX_TREE_NODES,
                      1, 20000, &ui->maxTreeNodes) &&
@@ -187,6 +191,7 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
         m_ini.setInt("exec", "max_output_kb", exec->maxOutputKb);
         m_ini.setBool("machine", "prevent_sleep", machine->preventSleep);
         m_ini.setInt("ui", "automation", ui->automation);
+        m_ini.setBool("ui", "indicator", ui->indicator);
         m_ini.setBool("ui", "msaa", ui->msaa);
         m_ini.setInt("ui", "max_tree_nodes", ui->maxTreeNodes);
         m_ini.setInt("ui", "call_timeout_ms", ui->callTimeoutMs);

@@ -85,6 +85,7 @@ int main(int argc, char **argv)
         rc_strcpy(out.secret, sizeof out.secret, "not-dev-secret");
         out.autoscroll = false;
         out.automation = false;
+        out.indicator = false;
         rc_strcpy(out.syncRoot, sizeof out.syncRoot, "C:\\WORK\\SUB");
         rc_strcpy(out.defaultModel, sizeof out.defaultModel, "haiku");
         rc_strcpy(out.defaultEffort, sizeof out.defaultEffort, "low");
@@ -123,6 +124,7 @@ int main(int argc, char **argv)
         eqS("secret", in.secret, out.secret);
         eqL("autoscroll", in.autoscroll ? 1 : 0, out.autoscroll ? 1 : 0);
         eqL("automation", in.automation ? 1 : 0, out.automation ? 1 : 0);
+        eqL("indicator", in.indicator ? 1 : 0, out.indicator ? 1 : 0);
         eqS("sync_root", in.syncRoot, out.syncRoot);
         eqS("model", in.defaultModel, out.defaultModel);
         eqS("effort", in.defaultEffort, out.defaultEffort);
@@ -221,6 +223,26 @@ int main(int argc, char **argv)
         ConfigStore store(dir);
         bool loaded = store.load(&cfg);
         truth("automation-off", loaded && !cfg.automation, store.error());
+    }
+    {
+        /* The driving indicator's own switch, and it defaults ON: a person
+         * at the keyboard being told the desktop is being driven is not an
+         * optimisation. `indicator=0` is for a machine nobody watches, and
+         * the key has to be WRITABLE as well as readable -- an INI that
+         * carries it must still load, which is what UI_KEYS is for. */
+        writeFile(path.str(), "[ui]\r\nindicator=0\r\n");
+        ClientConfig cfg;
+        ConfigStore store(dir);
+        bool loaded = store.load(&cfg);
+        truth("indicator-off", loaded && !cfg.indicator, store.error());
+    }
+    {
+        writeFile(path.str(), "[ui]\r\nautoscroll=1\r\n");
+        ClientConfig cfg;
+        ConfigStore store(dir);
+        bool loaded = store.load(&cfg);
+        truth("indicator-defaults-on", loaded && cfg.indicator,
+              store.error());
     }
     {
         /* A list key nobody numbers is refused, like any unknown key: the
