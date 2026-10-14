@@ -728,8 +728,9 @@ re-derived:
   underneath the client's own guest test, a full HELLO-and-attach once per
   second, and turned a cancelled run into "the machine disconnected".
 - **The strip scales with the DPI and not with the screen, measured in all
-  four corners: 352x25 at 96 dpi, 426x28 at 120, and the same 426 at 120 on
-  a 640x480 screen with 207 pixels to spare.** Display Properties itself
+  four corners, and they come out as TWO values rather than four: 352x25 at
+  96 dpi on both screens, 426 wide at 120 on both, with 207 pixels to spare
+  in the tightest.** Display Properties itself
   does not fit in that last corner -- its own buttons are below the bottom
   edge -- which is the measure of how tight it is. The width is taken with
   `GetTextExtentPoint32A` rather than laid out, which is the whole reason it

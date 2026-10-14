@@ -4284,7 +4284,7 @@ argued from the other three.
 
                  96 dpi            120 dpi
     800x600      352 x 25          426 x 28
-    640x480      fits, seen        426 wide, 207 spare
+    640x480      352 x 25          426 wide, 207 spare
 
 Nothing clipped anywhere. The width tracks the DPI and not the screen,
 because it is measured with `GetTextExtentPoint32A` rather than laid out --

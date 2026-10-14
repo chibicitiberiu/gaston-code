@@ -111,6 +111,16 @@ Then the chord, and the client's log says exactly what was wanted:
 which is the Stop button's own log line and the INTERRUPT frame going out.
 That is the whole client-only path, on real hardware.
 
+RE-RUN 2026-10-15 on the binary built with the stacking fix, because the
+first run predated it and a measurement of an older image is a measurement
+of an older image:
+
+    00:38:21.810 indicator: up, cancel with Stop  Ctrl+Alt+Shift+F12
+    00:38:26.210 indicator: Stop pressed at the keyboard
+    00:38:26.260 stop requested
+
+50ms this time, and the strip in the screenshot beside it.
+
 WHAT THE RUN COULD NOT SEE, AND WHY
 ------------------------------------
 The agent did not report `cancelled`; it reported that the machine had
@@ -234,8 +244,17 @@ to reach them with Alt+A instead of a click. Worth recording because it is
 the measure of how tight that corner is -- Windows' own dialog loses to it,
 and a 426x28 strip does not.
 
-All four corners are now measured:
+All four corners are now measured, against a bare desktop so the numbers
+come from the strip rather than from whatever was behind it
+(indicator-vm-20261015-640x480-smallfonts.png is the one re-taken for that
+reason -- the first 640x480 shot had the client's own window behind the
+strip, which is fine to look at and useless to measure):
 
                  96 dpi            120 dpi
     800x600      352 x 25          426 x 28
-    640x480      fits, seen        426 wide, 207 spare
+    640x480      352 x 25          426 wide, 207 spare
+
+TWO VALUES, NOT FOUR, and that is the result. The width is identical at both
+resolutions for a given font size, because it is measured from the text and
+clamped to the work area -- the screen only decides whether it fits, and at
+the smallest and largest it does.
