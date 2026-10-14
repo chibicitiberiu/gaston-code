@@ -272,6 +272,23 @@ UiOps::UiOps(Connection &conn, const UiConfig &cfg, DriveOverlay *overlay)
     m_stopId[0] = '\0';
 }
 
+/* EMPTY, AND m_ctx IS A RAW new/delete, AGAINST CLAUDE.md's guard rule.
+ *
+ * Looked at again in stage 4b, while a thread-owning object was being added
+ * beside it, and left alone deliberately. UiContext holds a COM object and
+ * a message filter, both bound to the ui lane's thread and apartment; it is
+ * made in onThreadStart and deleted in onThreadStop, on that thread. A
+ * UniqueObj member would ALSO free it from ~UiOps -- which runs on the
+ * accept loop's thread, inside ~Session, and reaches a Session that is
+ * leaked rather than joined when the lane will not stop (server.cpp's
+ * "leak rather than free under it"). That is the case the guard rule exists
+ * to prevent, arriving by the guard.
+ *
+ * So the two rules point opposite ways here and the apartment one wins. The
+ * indicator next door is not in the same position: it owns its own thread,
+ * nothing of it is apartment-bound, and its destructor joins or leaks on
+ * its own terms.
+ */
 UiOps::~UiOps()
 {
 }
