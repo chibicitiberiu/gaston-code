@@ -135,25 +135,40 @@ static void exeDir(char *out, unsigned n)
     out[n - 1] = '\0';
 }
 
+class GremoteApp;
+
 /* What Stop does here. There is no turn to interrupt and no Stop button in
  * a window, so the equivalent gesture is the one this program already has
  * at the keyboard: the tray's "screen automation: off". The run in flight
- * is cancelled by the flag the indicator raises before this is called. */
+ * is cancelled by the flag the indicator raises before this is called.
+ *
+ * Through the App rather than holding the tray, because the order runs the
+ * other way: the server needs the indicator, the indicator needs this, and
+ * the tray is built after the server. Resolved when Stop is pressed, which
+ * is the only moment it has to be true. */
 class GremoteStop : public StopSink
 {
 public:
-    explicit GremoteStop(TrayService &tray) : m_tray(&tray) {}
-    void onStop() { m_tray->requestAutomationOff(); }
+    explicit GremoteStop(GremoteApp &app) : m_app(&app) {}
+    void onStop();
 private:
     GremoteStop(const GremoteStop &);
     GremoteStop &operator=(const GremoteStop &);
-    TrayService *m_tray;
+    GremoteApp *m_app;
 };
 
 class GremoteApp : public App
 {
 public:
     explicit GremoteApp(HINSTANCE instance);
+
+    /* Stop, pressed on the driving indicator. Any thread: the tray posts
+     * to its own window rather than touching the tooltip from here. */
+    void stopFromIndicator()
+    {
+        if (m_tray.valid())
+            m_tray->requestAutomationOff();
+    }
 
 protected:
     bool initialize();
@@ -194,6 +209,11 @@ private:
     UniqueObj<GremoteStop> m_stop;
     UniqueObj<DriveIndicator> m_indicator;
 };
+
+void GremoteStop::onStop()
+{
+    m_app->stopFromIndicator();
+}
 
 GremoteApp::GremoteApp(HINSTANCE instance)
     : App(instance), m_interactive(false), m_registered(false),
@@ -317,8 +337,17 @@ bool GremoteApp::initializeServices()
      * updater is already waiting for that to happen. Why that is not the
      * remote QUIT docs/REMOTE.md forbids is argued above
      * ControlOps::update. */
+    /* Before the server, which hands it down to the ui lane. A different
+     * chord from the client's: both programs can run at once, whichever
+     * registers first wins, and the second is told it did not. */
+    m_stop.reset(new GremoteStop(*this));
+    m_indicator.reset(
+        new DriveIndicator(m_stop.get(),
+                           "Gaston Remote is controlling the desktop",
+                           VK_F11, "Stop  Ctrl+Alt+Shift+F11"));
     if (!initService(m_server,
-                     new ServerService(m_config, m_exec, m_ui, m_procs, *this)))
+                     new ServerService(m_config, m_exec, m_ui, m_procs, *this,
+                                       m_indicator.get())))
         return false;
     /* Dependency order: the tray reads the server's status, so the server
      * exists first. The tray never fails startup -- see TrayService::init
@@ -326,19 +355,9 @@ bool GremoteApp::initializeServices()
      * icon is up before the accept loop begins, and so that a cold boot
      * with no shell has already logged the one line that explains why
      * there is no icon. */
-    if (!initService(m_tray,
-                     new TrayService(*this, instance(), m_config, m_machine, m_ui,
-                                     *m_server.get())))
-        return false;
-    /* After the tray, because its Stop is the tray's menu item. A
-     * different chord from the client's: whichever program registers
-     * first wins, and the second is told it did not. */
-    m_stop.reset(new GremoteStop(*m_tray.get()));
-    m_indicator.reset(
-        new DriveIndicator(m_stop.get(),
-                           "Gaston Remote is controlling the desktop",
-                           VK_F11, "Stop  Ctrl+Alt+Shift+F11"));
-    return true;
+    return initService(m_tray,
+                       new TrayService(*this, instance(), m_config, m_machine, m_ui,
+                                       *m_server.get()));
 }
 
 bool GremoteApp::startServices()

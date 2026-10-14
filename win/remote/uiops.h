@@ -27,11 +27,12 @@
 #include "wire/connection.h"
 
 class UiContext;
+class DriveOverlay;
 
 class UiOps : public LaneHandler
 {
 public:
-    UiOps(Connection &conn, const UiConfig &cfg);
+    UiOps(Connection &conn, const UiConfig &cfg, DriveOverlay *overlay);
     ~UiOps();
 
     /* LaneHandler, on the ui thread. Both free `f`. */
@@ -73,6 +74,7 @@ private:
 
     Connection     *m_conn;
     const UiConfig *m_cfg;
+    DriveOverlay   *m_overlay;
     ReplyGate      *m_gate;
 
     /* Built on the ui thread and destroyed there: every member of it is

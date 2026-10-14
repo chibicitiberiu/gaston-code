@@ -16,6 +16,7 @@
 #include "wire/frame.h"
 
 class UiContext;
+class DriveOverlay;
 
 /* Hand a request to the desktop worker. Returns 0 if it was queued.
  *
@@ -30,7 +31,8 @@ int rc_uirpc_post(rc_frame *f);
  * through; it is written once at start and once at stop, both from the
  * owning thread, and read by the reader thread through an interlocked
  * load. */
-void rc_uirpc_attach(DWORD threadId, rc_net *net, UiContext *ctx);
+void rc_uirpc_attach(DWORD threadId, rc_net *net, UiContext *ctx,
+                     DriveOverlay *overlay);
 void rc_uirpc_detach(void);
 
 /* WM_APP rather than WM_USER: a WM_USER value belongs to a window class, and

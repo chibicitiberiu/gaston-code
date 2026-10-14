@@ -36,10 +36,12 @@ enum { BAD_SECRET_PAUSE_MS = 1000 };
 
 Session::Session(const ServerConfig &cfg, const ExecConfig &exec,
                  const UiConfig &ui, unsigned long generation,
-                 Processes &procs, App &app)
-    : m_cfg(&cfg), m_uiCfg(&ui), m_procs(&procs), m_generation(generation),
+                 Processes &procs, App &app, DriveOverlay *overlay)
+    : m_cfg(&cfg), m_uiCfg(&ui), m_overlay(overlay), m_procs(&procs),
+      m_generation(generation),
       m_conn(this, true), m_control(procs, m_conn, app),
-      m_jobOps(exec, m_conn), m_fsOps(m_conn), m_uiOps(m_conn, ui), m_dead(0),
+      m_jobOps(exec, m_conn), m_fsOps(m_conn), m_uiOps(m_conn, ui, overlay),
+      m_dead(0),
       m_authed(false), m_deflate(false)
 {
     /* Deflate was off outright in v0: the only large payload is a screenshot
@@ -426,8 +428,10 @@ bool Session::end()
 /* ------------------------------------------------------- ServerService */
 
 ServerService::ServerService(const ServerConfig &cfg, const ExecConfig &exec,
-                             const UiConfig &ui, Processes &procs, App &app)
-    : m_cfg(&cfg), m_exec(&exec), m_ui(&ui), m_procs(&procs), m_app(&app),
+                             const UiConfig &ui, Processes &procs, App &app,
+                             DriveOverlay *overlay)
+    : m_cfg(&cfg), m_exec(&exec), m_ui(&ui), m_overlay(overlay),
+      m_procs(&procs), m_app(&app),
       m_stop(0),
       m_status(STATUS_BINDING), m_boundPort(0), m_peerAddr(0), m_served(0),
       m_generation(0)
@@ -542,7 +546,7 @@ void ServerService::serve(SocketGuard &s)
 
     m_generation++;
     m_session.reset(new Session(*m_cfg, *m_exec, *m_ui, m_generation,
-                                *m_procs, *m_app));
+                                *m_procs, *m_app, m_overlay));
     if (!m_session.valid() || !m_session->begin(s.get()))
     {
         rc_log("server: could not take up the connection from %s",

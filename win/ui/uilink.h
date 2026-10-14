@@ -57,6 +57,8 @@ struct UiLimits
     }
 };
 
+class DriveOverlay;
+
 class UiLink
 {
 public:
@@ -111,6 +113,17 @@ public:
      * inside any wait, at every node of a walk and every strip of a capture.
      * Null when this caller has no cancel. */
     virtual volatile LONG *stopFlag() = 0;
+
+    /* The strip that tells the person at the keyboard that the desktop is
+     * being driven, or null where there is nobody to tell -- a check, a
+     * probe, a box configured without one.
+     *
+     * Not pure, and that is the point: the default keeps every caller that
+     * has no indicator from naming DriveIndicator, and wlink pulls a
+     * library member in on any symbol reference. Through this the engine
+     * calls nothing but vtable slots, so the window, the thread and the
+     * paint code stay out of uicheck, autocheck and the probes. */
+    virtual DriveOverlay *overlay() { return 0; }
 };
 
 #endif

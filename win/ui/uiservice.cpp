@@ -5,8 +5,8 @@
 #include <process.h>
 #include <new>
 
-UiService::UiService(rc_net *net)
-    : m_net(net), m_tid(0)
+UiService::UiService(rc_net *net, DriveOverlay *overlay)
+    : m_net(net), m_overlay(overlay), m_tid(0)
 {
 }
 
@@ -70,7 +70,7 @@ void UiService::body()
     if (!ctx->watch.start(0, 0, true))
         rc_log("desktop: no event feed; waits will poll");
 
-    rc_uirpc_attach(GetCurrentThreadId(), m_net, ctx);
+    rc_uirpc_attach(GetCurrentThreadId(), m_net, ctx, m_overlay);
     ctx->ready = true;
     rc_log("desktop: worker up (msaa=%d, feed=%d)",
            ctx->msaa.available() ? 1 : 0, ctx->watch.running() ? 1 : 0);

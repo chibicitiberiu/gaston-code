@@ -18,10 +18,15 @@
 #include "net/net.h"
 #include "ui/uicontext.h"
 
+class DriveOverlay;
+
 class UiService : public Service
 {
 public:
-    explicit UiService(rc_net *net);
+    /* `overlay` is the strip that says the desktop is being driven,
+     * or null. Owned by the App: it outlives this service, and its
+     * window and chord are process-scoped where this is not. */
+    UiService(rc_net *net, DriveOverlay *overlay);
 
     const char *name() const;
     bool init();
@@ -33,7 +38,8 @@ private:
     static unsigned __stdcall entry(void *self);
     void body();
 
-    rc_net  *m_net;
+    rc_net       *m_net;
+    DriveOverlay *m_overlay;
     Handle   m_thread;
     DWORD    m_tid;
     UniqueObj<UiContext> m_ctx;

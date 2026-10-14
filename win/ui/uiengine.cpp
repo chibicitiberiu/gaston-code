@@ -33,6 +33,8 @@
  * runner looks at it between steps and inside every wait.
  */
 #include "ui/uiengine.h"
+
+#include "automation/overlay.h"
 #include "ui/uirec.h"
 #include "automation/resolve.h"
 #include "automation/input.h"
@@ -850,8 +852,24 @@ void rc_ui_run(UiLink &link, UiContext *ctx, rc_frame *f)
                       ctx->watch, ctx->input, &ctx->deadline);
     runner.setCancel(link.stopFlag());
 
+    /* Everything above this line can refuse without touching the desktop,
+     * which is why the indicator is raised HERE and not at the top: the
+     * three early returns above are the ones uicheck drives with a null
+     * context, and a strip that appeared for a refused request would be
+     * saying something untrue.
+     *
+     * The runner gets it too, because the strip is a topmost window of our
+     * own and a click underneath it would otherwise stall on the occlusion
+     * check -- it steps aside for the step and comes back after. */
+    DriveOverlay *ov = link.overlay();
+    runner.setOverlay(ov);
+    if (ov)
+        ov->driveStarting(link.stopFlag());
+
     StepReport failed;
     int at = runner.run(steps.get(), count, o, lim, sink, failed);
+    if (ov)
+        ov->driveEnded();
     if (runner.releasedAtEnd())
         sink.put("released=1\n");
 

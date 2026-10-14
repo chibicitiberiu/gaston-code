@@ -1,4 +1,6 @@
 #include "ui/uirpc.h"
+
+#include "automation/overlay.h"
 #include "ui/uiengine.h"
 #include "ui/uirec.h"
 #include "ui/inject.h"
@@ -22,6 +24,7 @@
 static volatile LONG g_ui_tid;
 static rc_net      *g_ui_net;
 static UiContext   *g_ui_ctx;
+static DriveOverlay *g_ui_overlay;
 
 /* How many requests may be waiting. REMOTE.md wants one in flight per lane;
  * the queue is serviced serially so that holds, and this bounds how far
@@ -72,10 +75,12 @@ static char          g_run_id[48];
  * arrives, which is cleared by the next one. */
 static char          g_cancel_id[48];
 
-void rc_uirpc_attach(DWORD threadId, rc_net *net, UiContext *ctx)
+void rc_uirpc_attach(DWORD threadId, rc_net *net, UiContext *ctx,
+                     DriveOverlay *overlay)
 {
     g_ui_net = net;
     g_ui_ctx = ctx;
+    g_ui_overlay = overlay;
     g_ui_queued = 0;
     /* Both id buffers are cleared here, not just on each request. The
      * bridge restarts its ui ids at u1 on a fresh session, so a cancel
@@ -222,6 +227,7 @@ public:
 
     virtual const UiLimits &limits() const { return m_limits; }
     virtual volatile LONG *stopFlag() { return &g_run_cancel; }
+    virtual DriveOverlay *overlay() { return g_ui_overlay; }
 
 private:
     rc_net     *m_net;

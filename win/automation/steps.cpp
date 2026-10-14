@@ -1,4 +1,5 @@
 #include "automation/steps.h"
+#include "automation/overlay.h"
 #include "automation/select.h"
 #include "core/rc_cpp.h"
 #include "core/str.h"
@@ -29,7 +30,7 @@ StepLimits::StepLimits() : scriptMs(120000), stepMs(30000), settleMs(0)
 StepRunner::StepRunner(TreeWalker &walker, MsaaSource *msaa, UiWatch &watch,
                        Input &input, CallDeadline *deadline)
     : m_walker(walker), m_msaa(msaa), m_watch(watch), m_input(input),
-      m_deadline(deadline), m_cancel(0), m_expectTop(0),
+      m_deadline(deadline), m_cancel(0), m_overlay(0), m_expectTop(0),
       m_releasedAtEnd(false)
 {
 }
@@ -720,6 +721,33 @@ static HKL foregroundLayout(void)
     return GetKeyboardLayout(fg ? GetWindowThreadProcessId(fg, NULL) : 0);
 }
 
+/* The strip out of the way for one step, and back afterwards however the
+ * step leaves. Asking it only when it is actually over the point is what
+ * keeps it from blinking once per step on a list that never goes near it.
+ *
+ * ONE bracket, held across the whole click: clickButtonAt calls clickAt
+ * internally, so a guard in each of them would show the strip again at the
+ * inner one's destructor -- before the outer one's mouse_event. */
+class StepRunner::Aside
+{
+public:
+    Aside() : m_ov(0) {}
+    bool take(DriveOverlay *ov, int x, int y)
+    {
+        if (!ov || !ov->covers(x, y))
+            return true;
+        if (!ov->stepAside(400, false))
+            return false;
+        m_ov = ov;
+        return true;
+    }
+    ~Aside() { if (m_ov) m_ov->resume(); }
+private:
+    Aside(const Aside &);
+    Aside &operator=(const Aside &);
+    DriveOverlay *m_ov;
+};
+
 bool StepRunner::runOne(const Step &s, DWORD budget, StepReport &r)
 {
     InputResult x;
@@ -745,8 +773,16 @@ bool StepRunner::runOne(const Step &s, DWORD budget, StepReport &r)
         HWND expect = 0;
         int px = 0, py = 0;
         bool positioned = stepHasTarget(s);
+        Aside aside;
         if (positioned && !pointFor(s.target, budget, expect, px, py, r))
             return false;
+        /* Before anything looks at what is under the point: the first
+         * thing clickButtonAt does for an unnamed target is ask isOurs
+         * about it, and our own strip over it would be REFUSED_SELF rather
+         * than occluded. */
+        if (!aside.take(m_overlay, px, py))
+            return fail(r, inputStatus(INPUT_OCCLUDED),
+                        "the Gaston indicator did not get out of the way");
         if (s.kind == STEP_CLICK)
         {
             x = m_input.clickButtonAt(expect, px, py, s.button,
@@ -762,9 +798,16 @@ bool StepRunner::runOne(const Step &s, DWORD budget, StepReport &r)
             else
             {
                 POINT p;
+                HWND under;
                 p.x = px;
                 p.y = py;
-                m_expectTop = Input::rootOf(WindowFromPoint(p));
+                under = WindowFromPoint(p);
+                /* Never one of ours. The strip is back by now, and
+                 * anchoring the rest of the list to a window the agent
+                 * cannot see in any TREE is a silently wrong step list
+                 * rather than a refusal. run() guards the same way when it
+                 * seeds m_expectTop from the foreground. */
+                m_expectTop = Input::isOurs(under) ? 0 : Input::rootOf(under);
             }
             return true;
         }

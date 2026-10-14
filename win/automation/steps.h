@@ -134,6 +134,8 @@ struct StepLimits
     StepLimits();
 };
 
+class DriveOverlay;
+
 class StepRunner
 {
 public:
@@ -143,6 +145,14 @@ public:
                Input &input, CallDeadline *deadline);
 
     void setCancel(volatile LONG *flag) { m_cancel = flag; }
+
+    /* The "agent is driving" strip, when there is one. It is a topmost
+     * window of our own, so a click under it would stall on clickAt's
+     * occlusion check -- SetForegroundWindow cannot raise a normal window
+     * above a topmost one, so the settle loop just spins and the step
+     * fails `occluded` naming our own class. It steps aside for the step
+     * and comes back after. Null everywhere there is nobody to tell. */
+    void setOverlay(DriveOverlay *ov) { m_overlay = ov; }
 
     /* Runs `steps` against `base` (scope, excludePid, timeouts for walks).
      * Returns the index of the step that failed, or -1 when every one did
@@ -156,6 +166,8 @@ public:
     bool releasedAtEnd() const { return m_releasedAtEnd; }
 
 private:
+    class Aside;
+
     bool runOne(const Step &s, DWORD budget, StepReport &r);
     bool resolveOne(const char *sel, DWORD budget, HWND &out,
                     StepReport &r);
@@ -177,6 +189,7 @@ private:
     Input         &m_input;
     CallDeadline  *m_deadline;
     volatile LONG *m_cancel;
+    DriveOverlay  *m_overlay;
 
     WalkOptions    m_base;
     StepLimits     m_limits;

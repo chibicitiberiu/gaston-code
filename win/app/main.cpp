@@ -293,7 +293,7 @@ bool ClientApp::initializeServices()
                                                 &m_config, m_store.get(),
                                                 m_exeDir, &m_net, &m_prefs)) &&
            initService(m_connection, new ConnectionService(&m_net)) &&
-           initService(m_ui, new UiService(&m_net));
+           initService(m_ui, new UiService(&m_net, m_indicator.get()));
 }
 
 bool ClientApp::startServices()

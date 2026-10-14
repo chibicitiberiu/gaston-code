@@ -1,5 +1,7 @@
 #include "remote/uiops.h"
 
+#include "automation/overlay.h"
+
 #include "ui/uiengine.h"
 #include "ui/uilink.h"
 #include "ui/uicontext.h"
@@ -34,8 +36,9 @@ enum { QUIET_TICKS_BEFORE_UNHOOK = 30 };
 class RespUiLink : public UiLink
 {
 public:
-    RespUiLink(Responder &r, const UiConfig &cfg, volatile LONG *stop)
-        : m_r(&r), m_cfg(&cfg), m_stop(stop)
+    RespUiLink(Responder &r, const UiConfig &cfg, volatile LONG *stop,
+               DriveOverlay *overlay)
+        : m_r(&r), m_cfg(&cfg), m_stop(stop), m_overlay(overlay)
     {
         m_limits.maxNodes = (int)cfg.maxTreeNodes;
         m_limits.maxNodesTop = (int)cfg.maxTreeNodes;
@@ -105,6 +108,7 @@ public:
 
     virtual const UiLimits &limits() const { return m_limits; }
     virtual volatile LONG *stopFlag() { return m_stop; }
+    virtual DriveOverlay *overlay() { return m_overlay; }
 
 private:
     RespUiLink(const RespUiLink &);
@@ -113,6 +117,7 @@ private:
     Responder      *m_r;
     const UiConfig *m_cfg;
     volatile LONG  *m_stop;
+    DriveOverlay   *m_overlay;
     UiLimits        m_limits;
 };
 
@@ -190,7 +195,7 @@ private:
 
 void UiOps::shot(Responder &r, rc_frame *f)
 {
-    RespUiLink link(r, *m_cfg, &m_stopFlag);
+    RespUiLink link(r, *m_cfg, &m_stopFlag, m_overlay);
     const char *k[4];
     const char *v[4];
     char w[16], h[16], bpp[16], bytes[16];
@@ -248,8 +253,9 @@ void UiOps::shot(Responder &r, rc_frame *f)
 
 /* ---- the lane --------------------------------------------------------- */
 
-UiOps::UiOps(Connection &conn, const UiConfig &cfg)
-    : m_conn(&conn), m_cfg(&cfg), m_gate(0), m_ctx(0), m_com(false),
+UiOps::UiOps(Connection &conn, const UiConfig &cfg, DriveOverlay *overlay)
+    : m_conn(&conn), m_cfg(&cfg), m_overlay(overlay), m_gate(0), m_ctx(0),
+      m_com(false),
       m_stopFlag(0), m_watching(false), m_quietTicks(0)
 {
     m_runId[0] = '\0';
@@ -422,7 +428,7 @@ void UiOps::handle(rc_frame *f)
         m_watching = true;
 
     {
-        RespUiLink link(r, *m_cfg, &m_stopFlag);
+        RespUiLink link(r, *m_cfg, &m_stopFlag, m_overlay);
         if (strcmp(f->type, "TREE") == 0)
         {
             /* `inproc` is REFUSED, not ignored. gremote does not carry the

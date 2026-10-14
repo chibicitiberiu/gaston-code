@@ -11,6 +11,7 @@
  * long for the buffer.
  */
 #include "ui/uirec.h"
+#include "automation/overlay.h"
 #include "ui/uiengine.h"
 #include "net/caps.h"
 #include "ui/inject.h"
@@ -519,6 +520,39 @@ static void stepCodec(void)
 
 /* ---- the refusal ladder, with no desktop under it -------------------- */
 
+/* The driving indicator, counted instead of shown. The real one is a
+ * topmost window on its own thread (win/automation/indicator.cpp); what
+ * this pins is the SEAM -- that rc_ui_run raises it around a list that
+ * runs, lowers it however the list ends, and does not raise it at all for
+ * a request that is refused before the desktop is touched. A strip that
+ * appeared for a refused request would be saying something untrue, and
+ * nothing else in the tree can catch that without a desktop. */
+class CountingOverlay : public DriveOverlay
+{
+public:
+    CountingOverlay() : m_up(0), m_down(0), m_cancel(0) {}
+    virtual void driveStarting(volatile LONG *cancel)
+    {
+        m_up++;
+        m_cancel = cancel;
+    }
+    virtual void driveEnded() { m_down++; }
+    virtual bool covers(int, int) { return false; }
+    virtual bool coversRect(const RECT &) { return false; }
+    virtual bool stepAside(DWORD, bool) { return true; }
+    virtual void resume() {}
+
+    int up() const { return m_up; }
+    int down() const { return m_down; }
+    volatile LONG *cancel() const { return m_cancel; }
+
+private:
+    CountingOverlay(const CountingOverlay &);
+    CountingOverlay &operator=(const CountingOverlay &);
+    int m_up, m_down;
+    volatile LONG *m_cancel;
+};
+
 /* A UiLink that records instead of sending. The handlers moved behind this
  * interface on 2026-10-02 (REMOTE.md step 6), and the refusals below are
  * the first part of them reachable without a socket and a live desktop.
@@ -536,7 +570,7 @@ public:
     FakeUiLink(int level) : m_level(level), m_ended(false), m_nkv(0),
                             m_reported(0), m_bulk(0),
                             m_records(0), m_bytes(0),
-                            m_stop(0)
+                            m_stop(0), m_overlay(0)
     {
         m_status[0] = '\0';
         m_detail[0] = '\0';
@@ -583,7 +617,9 @@ public:
     virtual int automationLevel() const { return m_level; }
     virtual const UiLimits &limits() const { return m_limits; }
     virtual volatile LONG *stopFlag() { return &m_stop; }
+    virtual DriveOverlay *overlay() { return m_overlay; }
 
+    void setOverlay(DriveOverlay *ov) { m_overlay = ov; }
     void raise() { m_stop = 1; }
     const char *status() const { return m_status; }
     const char *detail() const { return m_detail; }
@@ -605,6 +641,7 @@ private:
     int      m_bytes;
     UiLimits m_limits;
     volatile LONG m_stop;
+    DriveOverlay *m_overlay;
     char     m_status[32];
     char     m_detail[160];
     char     m_body[256];
@@ -984,6 +1021,81 @@ static void refusals(void)
         }
         else
             say("a-header-is-clamped-to-the-links-ceiling", false, "no frame");
+    }
+
+    /* The driving indicator's seam. Three things, and the first is the one
+     * that needs a check rather than a reading: a refusal must not raise
+     * it. The strip says "Gaston is controlling the desktop", so raising
+     * it for a request that was refused before anything touched the
+     * desktop would be a lie told to the person at the keyboard. */
+    {
+        k[0] = "id"; v[0] = "u20";
+        if (mkFrame(f, raw, sizeof(raw), "UIRUN", k, v, 1, "focus\tsel=X\n"))
+        {
+            FakeUiLink link(RC_AUTOMATION_SCREEN);
+            CountingOverlay ov;
+            link.setOverlay(&ov);
+            rc_ui_run(link, NULL, &f);
+            rc_strf(detail, sizeof(detail), "%s, up=%d down=%d",
+                    link.status(), ov.up(), ov.down());
+            say("the-indicator-is-not-raised-for-a-refused-request",
+                !strcmp(link.status(), "automation_off")
+                && ov.up() == 0 && ov.down() == 0, detail);
+            rc_frame_free(&f);
+        }
+        else
+            say("the-indicator-is-not-raised-for-a-refused-request", false,
+                "no frame");
+    }
+
+    /* ...and it IS raised around a list that runs, once, with the flag
+     * Stop has to raise to cancel that list. `wait` touches no window, so
+     * this stays a check and not a desktop test. */
+    {
+        k[0] = "id"; v[0] = "u21";
+        if (mkFrame(f, raw, sizeof(raw), "UIRUN", k, v, 1, "wait\tms=1\n"))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            CountingOverlay ov;
+            UiContext ctx;
+            link.setOverlay(&ov);
+            rc_ui_run(link, &ctx, &f);
+            rc_strf(detail, sizeof(detail), "%s, up=%d down=%d, flag %s",
+                    link.status(), ov.up(), ov.down(),
+                    ov.cancel() == link.stopFlag() ? "is the link's" : "WRONG");
+            say("the-indicator-is-raised-once-around-a-list-that-runs",
+                !strcmp(link.status(), "ok") && ov.up() == 1 && ov.down() == 1
+                && ov.cancel() == link.stopFlag(), detail);
+            rc_frame_free(&f);
+        }
+        else
+            say("the-indicator-is-raised-once-around-a-list-that-runs",
+                false, "no frame");
+    }
+
+    /* However the list ends. A strip left up by a failed list is the same
+     * lie as the first case, told the other way round -- and the failure
+     * path out of rc_ui_run is a different one from the success path. */
+    {
+        k[0] = "id"; v[0] = "u22";
+        if (mkFrame(f, raw, sizeof(raw), "UIRUN", k, v, 1, "wait\tms=5000\n"))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            CountingOverlay ov;
+            UiContext ctx;
+            link.setOverlay(&ov);
+            link.raise();
+            rc_ui_run(link, &ctx, &f);
+            rc_strf(detail, sizeof(detail), "%s, up=%d down=%d",
+                    link.status(), ov.up(), ov.down());
+            say("the-indicator-comes-down-when-the-list-fails",
+                !strcmp(link.status(), "cancelled")
+                && ov.up() == 1 && ov.down() == 1, detail);
+            rc_frame_free(&f);
+        }
+        else
+            say("the-indicator-comes-down-when-the-list-fails", false,
+                "no frame");
     }
 }
 

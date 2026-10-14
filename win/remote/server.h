@@ -46,12 +46,14 @@
 
 /* One connected caller. A Connection is single-use, so this is made fresh
  * per client and destroyed when that client goes. */
+class DriveOverlay;
+
 class Session : public FrameSink
 {
 public:
     Session(const ServerConfig &cfg, const ExecConfig &exec,
             const UiConfig &ui, unsigned long generation, Processes &procs,
-            App &app);
+            App &app, DriveOverlay *overlay);
 
     /* Adopt the accepted socket and start the threads. */
     bool begin(SOCKET accepted);
@@ -86,6 +88,7 @@ private:
 
     const ServerConfig *m_cfg;
     const UiConfig *m_uiCfg;
+    DriveOverlay   *m_overlay;
     const Processes *m_procs;
     unsigned long m_generation;
     /* Declared before m_control, which is handed a reference to it. */
@@ -115,8 +118,12 @@ public:
      * once it has a replacement running that will put a server back. The
      * long argument for why that is not the remote QUIT docs/REMOTE.md
      * forbids is above ControlOps::update. */
+    /* `overlay` is the App's driving indicator, passed down to the ui
+     * lane. It is not owned here and it outlives every Session: its window
+     * and its chord are the process's, not a connection's. */
     ServerService(const ServerConfig &cfg, const ExecConfig &exec,
-                  const UiConfig &ui, Processes &procs, App &app);
+                  const UiConfig &ui, Processes &procs, App &app,
+                  DriveOverlay *overlay);
 
     const char *name() const { return "server"; }
     bool init();
@@ -173,6 +180,7 @@ private:
     const ServerConfig *m_cfg;
     const ExecConfig *m_exec;
     const UiConfig *m_ui;
+    DriveOverlay   *m_overlay;
     Processes *m_procs;
     App *m_app;
     Listener m_listener;

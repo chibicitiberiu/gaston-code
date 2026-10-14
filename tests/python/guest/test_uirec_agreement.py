@@ -69,7 +69,19 @@ pytestmark = conftest.needs_guest
 #: get agrees with itself. The round trip asserts self-consistency rather than
 #: the platform, because a headless host may have no clipboard at all -- this
 #: one does, and the detail says so.
-CASE_COUNT = 57
+#:
+#: 57 -> 60 on 2026-10-14: the driving indicator's seam (ROADMAP stage 4b).
+#: rc_ui_run brackets the step runner with DriveOverlay::driveStarting and
+#: driveEnded, and these three are the whole of what can be checked without
+#: a desktop -- which is also the whole of what is worth checking twice.
+#: The first is the one that needs a check rather than a reading: a request
+#: refused before anything touches the desktop must NOT raise a strip that
+#: says "Gaston is controlling the desktop". The second pins that a list
+#: which runs raises it exactly once and hands it the link's own stop flag,
+#: which is what makes the Stop button able to cancel that list. The third
+#: pins the failure path out of rc_ui_run, which is a different path from
+#: the success one and is where a strip would be left up.
+CASE_COUNT = 60
 
 
 @pytest.fixture(scope="module")
