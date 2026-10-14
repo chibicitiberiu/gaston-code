@@ -3976,12 +3976,35 @@ against `C:\WORK\RUNDIRC2`, a directory that EXISTS on the guest and is
 empty. Whether the failing scan is a cause, a symptom, or unrelated is not
 established.
 
-**To close it:** find what arms the reconnect timer while connected, and
-whether a successful attach disarms it. `optionsApply` calls
-`m_reconnector->reset()` and then `tryConnect()`, which is one suspect
-pairing, but it cannot be the only one since a client that was never
-toggled does this too. Do not add a settle or a guard before knowing --
-`reconnect.cpp` has backoff of its own and this would interact with it.
+**The loop mechanism, read out of `reconnect.cpp` -- and it is NOT a stuck
+timer, which was the obvious guess and is wrong.** `tryConnect` arms
+`TIMER_RECONNECT` only when `rc_net_start` FAILS, and `handleTimer` kills
+the timer before every call, so a successful attempt leaves nothing armed.
+The re-arming comes from the other end: `mainwindow.cpp:1507` calls
+`Reconnector::schedule()` on the disconnect notification, and
+`onConnected()` has already reset `m_backoffMs` to 1000. So the cycle is
+
+    connect -> attach -> THE LINK DROPS (~1s) -> schedule() -> 1000ms
+    -> tryConnect -> connect -> ...
+
+and it runs at exactly the floor of the backoff, which is the one second
+observed.
+
+**So the question is not what arms the timer. It is WHAT DROPS AN
+ESTABLISHED LINK about a second after it attaches** -- everything else
+follows correctly from that. The client's own log does not show the drop as
+an event: `net: reader thread exiting` appears inside the NEXT
+`tryConnect`'s `rc_net_stop`, not where the connection died.
+
+**To close it:** instrument the drop, not the retry. Worth suspecting
+first, in order: the bridge closing an older socket when a second arrives
+for the same machine id (stage 3c made admission per-machine, and the
+bridge logs `attached ... (reconnect=True)` every cycle); and the
+`sync: scan -> no_root` that every cycle also logs, against a
+`C:\WORK\RUNDIRC2` that exists on the guest and is empty.
+
+Do not add a settle or a guard before knowing -- `reconnect.cpp`'s backoff
+is working exactly as designed here, and the fault is upstream of it.
 
 **Worth saying plainly:** this is a live defect that makes the client
 unusable until restarted, and it is almost certainly older than stage 4.
