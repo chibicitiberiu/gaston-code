@@ -43,6 +43,7 @@ extern "C" {
 
 #define WM_RC_FRAME      (WM_APP + 1)   /* lParam: rc_frame*, UI thread frees */
 #define WM_RC_STATE      (WM_APP + 2)   /* wParam: rc_state                   */
+#define WM_RC_INTERRUPT  (WM_APP + 3)   /* press Stop, from another thread    */
 
 typedef struct {
     HWND     notify;

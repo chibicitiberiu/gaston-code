@@ -11,6 +11,12 @@
  * (tools/check/msgids.py keeps these unique across win/). */
 #define WM_RC_TRAY (WM_APP + 0x400)
 
+/* Stop, pressed on the driving indicator, which runs on its own thread.
+ * Posted here rather than writing UiConfig::automation from there, because
+ * the tooltip and the menu's radio ticks are this thread's state and a
+ * field written behind them leaves the menu saying the opposite. */
+#define WM_RC_TRAY_STOP (WM_APP + 0x401)
+
 /* One icon, one id. */
 enum { TRAY_ICON_ID = 1 };
 
@@ -403,6 +409,15 @@ void TrayService::setAutomation(long level)
     refreshTip();
 }
 
+void TrayService::requestAutomationOff()
+{
+    HWND h = m_window.hwnd();
+
+    /* Any thread may call this; only this one may touch the tip. */
+    if (h)
+        PostMessageA(h, WM_RC_TRAY_STOP, 0, 0);
+}
+
 void TrayService::setPreventSleep(bool on, const char *why)
 {
     /* Idempotent, and that is what keeps the startup call silent on a machine
@@ -545,6 +560,13 @@ bool TrayService::TrayWindow::make(HINSTANCE instance)
 
 LRESULT TrayService::TrayWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
 {
+    if (msg == WM_RC_TRAY_STOP)
+    {
+        /* 0 is RC_AUTOMATION_NONE (net/caps.h); this file speaks the
+         * menu's 0..2 everywhere else and does not include the wire. */
+        m_owner->setAutomation(0);
+        return 0;
+    }
     if (msg == WM_RC_TRAY && wp == TRAY_ICON_ID)
     {
         switch (lp)

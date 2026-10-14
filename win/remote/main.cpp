@@ -32,6 +32,7 @@
 #include "remote/config.h"
 #include "remote/server.h"
 #include "remote/tray.h"
+#include "automation/indicator.h"
 
 static const char TITLE[] = "Gaston Remote";
 
@@ -134,6 +135,21 @@ static void exeDir(char *out, unsigned n)
     out[n - 1] = '\0';
 }
 
+/* What Stop does here. There is no turn to interrupt and no Stop button in
+ * a window, so the equivalent gesture is the one this program already has
+ * at the keyboard: the tray's "screen automation: off". The run in flight
+ * is cancelled by the flag the indicator raises before this is called. */
+class GremoteStop : public StopSink
+{
+public:
+    explicit GremoteStop(TrayService &tray) : m_tray(&tray) {}
+    void onStop() { m_tray->requestAutomationOff(); }
+private:
+    GremoteStop(const GremoteStop &);
+    GremoteStop &operator=(const GremoteStop &);
+    TrayService *m_tray;
+};
+
 class GremoteApp : public App
 {
 public:
@@ -170,6 +186,13 @@ private:
     UniqueObj<ServerConfigStore> m_store;
     UniqueObj<ServerService> m_server;
     UniqueObj<TrayService> m_tray;
+    /* The strip that says the desktop is being driven, and what its Stop
+     * does here. On the App and not on UiOps: UiOps is a Session member,
+     * made fresh per connection, which would mean a new thread, a repeat
+     * class registration and a fresh hotkey on every reconnect -- and a
+     * leaked session holding the chord for the life of the process. */
+    UniqueObj<GremoteStop> m_stop;
+    UniqueObj<DriveIndicator> m_indicator;
 };
 
 GremoteApp::GremoteApp(HINSTANCE instance)
@@ -303,9 +326,19 @@ bool GremoteApp::initializeServices()
      * icon is up before the accept loop begins, and so that a cold boot
      * with no shell has already logged the one line that explains why
      * there is no icon. */
-    return initService(m_tray,
-                       new TrayService(*this, instance(), m_config, m_machine, m_ui,
-                                       *m_server.get()));
+    if (!initService(m_tray,
+                     new TrayService(*this, instance(), m_config, m_machine, m_ui,
+                                     *m_server.get())))
+        return false;
+    /* After the tray, because its Stop is the tray's menu item. A
+     * different chord from the client's: whichever program registers
+     * first wins, and the second is told it did not. */
+    m_stop.reset(new GremoteStop(*m_tray.get()));
+    m_indicator.reset(
+        new DriveIndicator(m_stop.get(),
+                           "Gaston Remote is controlling the desktop",
+                           VK_F11, "Stop  Ctrl+Alt+Shift+F11"));
+    return true;
 }
 
 bool GremoteApp::startServices()

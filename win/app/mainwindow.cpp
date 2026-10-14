@@ -65,9 +65,10 @@
 
 /* WM_APP-offset messages this file posts to itself. One block, so Phase 6's
  * cross-thread posts have somewhere to go instead of a fourth style turning
- * up (audit finding 01.22). net.h owns WM_APP+1 (WM_RC_FRAME) and WM_APP+2
- * (WM_RC_STATE) -- those are net.c's messages to this window, declared next
- * to the code that posts them, not duplicated here. */
+ * up (audit finding 01.22). net.h owns WM_APP+1 (WM_RC_FRAME), WM_APP+2
+ * (WM_RC_STATE) and WM_APP+3 (WM_RC_INTERRUPT) -- those are net.h's
+ * messages to this window, declared next to the code that posts them, not
+ * duplicated here. */
 #define WM_RC_CONNECT  (WM_APP + 99)  /* self-post: connect after first paint */
 /* WM_RC_OPENCHAT (chatlist.cpp's ChatList::ListBox::handle -> MainWindow::handle: open a
  * chat) is declared in app/chatlist.h now, next to the module that posts
@@ -1506,6 +1507,14 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             setBusy(0);
             if (m_reconnector) m_reconnector->schedule();
         }
+        return 0;
+
+    case WM_RC_INTERRUPT:
+        /* Stop, pressed somewhere that is not the window thread -- today
+         * the driving indicator's own thread. It does exactly what the
+         * Stop button does, because that is what the person pressed; the
+         * guard is the one the ID_STOP case below already needs. */
+        if (m_input) m_input->command(ID_STOP);
         return 0;
 
     case WM_COMMAND: {

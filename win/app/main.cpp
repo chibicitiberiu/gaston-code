@@ -18,6 +18,7 @@
 
 #include "app/config.h"
 #include "app/connservice.h"
+#include "automation/indicator.h"
 #include "ui/uiservice.h"
 #include "app/machineid.h"
 #include "app/mainwindow.h"
@@ -43,6 +44,24 @@ static void exeDir(char *out, unsigned n)
     rc_strf(out, n, "%s", path);
     out[n - 1] = '\0';
 }
+
+/* What Stop does in this program: exactly what the Stop button does, which
+ * is what the person pressed. Posted, never called -- the indicator's own
+ * thread runs this, and ComposeBox lives on the window thread. */
+class ClientStop : public StopSink
+{
+public:
+    explicit ClientStop(rc_net *net) : m_net(net) {}
+    void onStop()
+    {
+        if (m_net && m_net->notify)
+            PostMessageA(m_net->notify, WM_RC_INTERRUPT, 0, 0);
+    }
+private:
+    ClientStop(const ClientStop &);
+    ClientStop &operator=(const ClientStop &);
+    rc_net *m_net;
+};
 
 /* Owns what the services are handed, and the services themselves. Heap
  * allocated by WinMain: a file-scope object would construct before WinMain
@@ -84,10 +103,17 @@ private:
      * it drives other people's applications and should let go of them
      * before anything else starts tearing down. */
     UniqueObj<UiService> m_ui;
+    /* The strip that says the desktop is being driven. Not a service: it
+     * has no start order to keep and nothing to stop in two passes, and it
+     * is process-scoped rather than per-connection on purpose -- its
+     * window and its chord are. It makes no thread until the first drive.
+     */
+    ClientStop m_stop;
+    UniqueObj<DriveIndicator> m_indicator;
 };
 
 ClientApp::ClientApp(HINSTANCE instance, int show)
-    : App(instance), m_show(show)
+    : App(instance), m_show(show), m_stop(&m_net)
 {
     /* rc_net and ClientConfig are C structs that used to be zero-filled
      * statics. */
@@ -258,6 +284,10 @@ bool ClientApp::initializeServices()
     rc_log("prefs: %u bytes declared", (unsigned)m_prefs.text.size());
     rc_net_set_prefs(&m_net, m_prefs.text.c_str(),
                      (unsigned)m_prefs.text.size());
+
+    m_indicator.reset(new DriveIndicator(&m_stop,
+                                         "Gaston is controlling the desktop",
+                                         VK_F12, "Stop  Ctrl+Alt+Shift+F12"));
 
     return initService(m_window, new MainWindow(instance(), m_show, this,
                                                 &m_config, m_store.get(),

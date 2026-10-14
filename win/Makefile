@@ -209,7 +209,28 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # makes the diagnostics worse to dodge an alignment artefact, and the next
 # commit buys the page anyway. The rest of stage 4 spends what is left
 # rather than asking again.
-COMMITTED_CAP ?= 506617
+#
+# 506,617 -> 513,273 on 2026-10-14, for stage 4b: the "agent is driving"
+# indicator (automation/indicator.cpp, a thread, a topmost window, a
+# hotkey). Measured 509,177; the cap is that plus one page, as above. This
+# raise was taken BEFORE the feature was wired to anything, because the
+# plan's first question was whether it fits at all -- the class is linked
+# and owned here, and nothing raises it yet. Attributed against 504,057,
+# from the link map:
+#
+#   +4,608  AUTO: the window procedure, the paint, the placement
+#           arithmetic, the thread body and the hide handshake. Nine
+#           512-byte blocks, of which the 150 bytes that were free before
+#           this are the first.
+#     +512  .reloc, which grows with the code.
+#       +0  .idata. Three new imports (SetWindowPos, RegisterHotKey,
+#           UnregisterHotKey) and 102 bytes, and the section had 146 free.
+#       +0  DGROUP, AND THIS IS THE ONE THAT MATTERED. The strings and the
+#           vtables added 1,536 bytes of file, and the charged figure is
+#           max(virtual, raw), so they were absorbed by the padding that
+#           stage 4's raise already paid for: _BSS's base did not move.
+#           The feared page slide did not happen, on either program.
+COMMITTED_CAP ?= 513273
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
@@ -290,7 +311,8 @@ AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp \
                   automation/resolve.cpp automation/watch.cpp \
                   automation/wait.cpp automation/calldeadline.cpp \
                   automation/input.cpp automation/msaa.cpp \
-                  automation/shot.cpp automation/steps.cpp
+                  automation/shot.cpp automation/steps.cpp \
+                  automation/indicator.cpp
 LIBAUTOMATION = $(LIBDIR)/libautomation.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this
@@ -985,7 +1007,24 @@ check-gremote: CHECK_OWNED = $(GREMOTE_OBJS)
 # number would not be mistaken for an endorsement of it. gremote measured
 # 365,497 before the stage and 259,497 after, 29% off, none of it from the ui
 # lane the entry was written about. Cap is measured plus one page.
-check-gremote: CHECK_CAP   = 263593
+#
+# 263,593 -> 270,249 on 2026-10-14, for stage 4b's indicator. Measured
+# 266,153; cap is that plus one page. Attributed against 260,521:
+#
+#   +4,608  AUTO, the same nine blocks as the client's -- it is the same
+#           object, in libautomation, and both programs get all of it.
+#     +512  .idata, the one cost gremote has and the client does not: it
+#           had never imported DrawEdge, DrawTextA, GetTextExtentPoint32A,
+#           GetStockObject, FillRect, BeginPaint, EndPaint, InvalidateRect
+#           or RedrawWindow, because before this it drew nothing.
+#     +512  .reloc.
+#       +0  DGROUP: absorbed by padding, as on the client.
+#
+# BACKLOG 29 is the entry that argues this number down rather than up, and
+# it is answered here rather than quietly: this is the first raise since
+# the 29% reduction, it is 2.5%, and it buys the only thing on that box
+# that tells the person in front of it what is happening to their desktop.
+check-gremote: CHECK_CAP   = 270249
 # gupdate's budget. It links libcore and nothing else, and it runs for a
 # few seconds beside a gremote that is on its way out -- so this is a cap on
 # a transient, not on a resident, and it is still set tight because the

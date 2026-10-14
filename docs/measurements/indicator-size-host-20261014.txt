@@ -1,0 +1,77 @@
+What the "agent is driving" indicator costs, before it does anything
+====================================================================
+2026-10-14, host build (Open Watcom), stage 4b commit 2 of N.
+
+WHY THIS WAS THE FIRST THING BUILT
+----------------------------------
+The plan's own first risk was that the feature does not fit. gaston had
+2,560 bytes of cap slack and gremote 3,072, and the review's arithmetic said
+a single 4,096-byte _BSS page slide would exceed both on its own, before a
+line of content -- so the shape was linked and measured before the behaviour
+was written. What is in the image at this point: the class, its thread, its
+window, its paint, its hotkey, and both programs owning one. Nothing raises
+it; no drive calls it.
+
+The second question was whether the seam holds. libautomation is linked by
+uicheck, autocheck, keyprobe and focusprobe as well as by the two programs,
+and wlink pulls a library member in on any symbol reference -- so if
+anything in input.cpp or steps.cpp had named DriveIndicator directly, the
+window and the thread would be in four images that can never raise it. That
+is why DriveOverlay is abstract and header-only.
+
+MEASURED, per PE section, charged as the gate charges (max(virtual, raw))
+-------------------------------------------------------------------------
+gaston.exe                   before        after      delta
+  AUTO                      321,536      326,144     +4,608
+  .idata                      7,680        7,680         +0
+  DGROUP                    141,049      141,049         +0
+  .reloc                     26,112       26,624       +512
+  .rsrc                       7,680        7,680         +0
+  total                     504,057      509,177     +5,120
+  cap                       506,617      513,273
+
+gremote.exe                  before        after      delta
+  AUTO                      176,128      180,736     +4,608
+  .idata                      5,632        6,144       +512
+  DGROUP                     65,961       65,961         +0
+  .reloc                     12,800       13,312       +512
+  total                     260,521      266,153     +5,632
+  cap                       263,593      270,249
+
+Both caps are the measured figure plus one page, which is this project's
+rule for a raise (win/Makefile, the COMMITTED_CAP ladder).
+
+THE PAGE SLIDE DID NOT HAPPEN, AND THAT IS THE RESULT
+-----------------------------------------------------
+DGROUP's charged figure did not move on either program, although its FILE
+size grew 1,536 bytes on gaston and 1,536 on gremote (the strings, the
+vtables). The gate charges max(virtual, raw) and DGROUP is charged at its
+virtual size, which carries the padding before _BSS's page-aligned base --
+so this commit's data was absorbed by padding stage 4's own raise had
+already bought. _BSS's base did not move. The feared +4,096 is not in these
+numbers.
+
+.idata behaved as the review predicted, in the one place it predicted:
+gremote had never imported DrawEdge, DrawTextA, GetTextExtentPoint32A,
+GetStockObject, FillRect, BeginPaint, EndPaint, InvalidateRect or
+RedrawWindow, because before this it drew nothing at all -- 448 bytes, one
+512-byte charge. gaston needed only SetWindowPos, RegisterHotKey and
+UnregisterHotKey (102 bytes) and had 146 free, so it paid nothing.
+
+THE SEAM HELD
+-------------
+  gaston.map     indicator.o present
+  gremote.map    indicator.o present
+  uicheck.map    absent
+  autocheck.map  absent
+
+RegisterHotKey and UnregisterHotKey passed tools/check/imports.py unchanged:
+they are USER32 exports present since Win95, and the gate's deny-list is of
+NT-only symbols, not an allow-list of names.
+
+WHAT THIS DOES NOT SAY
+----------------------
+Nothing here was run. The window has never been created, the thread has
+never started, and the chord has never been registered -- on this host or on
+the guest. The numbers are what the linker produced, and the behaviour is
+the next commits' business.
