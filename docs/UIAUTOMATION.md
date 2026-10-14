@@ -368,6 +368,14 @@ established to be opaque.
 | capture, deflate | ✓ | |
 | selector matching | ✓ | |
 | tree assembly, diffing, OCR, PNG, template search | | ✓ |
+| saying so on screen, and stopping it | ✓ | |
+
+The last row is stage 4b and it is the one thing here that is the guest's
+ALONE. The bridge cannot say the desktop is being driven -- it is not the
+machine with the desktop -- and the person who wants it to stop is sitting in
+front of that machine, not this one. So the strip, its Stop button and its
+global chord all live in `win/automation/indicator.cpp`, and what reaches the
+bridge is the ordinary `cancelled` the caller would have got from a `STOP`.
 
 Selector matching on the guest needs justifying against "the guest
 transforms nothing", and the argument is that it is a **filter, not a
@@ -620,9 +628,31 @@ two different programs can both promise:
   serving the out-of-process answer, which would read a full list box as
   empty.
 
+- **A driving indicator, or none.** `UiLink::overlay()` (2026-10-14, stage
+  4b) returns the strip that says "Gaston is controlling the desktop", or
+  null where there is nobody to tell -- a check, a probe, a box whose
+  `[ui] indicator` is 0. `rc_ui_run` raises it around the step runner and
+  nowhere else, so a request refused at the gates above never raises a window
+  claiming the desktop is being driven; the runner gets the same pointer,
+  because the strip is a topmost window of our own and a click underneath it
+  has to be let through.
+
+  It is the ONE virtual here with a default implementation, and that is
+  deliberate: `libautomation` is linked by uicheck, autocheck, keyprobe and
+  focusprobe as well as by the two programs, and wlink pulls a library member
+  in on any symbol reference. Everything in the engine and the step runner
+  calls `DriveOverlay`, which is abstract and header-only
+  (`win/automation/overlay.h`), so the window, the thread and the paint code
+  stay out of four images that could never raise them. The same rule in the
+  other direction is why Stop is a `StopSink` the owning program implements:
+  what Stop DOES is an INTERRUPT frame in the client and the tray's
+  "automation off" in gremote, and a library may know neither.
+
 `SHOT` is deliberately **not** shared: 55 lines of header clamping over a sink
 that has to be per-exe anyway, and a virtual call to save it costs more than
-the duplication.
+the duplication. Both copies gained the same four lines in stage 4b, which is
+the duplication being paid rather than regretted: the strip is taken out of
+the frame before the capture and put back after.
 
 
 ## What is built, and what the guest still has to answer

@@ -42,7 +42,7 @@ in stage 1 for that reason.
 | 3b | Pagination: the bridge stops dividing the transcript — **DONE 2026-10-13** | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
 | 3c | R7: several guest machines against one bridge — **DONE 2026-10-13** | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs — **DONE 2026-10-14** | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
-| 4b | The "agent is driving" indicator | somebody at the keyboard can see that the desktop is not theirs, and stop it, while gremote or the client is driving |
+| 4b | The "agent is driving" indicator — **DONE 2026-10-14** | somebody at the keyboard can see that the desktop is not theirs, and stop it, while gremote or the client is driving |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
 
@@ -590,13 +590,35 @@ and three strings still telling the user to use a menu item that was deleted.
 
 ---
 
-## Stage 4b — the "agent is driving" indicator
+## Stage 4b — the "agent is driving" indicator — DONE 2026-10-14
 
 Split out of stage 4 on 2026-10-13, by review rather than by size: the design
-in that stage would not have worked. **Planned 2026-10-14**
+in that stage would not have worked. **Planned and built 2026-10-14**
 (`docs/stage4b-plan.md`), after three more review rounds against the tree --
 one on the sketch, two on the plan -- which between them falsified six claims
-and then eleven more. What they established, so none of it is re-derived:
+and then eleven more.
+
+**What shipped.** A topmost strip, bottom right above the taskbar, saying
+"Gaston is controlling the desktop" (gremote says "Gaston Remote") with two
+ways to stop it: a Stop button and a global chord, Ctrl+Alt+Shift+F12 in the
+client and F11 in gremote. It is raised by `rc_ui_run` around the step runner
+and nowhere else, steps aside for a click underneath it, hides itself out of
+every screenshot, and refuses its own chord to anything the agent synthesises.
+Stop cancels the run and does what that program's own Stop does -- an
+INTERRUPT frame in the client, the tray's "automation off" in gremote --
+because a cancel alone is undone by the next request a second later.
+
+Measured on the guest: `docs/measurements/stripprobe-vm-20261014.txt` (what 98
+SE does with somebody else's topmost window) and
+`docs/measurements/indicator-vm-20261014.txt` (the thing itself, both
+programs, both cancel routes). Cost: `COMMITTED_CAP` 506,617 -> 513,273 and
+`check-gremote` 263,593 -> 270,249, with no `_BSS` page slide on either.
+Gates at the close: `make -C win check` six caps, `make lint` clean,
+`make test-fast` 4,309, `make wine-smoke` 464, `pytest tests/python/remote`
+122.
+
+What the review established before any of it was written, so none of it is
+re-derived:
 
 - **It cannot live in the client.** `RUN` goes through `rc_ui_run`
   (`win/ui/uiengine.cpp:795`), compiled into `gaston`, `gremote` and `uicheck`.
@@ -662,6 +684,49 @@ and then eleven more. What they established, so none of it is re-derived:
   imports it does not have today. A single `_BSS` page slide exceeds both caps'
   slack on its own, so the first commit after the plan is a shape-final trial
   link that can end the stage on cost.
+
+### What is worth knowing afterwards
+
+- **The documentation was right and the guest confirmed it, which is the
+  cheapest outcome a probe can have.** `HTTRANSPARENT` buys nothing across a
+  process boundary on 98 SE -- `WindowFromPoint` returns the strip through it
+  even when the strip is on another thread of the SAME process, the case the
+  documentation says is covered. The plan budgeted the step-aside as the
+  design rather than as a fallback, so the measurement cost three lines of
+  deletion instead of a redesign.
+- **`SW_SHOWNOACTIVATE` holds on 98 SE**, measured: zero activations, never
+  foreground, after being clicked, while topmost. That is load-bearing rather
+  than polite -- `keyboardTargetOk` fails EVERY typing step with
+  `refused_self` while one of our own windows is in front, so a strip that
+  could be activated would break the automation it exists to announce.
+- **The bug the guest found was in the first drive, and only the first.**
+  `driveStarting` starts the indicator's thread and posts it a wake, and on
+  the first drive that wake goes to an HWND that does not exist yet -- the
+  thread creating the window is 440ms behind on a 32MB machine. The clock
+  never started and the strip stayed hidden through the whole run. Every test
+  that drove twice passed, including the Wine one written for this feature.
+- **Stop needed a bridge-side commit nobody had planned.** `on_interrupt`
+  killed every pending `exec` and never touched the ui lane, and the SDK does
+  not cancel an in-flight tool call (`test_stop_kills_a_running_command`
+  measured that on the guest in September). So a step list kept driving after
+  Stop, and a second `ui(run=...)` batched into the same assistant message
+  would have taken the lane and driven on anyway.
+- **A denylist for a chord belongs where the chord can be TYPED**, which is
+  `tapKey` and not `keyDown`: `tap key=f12 mods=7` is one step with composed
+  modifiers, and `tapKey` discards `keyDown`'s return -- a guard there alone
+  would have refused the keystroke and reported `ok`.
+- **An agreement test written for one status found a gap in another.** Every
+  status `inputStatus` can send must have a sentence in `tools.toml`;
+  `failed` had none, and `failed` is where `[Ctrl+Alt+Delete]`'s refusal
+  lands, so an agent that tried it was told nothing at all.
+- **Three capture paths, not one.** `Screenshot` is constructed per call in
+  both programs, and the client has a second desktop capture nobody had
+  counted -- Attach > Screenshot -- whose image goes to the agent exactly as
+  a `shot` does, and which a person reaches for BECAUSE something is
+  happening on screen.
+- **BACKLOG 38 is still there and is now easy to reproduce**: it ran
+  underneath the client's own guest test, a full HELLO-and-attach once per
+  second, and turned a cancelled run into "the machine disconnected".
 
 ---
 

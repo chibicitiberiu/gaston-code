@@ -501,6 +501,11 @@ engine's calls into its own frames (`win/ui/uilink.h`).
   whether the reply is suppressed. If `STOP` alone raised it, a cancelled walk
   would run to its full deadline with its replies dropped and every ui request
   behind it answered `busy`, which is `BACKLOG.md` 26 reproduced here.
+  **Since 2026-10-14 there is a third raiser and it is not on the wire at
+  all**: the driving indicator's Stop button and chord, pressed at the
+  keyboard (`win/automation/indicator.cpp`). The request still answers
+  `cancelled` to whoever sent it, which is the point -- the caller is told its
+  list stopped, by the same path a `STOP` would have used.
 - **`STOP` is the Session's, not the control lane's**, for the reason `CANCEL`
   already is: it is about the lanes and the Session owns them, and it needs an
   ungated `Responder` or the ack is suppressed along with the target. The id is
@@ -540,7 +545,7 @@ trip to a 200MHz machine instead of seven. `UICANCEL` arrived with it.
 |---|---|---|---|
 | `UITREE` | `scope=desktop\|foreground\|pid`, `pid`, `max_nodes`, `text`, `msaa`, `hidden`, `call_ms`, `timeout_ms`, optional `wait_for=` + `wait_ms`, optional `settle_ms`; or `acc=1` + `target=` for one control's MSAA items; or `inproc=1` + `target=` + `items=` for the in-process tier | `UIENT` records (see below) with `n=` per frame; `UIEND nodes=, walk=complete\|deadline\|maxnodes\|stopped, enriched=, dropped=, too_deep=, self=` | `bad_selector`, `not_found` (+`step=`), `ambiguous` (+`detail=` and up to three `cand1..3=`), `truncated`, `no_target`, `no_msaa`, `no_memory`, `busy`, `automation_off` |
 | `UISHOT` | `x`, `y`, `w`, `h` (a width and a height, not a right and a bottom), `bpp` | `UIDAT` chunks of a native-bpp BMP; `UIEND w=, h=, bpp=, bytes=` | `no_memory`, `failed` (`detail=` says which) |
-| `UIRUN` | `timeout_ms`, `step_ms`, optional `settle`; **body is the step list** -- one step per line, `verb` then TAB-separated `key=value`, every value percent-encoded | `UIEND status=, done=, step=, detail=, cand1..3=`, and a **body** of one `i= status= ms= hit= detail= part=` line per step that ran, plus `released=1` when the list left something held | `bad_steps` (+`detail=`), `cancelled`, `script_timeout`, `timeout`, `focus_lost`, `bad_key`, `bad_char`, `refused_self`, `no_window`, `not_foreground`, `occluded`, `not_visible`, `not_edit`, `no_item`, `ambiguous_item`, `no_text_match`, `ambiguous_text`, `prompted`, `still_open`, plus every `UITREE` error for the resolution it does |
+| `UIRUN` | `timeout_ms`, `step_ms`, optional `settle`; **body is the step list** -- one step per line, `verb` then TAB-separated `key=value`, every value percent-encoded | `UIEND status=, done=, step=, detail=, cand1..3=`, and a **body** of one `i= status= ms= hit= detail= part=` line per step that ran, plus `released=1` when the list left something held | `bad_steps` (+`detail=`), `cancelled`, `script_timeout`, `timeout`, `focus_lost`, `bad_key`, `bad_char`, `refused_self`, `no_window`, `not_foreground`, `occluded`, `not_visible`, `not_edit`, `no_item`, `ambiguous_item`, `no_text_match`, `ambiguous_text`, `prompted`, `still_open`, `refused_chord` (the driving indicator's own cancel chord, which a synthesised key would fire exactly as a real one does), plus every `UITREE` error for the resolution it does |
 | `UICANCEL` | `id=` of the running list | none of its own -- the run's `UIEND` carries `cancelled` | ignored and logged when `id` is not the one running |
 
 **`UICANCEL` is `RC_LANE_IMMEDIATE`, not `RC_LANE_DESKTOP`**, because the

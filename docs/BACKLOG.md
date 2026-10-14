@@ -2384,6 +2384,37 @@ since the agent's next call resumes within a second.
 
 So this is scheduled work, not a taste call being deferred.
 
+**[R -- 2026-10-14] BUILT, stage 4b.** A topmost strip, bottom right above
+the taskbar: "Gaston is controlling the desktop" ("Gaston Remote" in
+gremote), a Stop button, and a global chord -- Ctrl+Alt+Shift+F12 in the
+client, F11 in gremote, two of them because RegisterHotKey is first-come and
+both programs can run. Raised by `rc_ui_run` around the step runner and
+nowhere else, so a refused request never raises a window that says the
+desktop is being driven.
+
+Three things the entry above did not anticipate, each measured rather than
+argued:
+
+- **The strip steps aside rather than being transparent.** `HTTRANSPARENT`
+  is a same-thread walk and buys nothing across a process boundary on 98 SE
+  (`docs/measurements/stripprobe-vm-20261014.txt`), so the step runner hides
+  it for the step when a click lands under it, and the capture path hides it
+  for the shot.
+- **Stop needed the bridge.** `on_interrupt` killed pending `exec`s and
+  never touched the ui lane, and the SDK does not cancel an in-flight tool
+  call -- so the list kept driving, and a second `ui(run=...)` batched into
+  the same message would have driven on after it.
+- **Never activating is load-bearing**, not polite: `keyboardTargetOk`
+  refuses every typing step while one of our own windows is in front.
+
+Verified on the guest in both programs, both cancel routes, with a
+screenshot taken while it was up coming back without it
+(`docs/measurements/indicator-vm-20261014.txt`).
+
+**What is NOT closed by it**, and belongs to the entry below rather than to
+this one: with two programs driving, two strips can be up, and neither
+program's `excludePid` excludes the other's. One Stop stops one program.
+
 ~~Turning the setting on or off from a MENU is part of the same piece of work
 and is also not done: the INI is read once at startup, so today a change needs
 a restart.~~ **DONE 2026-10-13, stage 4** -- Configure > "Let it use this
@@ -2512,6 +2543,20 @@ focus change or step list, taken by both `win/ui/uiservice.cpp` and
 `win/remote/uiops.cpp`, with a timeout and an abandoned-mutex path. Not built,
 because it is new shared state between two programs bought against a collision
 nobody has had.
+
+**[R -- 2026-10-14, stage 4b] AND NOW THERE IS A SECOND WAY IT SHOWS.** Each
+program raises its own "is controlling the desktop" strip, topmost, and
+neither one's `excludePid` excludes the other's. So driver A's positioned
+click under driver B's strip takes `focus()`, spins `RAISE_SETTLE_MS`, and
+fails `occluded` naming a window A cannot hide -- A's step-aside reaches only
+its own. The strips also carry different chords (F12 and F11) for the
+registration, and pressing one Stop stops one program while the screen still
+says the other is driving.
+
+Accepted on the same grounds as the rest of this entry -- one person who
+knows which tool they are holding -- but recorded as a MECHANISM rather than
+as a count, because "two strips" reads like cosmetics and this one makes a
+step fail.
 
 **One nearby hazard, and the claim that it got code was false.**
 `TrackPopupMenu` on gremote's tray icon runs a modal loop that captures the
@@ -3200,6 +3245,24 @@ clipprobe 8/8, MSAA still returning real roles from the box's own oleacc.
 The round also found that `[ui] msaa=0` had never done anything, which has
 its own fix. The four bullets below are each marked with what they turned
 out to be worth; the two items that mattered were not among them.
+
+**[R -- 2026-10-14] The first raise since that reduction, and it is written
+here rather than only in a commit message, because that is what this entry
+is for.** `check-gremote` 263,593 -> 270,249 for stage 4b's driving
+indicator: +4,608 of code (the window, the paint, the thread, the hotkey,
+the hide handshake -- the same object the client links, in `libautomation`),
++512 of `.reloc`, and +512 of `.idata` that only gremote pays, because
+before this it had never imported `DrawEdge`, `DrawTextA`,
+`GetTextExtentPoint32A`, `GetStockObject`, `FillRect`, `BeginPaint`,
+`EndPaint`, `InvalidateRect` or `RedrawWindow` -- it drew nothing at all.
+DGROUP did not move on either program: the strings and vtables were absorbed
+by padding stage 4's raise had already bought, so the feared `_BSS` page
+slide did not happen.
+
+2.5%, against the 29% this entry took off, and what it buys is the only
+thing on that box that tells the person in front of it what is happening to
+their desktop. `[ui] indicator=0` turns it off for a machine nobody
+watches; the code is still in the image.
 
 **Opened 2026-10-02, by decision, while raising the cap.** The user's words:
 *"just raise it, we'll have a separate round of optimizations"*. This entry is

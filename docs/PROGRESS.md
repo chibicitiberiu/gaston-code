@@ -4177,6 +4177,125 @@ bridge's side; they now filter guest rows too, case-folded.
 became a TextList.
 
 
+## Stage 4b -- the "agent is driving" indicator (2026-10-14)
+
+`ROADMAP.md` stage 4b, planned in `docs/stage4b-plan.md`. Ten commits,
+`7493987..`, each gated with `make -C win check`, `make lint`,
+`make test-fast`, and the long suites where the wire or the lane moved.
+
+A topmost strip, bottom right above the taskbar: **"Gaston is controlling the
+desktop"** ("Gaston Remote" in gremote), a Stop button, and a global chord --
+Ctrl+Alt+Shift+F12 in the client, F11 in gremote. Raised by `rc_ui_run`
+around the step runner and nowhere else.
+
+| | |
+|---|---|
+| `gaston.exe` | 504,057 -> **510,217** of a cap raised once, 506,617 -> 513,273 |
+| `gremote.exe` | 260,521 -> **267,177** of a cap raised once, 263,593 -> 270,249 |
+| `_BSS` page slide, the feared cost | **none, on either** -- absorbed by padding stage 4 had already bought |
+| `indicator.o` in uicheck, autocheck, netcheck, rpccheck | **absent**, which is what the abstract seam was for |
+| `make test-fast` | 4,309 passed |
+| `make wine-smoke` | 464 passed |
+| `pytest tests/python/remote` | 122 passed |
+
+**What the design had to be, and why none of it is obvious.** The strip
+cannot live in either program's window, because a drive calls
+`SetForegroundWindow` on its target and the window saying "the agent is
+driving" would spend the drive behind the application being driven. It needs
+its own thread, because the only other thread is blocked inside
+`StepRunner::run` for the length of the list. Its `Window` object is a LOCAL
+in that thread, because `DestroyWindow` fails across threads and neither
+`~Window` nor `WindowGuard` checks the return -- a member would leave a
+visible strip whose wndproc points at freed memory. And teardown is
+`WM_CLOSE` to the window rather than `PostThreadMessage`, because a thread
+message to a thread that has not pumped yet is lost rather than queued.
+
+**It never takes the foreground, and that is not politeness.**
+`keyboardTargetOk` fails EVERY typing step with `refused_self` while one of
+our own windows is in front, so a strip that could be activated would break
+the automation it exists to announce. `SW_SHOWNOACTIVATE` + `MA_NOACTIVATE`
++ no child control, measured on the guest: zero activations, never
+foreground, after being clicked, while topmost. That is also the whole answer
+to "is it transparent to the keyboard".
+
+**It steps aside instead of being transparent.** `HTTRANSPARENT` is a
+same-thread walk; on 98 SE `WindowFromPoint` returns the strip through it
+even with the strip on another thread of the same process. So the step runner
+hides it for the step when a click lands under it, waits for the hide to be
+observable, and puts it back -- one bracket per step, because
+`clickButtonAt` calls `clickAt` internally and a guard in each would show it
+again before the outer `mouse_event`.
+
+**Stop means stop, and the user chose what that means**: cancel the run and
+do what that program's own Stop does. In the client that is an INTERRUPT
+frame; in gremote, which has no turn and no Stop button, it is the tray's
+"automation off". And it needed a commit on the BRIDGE that no one had
+planned: `on_interrupt` killed every pending `exec` and never touched the ui
+lane, and the SDK does not cancel an in-flight tool call -- so the list kept
+driving, and a second `ui(run=...)` batched into the same assistant message
+would have taken the lane and driven on anyway.
+
+**Three capture paths, not one.** `shot` in each program, plus the client's
+own Attach > Screenshot, whose image goes to the agent exactly as a `shot`
+does -- and which a person reaches for BECAUSE something is happening on
+screen. A capture needs more than a click does: `IsWindowVisible` goes false
+when `ShowWindow` returns, which is before the windows underneath repaint,
+and `BitBlt` reads pixels where hit-testing reads z-order.
+
+**What the guest found that nothing else could.** The first drive after a
+start showed nothing: `driveStarting` posts its wake to an HWND that does not
+exist yet, because the thread creating the window is 440ms behind on a 32MB
+machine. The clock never started. Every test that drove twice passed,
+including the Wine test written for this feature.
+
+Measured: `docs/measurements/stripprobe-vm-20261014.txt` (what 98 SE does
+with somebody else's topmost window -- `HTTRANSPARENT`, the hide-to-pixels
+gap, `RegisterHotKey`, activation) and
+`docs/measurements/indicator-vm-20261014.txt` (the thing itself: both
+programs, both cancel routes, the dwell, the show delay, and a screenshot
+taken while it was up coming back without it).
+
+Recorded rather than fixed: a full-screen DOS session owns the display on 9x,
+so the strip is absent exactly when the most destructive driving happens; two
+programs driving means two strips, two chords, and one Stop that stops one of
+them; and `BACKLOG.md` 38's reconnect loop, which ran underneath the client's
+own guest test and turned a cancelled run into "the machine disconnected".
+
+
+## Stage 4 -- the recorded decisions, the inconsistencies, the small repairs (2026-10-13/14)
+
+`ROADMAP.md` stage 4, planned in `docs/stage4-plan.md`. Twenty-six commits,
+`92f49cb..8853ec6`. Written up here on 2026-10-14, after the fact: the stage
+closed into `ROADMAP.md` and `BACKLOG.md` and this file was not given its
+section at the time, which is the debt stage 4b paid off while it was in here.
+
+Its exit condition was unusual -- **`BACKLOG.md` holds no entry whose only
+blocker is an unanswered question** -- so the stage was mostly decisions, and
+the user took them: no to `enc=rle8`, the power button as the cause of §35,
+`kill` takes the Win32 descendants, no models-per-mode, the supervisor
+accepted, `ocr(rect)` built, the logoff measured rather than deferred.
+
+| | |
+|---|---|
+| `gaston.exe` | 495,865 -> **504,057** of a cap raised once, 498,425 -> 506,617 |
+| `make test-fast` | 4,307 passed |
+| `make wine-smoke` | 461 passed |
+
+**What running it found, which reading it had not.** The transcript cache
+sweep shipped broken -- `"%s\%s"` with one backslash, an invalid escape, so
+the glob had no separator and matched nothing; found by planting an orphan on
+the guest, and `check-sources` now refuses `\%`. The Add-a-tool dialog
+clipped its own OK and Cancel at every font size, found by measuring Large
+Fonts. `RegisterServiceProcess` does NOT exempt a process from the logoff
+broadcast and `RunServices` runs at boot rather than per session, so before
+that commit one logoff cost the machine its remote access until a reboot --
+and `BACKLOG.md` 35 had said the opposite in passing.
+
+It also left `BACKLOG.md` 38 behind deliberately: the client's ~1 Hz
+reconnect loop, reproduced and localised, NOT fixed, because fixing it blind
+is what §35 had already cost a wrong commit for.
+
+
 ## Stage 1 -- the fruit, the decisions, and the harness (2026-10-10/11)
 
 `ROADMAP.md` stage 1, planned in `docs/stage1-plan.md`. Nine commits,
