@@ -41,7 +41,27 @@ WHAT IT PROVES, AND WHAT IT ARGUES
   monospace blocks fare worst of all, which is the opposite of the naive
   guess.
 
-THE DEGRADE PATH, MEASURED BY ACCIDENT
+THE DEGRADE PATH, WITH TESSERACT GENUINELY ABSENT
+  Not monkeypatched: the same 481,078-byte guest capture, fed to the real
+  `to_text` in a process whose PATH contains no tesseract at all.
+
+    which(tesseract) = None
+    WARNING bridge.uiview: no tesseract on this bridge; a capture cannot
+                           be read
+    to_text returned: None      (and raised nothing)
+
+  And what the model is told, rendered from the real prompt:
+
+    "This bridge has no OCR engine installed, so the picture cannot be read
+     here. The machine captured it (800x600, 481078 bytes) -- that part
+     worked. Use `ui` to read the controls, or `shot` to look at the
+     picture yourself."
+
+  So a bridge without the engine says so once, names what the machine did
+  manage, points at the two rungs that work, and does not fail the tool --
+  the contract `to_png` set for a missing Pillow, kept.
+
+THE SAME PATH, REACHED BY ACCIDENT
   The first attempt fed an RLE8-compressed BMP (ImageMagick's default for a
   palette BMP) and leptonica refused it: "cannot read compressed BMP files".
   to_text logged the refusal and returned None, the tool answered with the
