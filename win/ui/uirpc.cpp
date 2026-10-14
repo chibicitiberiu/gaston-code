@@ -530,6 +530,20 @@ static void do_shot(UiLink &link, UiContext *ctx, rc_frame *f)
         return;
     }
 
+    /* The strip out of the frame first. A screenshot is what the agent
+     * sees, and a band across it saying "Gaston is controlling the
+     * desktop" costs tokens on every capture and sits in the picture stage
+     * 4's ocr(rect) reads. Nothing is driving while this runs -- one
+     * request at a time on this thread -- so the strip is only up because
+     * of its dwell, and holding it down for the whole capture costs the
+     * person nothing they would notice. */
+    RECT frame;
+    OverlayAside hidden;
+    if (Screenshot::targetRect(o, frame)
+        && !hidden.forCapture(link.overlay(), frame, 900))
+        rc_log("shot: the indicator would not clear the frame; capturing "
+               "with it in the picture");
+
     Screenshot shot;
     bool got = shot.capture(o, sink);
     if (got)

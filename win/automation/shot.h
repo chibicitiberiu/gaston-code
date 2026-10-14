@@ -49,6 +49,10 @@ public:
 
     bool capture(const ShotOptions &opt, ByteSink &sink);
 
+    /* Which pixels `opt` names, before capturing them. For a caller that
+     * has to clear the frame first -- see automation/overlay.h. */
+    static bool targetRect(const ShotOptions &opt, RECT &out);
+
     int  width() const  { return m_w; }
     int  height() const { return m_h; }
     int  bpp() const    { return m_bpp; }

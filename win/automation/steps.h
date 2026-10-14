@@ -166,7 +166,10 @@ public:
     bool releasedAtEnd() const { return m_releasedAtEnd; }
 
 private:
-    class Aside;
+    /* What a click waits for the strip to go. Win16Mutex is the only thing
+     * that can hold the indicator's thread, and it is also the state in
+     * which a blind click is least predictable, so a timeout refuses. */
+    enum { ASIDE_BUDGET_MS = 400 };
 
     bool runOne(const Step &s, DWORD budget, StepReport &r);
     bool resolveOne(const char *sel, DWORD budget, HWND &out,

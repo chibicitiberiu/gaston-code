@@ -224,6 +224,16 @@ void UiOps::shot(Responder &r, rc_frame *f)
         return;
     }
 
+    /* Out of the frame first, for the reason in uirpc.cpp's copy of this:
+     * the capture is what the agent sees, and the strip is only up here
+     * because of its dwell -- nothing drives while this runs. */
+    RECT frame;
+    OverlayAside hidden;
+    if (Screenshot::targetRect(o, frame)
+        && !hidden.forCapture(m_overlay, frame, 900))
+        rc_log("shot: the indicator would not clear the frame; capturing "
+               "with it in the picture");
+
     Screenshot shot;
     bool got = shot.capture(o, sink);
     if (got)

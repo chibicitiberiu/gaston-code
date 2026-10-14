@@ -68,6 +68,50 @@ public:
  * nothing it is likely to want. */
 enum { RC_CHORD_VK_CLIENT = VK_F12, RC_CHORD_VK_REMOTE = VK_F11 };
 
+/* The strip out of the way for as long as this object lives, and back
+ * afterwards however the scope leaves. Header-only and inline so every
+ * caller shares one definition of "ask, wait, put it back".
+ *
+ * ONE of these per operation, never nested: clickButtonAt calls clickAt
+ * internally, so a guard in each would put the strip back at the inner
+ * destructor -- before the outer one's mouse_event. */
+class OverlayAside
+{
+public:
+    OverlayAside() : m_ov(0) {}
+
+    /* For a click: the point. False means it would not go, and the caller
+     * must refuse rather than act blind. */
+    bool forPoint(DriveOverlay *ov, int x, int y, DWORD budgetMs)
+    {
+        if (!ov || !ov->covers(x, y))
+            return true;
+        if (!ov->stepAside(budgetMs, false))
+            return false;
+        m_ov = ov;
+        return true;
+    }
+
+    /* For a capture: the rect, and the pixels under it have to have been
+     * repainted, not merely un-owned. A capture reads the framebuffer. */
+    bool forCapture(DriveOverlay *ov, const RECT &r, DWORD budgetMs)
+    {
+        if (!ov || !ov->coversRect(r))
+            return true;
+        if (!ov->stepAside(budgetMs, true))
+            return false;
+        m_ov = ov;
+        return true;
+    }
+
+    ~OverlayAside() { if (m_ov) m_ov->resume(); }
+
+private:
+    OverlayAside(const OverlayAside &);
+    OverlayAside &operator=(const OverlayAside &);
+    DriveOverlay *m_ov;
+};
+
 class StopSink
 {
 public:

@@ -46,6 +46,7 @@
 #include "app/workdlg.h"
 #include "app/pillbar.h"
 #include "app/screenshot.h"
+#include "automation/overlay.h"
 #include "app/statusbar.h"
 #include "app/reconnect.h"
 #include "app/turn.h"
@@ -1734,6 +1735,18 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             char shot_path[MAX_PATH];
             rc_strf(shot_path, sizeof(shot_path), "%sretro_shot_%u.bmp", temp_dir, ++s_shot_seq);
             DWORD shot_sz = 0;
+            /* The driving indicator out of the picture first. This image
+             * goes to the agent exactly as a `shot` does, so a band across
+             * it saying the desktop is being driven is the same cost and
+             * the same confusion -- and a person reaches for this menu
+             * BECAUSE something is happening on screen. */
+            RECT full;
+            OverlayAside hidden;
+            full.left = 0;
+            full.top = 0;
+            full.right = GetSystemMetrics(SM_CXSCREEN);
+            full.bottom = GetSystemMetrics(SM_CYSCREEN);
+            hidden.forCapture(m_overlay, full, 900);
             if (!rc_screenshot_capture(shot_path, &shot_sz)) {
                 MessageBoxA(hwnd, "Failed to capture desktop screenshot.", RC_TITLE, MB_OK | MB_ICONWARNING);
                 return 0;
@@ -1948,14 +1961,14 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
 
 MainWindow::MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
                        ConfigStore *store, const char *exeDir, rc_net *net,
-                       PrefsBody *prefs)
+                       PrefsBody *prefs, DriveOverlay *overlay)
     : m_inst(inst), m_show(show), m_cfg(cfg), m_store(store), m_app(app),
       m_net(net), m_html(0), m_bar(0), m_chats(0), m_xfer(0), m_input(0),
       m_attachments(0), m_toolbar(0), m_export(0), m_cache(0),
       m_cacheShown(0), m_accel(0), m_options(0), m_pageBar(0),
       m_announceConnected(0), m_status(0), m_reconnector(0), m_turn(0),
       m_uiFont(0), m_uiFontBold(0), m_exeDir(exeDir), m_prefs(prefs),
-      m_listsView(0)
+      m_overlay(overlay), m_listsView(0)
 {
 }
 

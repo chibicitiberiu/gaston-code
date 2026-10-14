@@ -48,6 +48,8 @@ class rc_statusbar;
  * by it, so it is named once, here. */
 #define RC_MAIN_CLASS "GastonWnd"
 
+class DriveOverlay;
+
 class MainWindow : public Service, public Window, public ReconnectListener, public TurnListener,
                    public FrameSender, public ChatListListener,
                    public ComposeListener, public PermissionBarListener,
@@ -57,7 +59,7 @@ class MainWindow : public Service, public Window, public ReconnectListener, publ
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
                ConfigStore *store, const char *exeDir, rc_net *net,
-               PrefsBody *prefs);
+               PrefsBody *prefs, DriveOverlay *overlay);
     ~MainWindow();
 
     const char *name() const;
@@ -171,6 +173,11 @@ private:
     /* The PREFS body the link points at (net.h: not copied), owned by the
      * app; rebuilt here when Options applies. */
     PrefsBody *m_prefs;
+    /* The driving indicator, for one job only: Attach > Screenshot
+     * captures the desktop and hands it to the agent, so the strip has to
+     * be out of that picture exactly as it is out of a `shot`. Owned by
+     * the App; null when there is none. */
+    DriveOverlay *m_overlay;
     /* The Lists inspector while it is open, for LISTENT/LISTEND. */
     ListsView *m_listsView;
 };

@@ -722,33 +722,6 @@ static HKL foregroundLayout(void)
     return GetKeyboardLayout(fg ? GetWindowThreadProcessId(fg, NULL) : 0);
 }
 
-/* The strip out of the way for one step, and back afterwards however the
- * step leaves. Asking it only when it is actually over the point is what
- * keeps it from blinking once per step on a list that never goes near it.
- *
- * ONE bracket, held across the whole click: clickButtonAt calls clickAt
- * internally, so a guard in each of them would show the strip again at the
- * inner one's destructor -- before the outer one's mouse_event. */
-class StepRunner::Aside
-{
-public:
-    Aside() : m_ov(0) {}
-    bool take(DriveOverlay *ov, int x, int y)
-    {
-        if (!ov || !ov->covers(x, y))
-            return true;
-        if (!ov->stepAside(400, false))
-            return false;
-        m_ov = ov;
-        return true;
-    }
-    ~Aside() { if (m_ov) m_ov->resume(); }
-private:
-    Aside(const Aside &);
-    Aside &operator=(const Aside &);
-    DriveOverlay *m_ov;
-};
-
 bool StepRunner::runOne(const Step &s, DWORD budget, StepReport &r)
 {
     InputResult x;
@@ -774,14 +747,14 @@ bool StepRunner::runOne(const Step &s, DWORD budget, StepReport &r)
         HWND expect = 0;
         int px = 0, py = 0;
         bool positioned = stepHasTarget(s);
-        Aside aside;
+        OverlayAside aside;
         if (positioned && !pointFor(s.target, budget, expect, px, py, r))
             return false;
         /* Before anything looks at what is under the point: the first
          * thing clickButtonAt does for an unnamed target is ask isOurs
          * about it, and our own strip over it would be REFUSED_SELF rather
          * than occluded. */
-        if (!aside.take(m_overlay, px, py))
+        if (!aside.forPoint(m_overlay, px, py, ASIDE_BUDGET_MS))
             return fail(r, inputStatus(INPUT_OCCLUDED),
                         "the Gaston indicator did not get out of the way");
         if (s.kind == STEP_CLICK)

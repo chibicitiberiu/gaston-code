@@ -33,6 +33,31 @@ static int clampBpp(int want, int screen)
     return 4;
 }
 
+/* Which pixels this would read: a window's rect, an explicit rect, or the
+ * whole screen. Factored out of capture so a caller can ask BEFORE it
+ * captures -- the driving indicator has to be out of the frame, and it has
+ * to be told which frame (automation/overlay.h). Unclipped, which is right
+ * for "does the strip overlap this" and is why capture clips its own copy.
+ */
+bool Screenshot::targetRect(const ShotOptions &opt, RECT &r)
+{
+    if (opt.window)
+        return IsWindow(opt.window) && GetWindowRect(opt.window, &r) != 0;
+    if (opt.rect.right > opt.rect.left && opt.rect.bottom > opt.rect.top)
+    {
+        r = opt.rect;
+        return true;
+    }
+    WindowDC screen(NULL);
+    if (!screen.valid())
+        return false;
+    r.left = 0;
+    r.top = 0;
+    r.right = GetDeviceCaps(screen.get(), HORZRES);
+    r.bottom = GetDeviceCaps(screen.get(), VERTRES);
+    return true;
+}
+
 bool Screenshot::capture(const ShotOptions &opt, ByteSink &sink)
 {
     m_written = 0;
@@ -46,25 +71,10 @@ bool Screenshot::capture(const ShotOptions &opt, ByteSink &sink)
     }
 
     RECT r;
-    if (opt.window)
+    if (!targetRect(opt, r))
     {
-        if (!IsWindow(opt.window) || !GetWindowRect(opt.window, &r))
-        {
-            rc_strf(m_err, sizeof(m_err), "window is gone");
-            return false;
-        }
-    }
-    else if (opt.rect.right > opt.rect.left
-             && opt.rect.bottom > opt.rect.top)
-    {
-        r = opt.rect;
-    }
-    else
-    {
-        r.left = 0;
-        r.top = 0;
-        r.right = GetDeviceCaps(screen.get(), HORZRES);
-        r.bottom = GetDeviceCaps(screen.get(), VERTRES);
+        rc_strf(m_err, sizeof(m_err), "window is gone");
+        return false;
     }
 
     /* Clipped to the screen, because a window can be partly off it and
