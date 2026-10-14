@@ -3,12 +3,11 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 4b — the "agent is driving"
-indicator.** Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12,
-stages 3b and 3c on 2026-10-13, stage 4 on 2026-10-14. **Stage 4b** was
-split out of stage 4 by review rather than by size, and was planned on
-2026-10-14 (`stage4b-plan.md`, `ROADMAP.md`). Stage 5 — the P200 — follows
-it.
+**Current goal: `ROADMAP.md` stage 5 — the P200.** Stages 1 and 2 closed
+2026-10-11, stage 3 on 2026-10-12, stages 3b and 3c on 2026-10-13, stage 4
+on 2026-10-14, and **stage 4b** — the "agent is driving" indicator, split
+out of stage 4 by review rather than by size — on 2026-10-15. Stage 5 has
+six unanswered bullets and wants the user's direction before it starts.
 
 Phase 5 (Attach) shipped; 5.1 is below, and 5.2/5.3 went in without a
 write-up of their own. Phase 6 is part-built: `ui`, `input`, `shot`,
@@ -4177,10 +4176,10 @@ bridge's side; they now filter guest rows too, case-folded.
 became a TextList.
 
 
-## Stage 4b -- the "agent is driving" indicator (2026-10-14)
+## Stage 4b -- the "agent is driving" indicator (2026-10-14/15)
 
-`ROADMAP.md` stage 4b, planned in `docs/stage4b-plan.md`. Ten commits,
-`7493987..`, each gated with `make -C win check`, `make lint`,
+`ROADMAP.md` stage 4b, planned in `docs/stage4b-plan.md`. Sixteen commits,
+`7493987..dcd293c`, each gated with `make -C win check`, `make lint`,
 `make test-fast`, and the long suites where the wire or the lane moved.
 
 A topmost strip, bottom right above the taskbar: **"Gaston is controlling the
@@ -4286,7 +4285,9 @@ argued from the other three.
     800x600      352 x 25          426 x 28
     640x480      352 x 25          426 wide, 207 spare
 
-Nothing clipped anywhere. The width tracks the DPI and not the screen,
+`indicator-vm-20261015-largefonts.png`, `-largefonts-strip.png`,
+`-640x480-smallfonts.png` and `-640x480-largefonts.png` are those four
+cells. Nothing clipped anywhere. The width tracks the DPI and not the screen,
 because it is measured with `GetTextExtentPoint32A` rather than laid out --
 which is why 800x600 and 640x480 give the same 426 at 120 dpi. The
 prediction before the first of those was "about 440": close enough to have

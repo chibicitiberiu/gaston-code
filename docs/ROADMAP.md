@@ -590,10 +590,10 @@ and three strings still telling the user to use a menu item that was deleted.
 
 ---
 
-## Stage 4b — the "agent is driving" indicator — DONE 2026-10-14
+## Stage 4b — the "agent is driving" indicator — DONE 2026-10-15
 
 Split out of stage 4 on 2026-10-13, by review rather than by size: the design
-in that stage would not have worked. **Planned and built 2026-10-14**
+in that stage would not have worked. **Planned and built 2026-10-14, verification finished 2026-10-15**
 (`docs/stage4b-plan.md`), after three more review rounds against the tree --
 one on the sketch, two on the plan -- which between them falsified six claims
 and then eleven more.
@@ -611,7 +611,8 @@ because a cancel alone is undone by the next request a second later.
 Measured on the guest: `docs/measurements/stripprobe-vm-20261014.txt` (what 98
 SE does with somebody else's topmost window) and
 `docs/measurements/indicator-vm-20261014.txt` (the thing itself, both
-programs, both cancel routes). Cost: `COMMITTED_CAP` 506,617 -> 513,273 and
+programs, both cancel routes, and the four screen/font corners finished the
+next morning -- the `indicator-vm-20261015-*.png` set). Cost: `COMMITTED_CAP` 506,617 -> 513,273 and
 `check-gremote` 263,593 -> 270,249, with no `_BSS` page slide on either.
 Gates at the close: `make -C win check` six caps, `make lint` clean,
 `make test-fast` 4,309, `make wine-smoke` 464, `pytest tests/python/remote`
