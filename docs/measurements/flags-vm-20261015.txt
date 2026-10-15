@@ -68,6 +68,18 @@ binary and keeps the single-pass CRLF fold off the content -- without it the
 run measures the fold as well as the codec.
 
 
+=== A note on comparability, added the same day ===
+
+The flagsprobe PAYLOAD is not the deflate CORPUS and does not move with it:
+it is pinned at 377,990 bytes from its own source list and printed with its
+ratio and leading byte on every run. But the same lesson applies, and it is
+why `probe deflate` and `tools/gen/mkcorpus.py` both print a crc32 now --
+within an hour of this run the deflate corpus had changed twice, because its
+source list included the probe's own source file. If a later flags run reports
+a different payload size or ratio than the 377,990 / 2.46:1 above, it is a
+different experiment and the medians are not comparable.
+
+
 === A/B/A is not ceremony, and it paid for itself here ===
 
 all-os's first get was 356 ms against a median of 265. A single pass on that

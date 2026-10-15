@@ -28,6 +28,17 @@ threshold. It now reads CORPUS.TXT beside the exe and REFUSES if it is absent.
   inflate        : 103422 -> 234481 in 4ms = 58620 KB/s  (rc=0)
   round trip     : PASS
 
+**THE CORPUS THIS RAN AGAINST NO LONGER EXISTS, and that is the reason the
+crc32 was added an hour later.** These numbers are 234,481 bytes of a corpus
+whose source list still included `win/checks/probe.c` -- the program reading
+it was a file inside it, so every edit to the probe changed the bytes the
+probe measured, and the size moved 234,481 -> 234,505 -> 234,509 over one
+afternoon. `scanner.cpp` replaced it, and both the generator and the probe now
+print the crc32 so two runs can be checked for being the same experiment. The
+current corpus is 214,843 bytes, crc32 c200f36e. Do not compare a later
+throughput figure against the ones below without checking that line first;
+compare the SHAPE, which is what this section is about.
+
 THE SHAPE IS RIGHT NOW, which is the point. Level 6 is SLOWER than level 1
 (86ms against 35ms), because more search costs more time. The old gate
 reported 184ms at level 1 on the fast XP against 94ms on the slower P200 with
