@@ -39,6 +39,8 @@ GUPDATE="$HERE/build/win/gupdate.exe"
 # BACKLOG 9 keeps open until a real machine agrees. It prints to the console by
 # its own design, so it is run through a redirect and the file fetched back.
 FOCUSPROBE="$HERE/build/win/focusprobe.exe"
+# Built beside probe.exe by `make -C win probe`; see the copy below.
+CORPUS="$HERE/build/win/CORPUS.TXT"
 GSTAGE="$HERE/vm/tools-stage"
 if [ ! -f "$PROBE" ]; then
   echo "mkw98kit: $PROBE is missing. Run: make -C win probe" >&2
@@ -75,6 +77,17 @@ if [ ! -f "$FOCUSPROBE" ]; then
   echo "mkw98kit: $FOCUSPROBE is missing. Run: make -C win focusprobe" >&2
   exit 1
 fi
+if [ ! -f "$CORPUS" ]; then
+  echo "mkw98kit: $CORPUS is missing. Run: make -C win probe" >&2
+  exit 1
+fi
+# A corpus older than the sources it is built from is a corpus whose crc32 no
+# longer matches what the tree would produce, and the whole point of that crc
+# is that two runs can be checked for being the same experiment.
+if [ "$HERE/tools/gen/mkcorpus.py" -nt "$CORPUS" ]; then
+  echo "mkw98kit: mkcorpus.py is newer than $CORPUS. Run: make -C win probe" >&2
+  exit 1
+fi
 if [ ! -f "$GSTAGE/GREMOTE.INI" ] || [ ! -f "$GSTAGE/GREMOTE.REG" ]; then
   echo "mkw98kit: no $GSTAGE/GREMOTE.INI or .REG -- those are written by the
        ISO build, and this kit copies rather than repeats them.
@@ -94,11 +107,13 @@ cp "$GUPDATE"          "$STAGE/GUPDATE.EXE"
 cp "$FOCUSPROBE"       "$STAGE/FOCUSPRB.EXE"
 cp "$GSTAGE/GREMOTE.INI" "$STAGE/GREMOTE.INI"
 cp "$GSTAGE/GREMOTE.REG" "$STAGE/GREMOTE.REG"
-# The deflate corpus is GENERATED here rather than copied from the ISO
-# staging, unlike the INI and the .REG: it is not a config, it is data derived
-# from this tree, and a staged copy could go stale against the sources it is
-# built from without anything saying so.
-python3 "$HERE/tools/gen/mkcorpus.py" -o "$STAGE/CORPUS.TXT" | sed 's/^/  /'
+# The deflate corpus is COPIED from beside probe.exe, where `make -C win
+# probe` builds it, rather than generated a second time here. `probe deflate`
+# reads it from its own directory and refuses without it, so the build already
+# has to produce it -- and two generators for one file is two files that drift.
+# The copy is what goes on the floppy; the probe on the floppy reads it from
+# its own directory there exactly as it does in build/win.
+cp "$CORPUS"          "$STAGE/CORPUS.TXT"
 
 # Every text file in the kit must be CRLF, and this is checked rather than
 # trusted. COMMAND.COM will not run a .BAT with bare LF line endings, and

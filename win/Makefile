@@ -663,7 +663,23 @@ $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	@echo "built $@"
 
 PROBE_OBJS = $(call objs,checks/probe.c $(MINIZ)) $(LIBCORE)
-probe: $(BUILD)/probe.exe
+# The corpus is a PREREQUISITE of the probe, not an optional extra beside it.
+# `probe deflate` reads CORPUS.TXT from its own directory and REFUSES without
+# it -- deliberately, because the synthetic sample it used to build compressed
+# 164:1 and its throughput was quoted for a year as a threshold it could not
+# support. A refusal cannot be misread; a fallback was.
+#
+# Which means a probe.exe built without the file beside it is a probe that
+# cannot answer gate 0.5c, and that is exactly how the Wine driver broke when
+# the refusal landed: tests/python/guest/test_guest_probe.py runs the real
+# binary and asserts on the round trip, and got the refusal instead. Building
+# the corpus here fixes it at the source rather than teaching one caller to
+# carry its own copy -- tools/gen/mkw98kit.sh copies this same file onto the
+# floppy, so there is one generator and one output.
+probe: $(BUILD)/probe.exe $(BUILD)/CORPUS.TXT
+
+$(BUILD)/CORPUS.TXT: $(TOP)/tools/gen/mkcorpus.py
+	@$(PYTHON) $(TOP)/tools/gen/mkcorpus.py -o $@ | sed 's/^/  /'
 $(BUILD)/probe.exe: $(PROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"

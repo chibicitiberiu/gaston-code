@@ -180,6 +180,24 @@ def run_guest(name: str, *args, cwd=None, timeout: float = 60,
                               env=env if env is not None else wine_env())
 
 
+def run_guest_at(path: str, *args, cwd=None, timeout: float = 60,
+                 text: bool = False, env: dict | None = None):
+    """As `run_guest`, for a binary at an ARBITRARY path.
+
+    `run_guest` resolves its name inside BUILD, which is right for every
+    check binary. This exists for the one case that needs the exe somewhere
+    else: probe.exe finds CORPUS.TXT beside ITSELF via GetModuleFileNameA, so
+    testing the no-corpus refusal means putting a copy of the exe in a
+    directory that has no corpus in it. A bare cwd would not do -- the real
+    build directory has the corpus, and the probe would find it anyway.
+    """
+    argv = [WINE, path, *[str(a) for a in args]]
+    return subprocess.run(argv, capture_output=True, text=text,
+                          timeout=timeout,
+                          cwd=str(cwd) if cwd is not None else None,
+                          env=env if env is not None else wine_env())
+
+
 def guest_says(out) -> str:
     """What the binary printed, for an assertion message.
 

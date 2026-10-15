@@ -548,7 +548,14 @@ static void probe_deflate(void)
         return;
     }
     src[total] = '\0';
-    say("corpus         : %u bytes from CORPUS.TXT", total);
+    /* The CRC makes two runs comparable, and that is not decoration: the
+     * corpus is derived from eleven files in the tree, so it moves whenever
+     * one of them is edited. A throughput figure is only comparable against
+     * another run of the same bytes, and the machines this gate needs are
+     * measured days apart. tools/gen/mkcorpus.py prints the same number. */
+    say("corpus         : %u bytes from CORPUS.TXT, crc32 %08lx", total,
+        (unsigned long)mz_crc32(MZ_CRC32_INIT, (const unsigned char *)src,
+                                total));
 
     /* A DISCARDED WARM PASS, and it is not ceremony.
      *

@@ -48,13 +48,20 @@ CEILING = 256 * 1024
 # would still be representative. Every path is relative to the repo root and
 # every one is checked to exist, because a silently missing file would change
 # the corpus and nothing would say so.
+#
+# win/checks/probe.c IS DELIBERATELY NOT HERE, and it was until it bit: the
+# program that reads this corpus is the program whose source was in it, so
+# every edit to the probe changed the bytes the probe measures. That showed up
+# as the size moving 234,481 -> 234,505 -> 234,509 across one afternoon of
+# working on the probe itself. scanner.cpp stands in: real project code, and
+# not the file whose edits correlate with running this measurement.
 SOURCES = [
     "docs/PLAN.md",
     "docs/REMOTE.md",
     "docs/UIAUTOMATION.md",
     "win/net/caps.h",
     "win/core/rc_cpp.h",
-    "win/checks/probe.c",
+    "win/sync/scanner.cpp",
     "win/automation/input.cpp",
     "win/remote/server.cpp",
     "win/ui/uiengine.cpp",
@@ -113,6 +120,17 @@ def main() -> int:
     for rel, n in used:
         print(f"  {n:>7}  {rel}")
     print(f"mkcorpus: compresses {ratio:.2f}:1 at level 6")
+    # THE CRC IS THE POINT OF COMPARABILITY, and it is not decoration.
+    #
+    # This corpus is derived from eleven files in the tree, so it changes
+    # whenever any of them is edited -- which it did, by 28 bytes, between
+    # two runs an hour apart on the day it was written. A throughput figure is
+    # only comparable against another run of the SAME bytes, and the two
+    # machines this gate needs are measured days apart. So both this tool and
+    # `probe deflate` print the CRC, and a measurement file quotes it: two
+    # numbers with different CRCs beside them are two different experiments,
+    # and nothing has to remember which documents moved in between.
+    print(f"mkcorpus: crc32 {zlib.crc32(data) & 0xFFFFFFFF:08x}")
     # MEASURED 2026-10-15: 234,481 bytes at 2.76:1, with the eleven sources
     # above. That is higher than the 2.16:1 probe.c's comment cites, and the
     # reason is this project's prose: three of the eleven files are documents
