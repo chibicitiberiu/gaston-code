@@ -466,6 +466,30 @@ static void probe_screen(void)
     ReleaseDC(NULL, screen);
 }
 
+/* Build a path to `name` in this exe's own directory.
+ *
+ * A bare fopen("CORPUS.TXT") would resolve against the CURRENT directory,
+ * which is the kit folder when TEST.BAT runs it and something else entirely
+ * when it is started from a DOS prompt elsewhere. The file not being found
+ * then looks exactly like the file not being shipped. Returns 0 if the path
+ * does not fit, which on this platform means something is very wrong. */
+static int beside_exe(const char *name, char *out, unsigned cap)
+{
+    char path[MAX_PATH];
+    unsigned cut = 0, i;
+
+    path[0] = '\0';
+    if (!GetModuleFileNameA(NULL, path, sizeof(path)))
+        return 0;
+    for (i = 0; path[i]; i++)
+        if (path[i] == '\\' || path[i] == '/' || path[i] == ':')
+            cut = i + 1;
+    if (cut + strlen(name) + 1 > cap)
+        return 0;
+    memcpy(out, path, cut);
+    return rc_strcpy(out + cut, cap - cut, name);
+}
+
 /* ------------------------------------------------------------------ 0.5c */
 /* Every threshold in the adaptive-codec design rests on these numbers, and so
  * far they are estimates from a modern CPU. */
@@ -474,32 +498,57 @@ static void probe_deflate(void)
     static char src[256 * 1024];
     static unsigned char comp[300 * 1024];
     static unsigned char dec[256 * 1024];
-    /* NOTE: this sample is one two-line block repeated, so it compresses
-     * ~164:1 and the throughput below is flattered badly -- deflate on near
-     * pure repetition barely has to search. Measured on the guest it gave
-     * 7707 KB/s at level 1, which is NOT a usable threshold. Before 0.5c can
-     * be closed this needs a realistic corpus (the project's own prose and
-     * code, which measured 2.16:1) read from a file next to the exe. */
-    static const char *SAMPLE =
-        "The bridge owns markdown, so the wire carries pre-styled runs.\r\n"
-        "if (len > RC_MAX_FRAME) return -1;  /* 64KB, not 32MB */\r\n";
+    /* THE CORPUS IS READ FROM DISK, AND THERE IS NO FALLBACK.
+     *
+     * This used to synthesise its sample: one two-line block repeated, which
+     * compresses ~164:1 because deflate on near-pure repetition barely has to
+     * search. On the guest that gave 7707 KB/s at level 1 and the comment
+     * here said in as many words that it was NOT a usable threshold -- and
+     * the number got quoted anyway, for a year, across four documents.
+     *
+     * So the sample is now CORPUS.TXT beside the exe: this project's own
+     * prose and code, 2.76:1, built by tools/gen/mkcorpus.py and carried on
+     * the floppy by tools/gen/mkw98kit.sh. If it is absent this section
+     * REFUSES rather than falling back, because a fallback is exactly how the
+     * unusable number came to be believed: a run with no corpus would print a
+     * plausible figure under the same heading, and nothing downstream could
+     * tell the two apart. A refusal cannot be misread.
+     *
+     * src[] is 256 KB and the corpus is sized to it rather than the reverse:
+     * growing this static costs committed-at-load bytes on a 32 MB machine. */
+    char corpus[MAX_PATH];
+    FILE *cf;
     mz_ulong clen, dlen;
-    unsigned slen, total = 0;
+    unsigned total = 0;
     DWORD t0, t1;
     int rc, lvl;
 
     head("0.5c  deflate throughput on this CPU");
 
-    slen = (unsigned)strlen(SAMPLE);
-    while (total + slen < sizeof(src) - 1) {
-        memcpy(src + total, SAMPLE, slen);
-        total += slen;
-        /* Vary it a little so the ratio is not absurdly flattered. */
-        if ((total / slen) % 7 == 0 && total + 8 < sizeof(src))
-            { memcpy(src + total, "vary-XY\n", 8); total += 8; }
+    if (!beside_exe("CORPUS.TXT", corpus, sizeof(corpus))) {
+        say("REFUSED: cannot build a path to CORPUS.TXT");
+        return;
+    }
+    cf = fopen(corpus, "rb");
+    if (!cf) {
+        say("REFUSED: no CORPUS.TXT beside this exe (%s).", corpus);
+        say("  0.5c cannot close without it. The synthetic sample this");
+        say("  section used to build compressed 164:1 and its throughput was");
+        say("  never a usable threshold, so there is deliberately no");
+        say("  fallback. Copy CORPUS.TXT from the kit, or rebuild it with");
+        say("  python3 tools/gen/mkcorpus.py.");
+        return;
+    }
+    total = (unsigned)fread(src, 1, sizeof(src) - 1, cf);
+    fclose(cf);
+    if (total < 64 * 1024) {
+        say("REFUSED: CORPUS.TXT is only %u bytes; under 64K the timings sit",
+            total);
+        say("  inside GetTickCount's own resolution and say nothing.");
+        return;
     }
     src[total] = '\0';
-    say("sample         : %u bytes of mixed prose and code", total);
+    say("corpus         : %u bytes from CORPUS.TXT", total);
 
     /* A DISCARDED WARM PASS, and it is not ceremony.
      *
@@ -2217,31 +2266,59 @@ static long g_want_ev;
 static HWND g_want_hwnd;
 static int  g_want_got;
 static DWORD g_want_at;
+/* The SYSTEM's own timestamp for the same event -- see lat_proc. */
+static DWORD g_want_sysat;
 
 static void CALLBACK lat_proc(RC_HWINEVENTHOOK hook, DWORD ev, HWND h,
                               LONG obj, LONG child, DWORD tid, DWORD ms)
 {
     unsigned k;
     int known = 0;
-    (void)hook; (void)obj; (void)child; (void)tid; (void)ms;
+    (void)hook; (void)obj; (void)child; (void)tid;
     for (k = 0; k < EVNAMES_N; k++)
         if ((long)ev == EVNAMES[k].id) { g_hist[k]++; known = 1; break; }
     if (!known) g_hist_other++;
     if (!g_want_got && (long)ev == g_want_ev
         && (g_want_hwnd == NULL || h == g_want_hwnd)) {
         g_want_got = 1;
+        /* TWO CLOCKS, AND THE GAP BETWEEN THEM IS THE POINT.
+         *
+         * `ms` is dwmsEventTime: when the SYSTEM raised the event. Reading
+         * GetTickCount() here instead measures when OUR message loop got
+         * round to delivering it, which is a pump latency and includes
+         * however long this process was busy. PROGRESS.md 0.15c marks the
+         * old figures unusable for exactly that reason -- "the system's own
+         * event timestamp is discarded and the clock is read inside the
+         * callback" -- and `ms` was being voided one line above, so the
+         * number it wanted was already on the stack.
+         *
+         * Both are kept rather than one replaced: the pump figure is what
+         * every earlier run recorded, so dropping it would make this
+         * incomparable with them, and the DIFFERENCE is the thing worth
+         * reading. Same tick base, so they subtract.
+         *
+         * What this does not fix: both are GetTickCount, whose 9x resolution
+         * is about 55 ms. A true latency under one tick reads as 0 either
+         * way, and no amount of arithmetic here changes that. */
         g_want_at = GetTickCount();
+        g_want_sysat = ms;
     }
 }
 
 /* Pump until the awaited event lands or the budget runs out. Returns the
  * wait in ms, or -1 for "never arrived", which is the answer that matters:
  * a missing event is what makes a WaitFor hang. */
+/* The same wait measured from the system's own timestamp, set by the call
+ * below. A global rather than an out-parameter to match how the rest of this
+ * section already carries state out of the callback. */
+static long g_sys_d;
+
 static long await_event(long ev, HWND h, DWORD t0, DWORD budget)
 {
     DWORD until = GetTickCount() + budget;
     MSG msg;
     g_want_ev = ev; g_want_hwnd = h; g_want_got = 0; g_want_at = 0;
+    g_want_sysat = 0; g_sys_d = -1L;
     while (!g_want_got && (long)(GetTickCount() - until) < 0) {
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
@@ -2249,6 +2326,8 @@ static long await_event(long ev, HWND h, DWORD t0, DWORD budget)
         }
         Sleep(1);
     }
+    if (g_want_got)
+        g_sys_d = (long)(g_want_sysat - t0);
     return g_want_got ? (long)(g_want_at - t0) : -1L;
 }
 
@@ -2287,22 +2366,22 @@ static void probe_evlat(void)
     w = CreateWindowExA(0, "GastonEvSink", "one", WS_OVERLAPPEDWINDOW,
                         40, 40, 200, 120, NULL, NULL, wc.hInstance, NULL);
     d = await_event(RC_EV_OBJ_CREATE, w, t0, 2000);
-    say("create  -> OBJ_CREATE     : %ld ms", d);
+    say("create  -> OBJ_CREATE     : %ld ms pump, %ld ms system", d, g_sys_d);
 
     t0 = GetTickCount();
     ShowWindow(w, SW_SHOW);
     d = await_event(RC_EV_OBJ_SHOW, w, t0, 2000);
-    say("show    -> OBJ_SHOW       : %ld ms", d);
+    say("show    -> OBJ_SHOW       : %ld ms pump, %ld ms system", d, g_sys_d);
 
     t0 = GetTickCount();
     SetWindowTextA(w, "renamed");
     d = await_event(RC_EV_OBJ_NAMECHANGE, w, t0, 2000);
-    say("settext -> OBJ_NAMECHANGE : %ld ms", d);
+    say("settext -> OBJ_NAMECHANGE : %ld ms pump, %ld ms system", d, g_sys_d);
 
     t0 = GetTickCount();
     DestroyWindow(w);
     d = await_event(RC_EV_OBJ_DESTROY, NULL, t0, 2000);
-    say("destroy -> OBJ_DESTROY    : %ld ms", d);
+    say("destroy -> OBJ_DESTROY    : %ld ms pump, %ld ms system", d, g_sys_d);
 
     /* Completeness: the same action twenty times. Nineteen of twenty is a
      * feed you cannot build a wait on. */
@@ -3687,6 +3766,95 @@ static void probe_imgfind(void)
     say("filtered  : %lu ms, found at (%d,%d), %d first-byte hits",
         (unsigned long)(t1 - t0), found_x, found_y, hits);
     say("   (a correct run finds it at or before (%d,%d))", sx, sy);
+
+    /* THE ABSENT TEMPLATE, WHICH IS THE CASE NOBODY HAD EVER TIMED.
+     *
+     * Both scans above stop at the first hit, so what they measure is "how
+     * long to find something that is there" -- and the template is lifted
+     * from this very screen, so it is always there, usually early. The
+     * expensive case is the opposite one: a template that is NOT on screen,
+     * where there is no early exit and every position is visited. That is
+     * also the case a real ImageClick hits whenever it is asked to wait for
+     * something that has not appeared yet, which is most of the time.
+     *
+     * A guaranteed miss is constructed rather than hoped for: histogram the
+     * capture, find a byte value that does not occur in it at all, and fill
+     * the template with it. A block requiring a colour the screen does not
+     * contain cannot match anywhere. If all 256 values are in use the
+     * rarest is used instead, which is not a proof, so the result is
+     * checked and labelled rather than assumed. */
+    {
+        unsigned long freq[256];
+        unsigned long best;
+        int v, pick, guaranteed;
+        unsigned long npos;
+
+        for (v = 0; v < 256; v++) freq[v] = 0;
+        for (y = 0; y < rows; y++)
+            for (x = 0; x < w; x++)
+                freq[shot[(unsigned long)y * stride + x]]++;
+        pick = 0; best = freq[0];
+        for (v = 1; v < 256; v++)
+            if (freq[v] < best) { best = freq[v]; pick = v; }
+        guaranteed = (best == 0);
+        for (j = 0; j < TH; j++)
+            for (i = 0; i < TW; i++)
+                tmpl[j * TW + i] = (unsigned char)pick;
+        say("absent template: solid index %d, which occurs %lu times%s",
+            pick, best, guaranteed ? " (so a miss is certain)"
+                                   : " (rarest, not absent -- see below)");
+
+        npos = (unsigned long)(rows - TH + 1) * (unsigned long)(w - TW + 1);
+
+        found_x = found_y = -1;
+        t0 = GetTickCount();
+        for (y = 0; y <= rows - TH && found_y < 0; y++) {
+            for (x = 0; x <= w - TW; x++) {
+                int ok = 1;
+                for (j = 0; j < TH && ok; j++)
+                    for (i = 0; i < TW; i++)
+                        if (shot[(y + j) * stride + x + i] != tmpl[j * TW + i])
+                            { ok = 0; break; }
+                if (ok) { found_x = x; found_y = y; break; }
+            }
+        }
+        t1 = GetTickCount();
+        say("naive miss     : %lu ms over %lu positions%s",
+            (unsigned long)(t1 - t0), npos,
+            found_y < 0 ? "" : " *** MATCHED, so this is not a miss case");
+
+        found_x = found_y = -1;
+        hits = 0;
+        t0 = GetTickCount();
+        for (y = 0; y <= rows - TH && found_y < 0; y++) {
+            const unsigned char *row = shot + (unsigned long)y * stride;
+            for (x = 0; x <= w - TW; x++) {
+                int ok = 1;
+                if (row[x] != tmpl[0]) continue;
+                hits++;
+                for (j = 0; j < TH && ok; j++)
+                    for (i = 0; i < TW; i++)
+                        if (shot[(y + j) * stride + x + i] != tmpl[j * TW + i])
+                            { ok = 0; break; }
+                if (ok) { found_x = x; found_y = y; break; }
+            }
+        }
+        t1 = GetTickCount();
+        say("filtered miss  : %lu ms, %d first-byte hits%s",
+            (unsigned long)(t1 - t0), hits,
+            found_y < 0 ? "" : " *** MATCHED, so this is not a miss case");
+        say("   The miss is the cost a wait pays on every poll where the");
+        say("   thing has not appeared. The hit figures above are the floor.");
+    }
+
+    /* How much of the screen was actually searched, stated as a number
+     * rather than left as a caveat somebody has to recompute. */
+    if (rows < h)
+        say("NOTE: only %d of %d rows fit in the %lu-byte buffer, so the "
+            "bottom %d rows were not searched",
+            rows, h, (unsigned long)sizeof(shot), h - rows);
+    else
+        say("whole screen searched: %d of %d rows fit the buffer", rows, h);
 
 done:
     SelectObject(mem, oldbmp);

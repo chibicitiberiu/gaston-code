@@ -1,0 +1,132 @@
+# Stage 5 E2: the three probe changes, rehearsed before the P200 sees them.
+#
+# Machine : the QEMU Win98 SE guest (libvirt domain retroclaude-win98,
+#           qemu:///session), 32288 KB total / 3088 KB free at the time,
+#           800x600, stock retail 98 SE, 13 hours into an uptime.
+#           NOT the Pentium 200. These are rehearsal numbers whose job is to
+#           prove the instruments print something the old ones could not; the
+#           gate closes on the real box.
+# Driven  : gremote over a temporary 7401 hostfwd, probe.exe and CORPUS.TXT
+#           put into C:\TEMP\GR, run with EXEC, both removed afterwards and
+#           the forward taken back down.
+# Date    : 2026-10-15
+#
+# Why these three: docs/stage5-plan.md's "what must be built before the box is
+# touched". Each had a comment or a gate note already saying it was wrong, and
+# each was being quoted anyway.
+
+
+=== 0.5c  deflate: the corpus is real, and the ordering artifact is gone ===
+
+probe.c used to synthesise its sample -- one two-line block repeated, ~164:1 --
+and said so in a comment that also said the throughput was NOT a usable
+threshold. It now reads CORPUS.TXT beside the exe and REFUSES if it is absent.
+
+  corpus         : 234481 bytes from CORPUS.TXT
+  level 1 deflate: 234481 -> 103422 (2.27:1) in 35ms  = 6699 KB/s
+  level 6 deflate: 234481 -> 84688 (2.77:1) in 86ms  = 2726 KB/s
+  inflate        : 103422 -> 234481 in 4ms = 58620 KB/s  (rc=0)
+  round trip     : PASS
+
+THE SHAPE IS RIGHT NOW, which is the point. Level 6 is SLOWER than level 1
+(86ms against 35ms), because more search costs more time. The old gate
+reported 184ms at level 1 on the fast XP against 94ms on the slower P200 with
+level 6 at "1ms" -- an ordering artifact where the first level measured paid
+miniz's allocation. The discarded warm pass fixed the ordering; this fixes the
+corpus. Both were needed and only one had landed.
+
+For comparison, the figure PROGRESS.md 0.5c carries from the synthetic sample
+on this same guest: L1 7707 KB/s compress, 16379 KB/s inflate. Compression at
+level 1 barely moved (7707 -> 6699, and real text is harder), but inflate went
+16379 -> 58620: inflating 164:1 repetition is not the same work as inflating
+2.27:1 text, and the old number was measuring the sample rather than the CPU.
+
+The refusal path was checked too, under Wine, because an absent corpus must not
+silently produce a plausible figure under the same heading:
+
+  REFUSED: no CORPUS.TXT beside this exe (Z:\...\dfl\CORPUS.TXT).
+    0.5c cannot close without it. [...] there is deliberately no fallback.
+
+The path is built from GetModuleFileNameA rather than left to the current
+directory, so "not beside the exe" cannot be confused with "started from
+somewhere else".
+
+
+=== 0.15c  WinEvent latency: the two clocks are now distinguishable ===
+
+PROGRESS.md 0.15c marks its milliseconds unusable in as many words: "the
+system's own event timestamp is discarded and the clock is read inside the
+callback, so they are pump latencies on a 55ms tick. Do not budget against
+them." The timestamp was on the stack of the very function that dropped it --
+lat_proc's `ms` parameter, voided one line above the GetTickCount call.
+
+Both are now reported, because the pump figure is what every earlier run
+recorded and the DIFFERENCE is the finding:
+
+  create  -> OBJ_CREATE     : 0 ms pump, 0 ms system
+  show    -> OBJ_SHOW       : -1 ms pump, -1 ms system
+  settext -> OBJ_NAMECHANGE : 3 ms pump, 0 ms system
+  destroy -> OBJ_DESTROY    : 0 ms pump, 0 ms system
+  completeness              : 20 of 20 creates produced an event
+
+THE THIRD LINE IS THE WHOLE POINT. The system raised OBJ_NAMECHANGE within the
+same tick as the SetWindowText that caused it; our message loop delivered it 3
+ms later. Those are different quantities and until now they were the same
+number. A wait built on the pump figure budgets for our own responsiveness; a
+wait built on the system figure budgets for the platform.
+
+The -1s are "never arrived" and are pre-existing: Wine shows the same three.
+
+What this does NOT fix, and it is written in the code beside it: both clocks
+are GetTickCount, ~55 ms on 9x. A true latency under one tick reads 0 either
+way. Under Wine the two figures were identical (200/200) on every line -- an
+idle pump and Wine's own timestamp -- so a run where they never diverge is not
+evidence the fix works. This guest diverging by 3 ms is.
+
+
+=== 0.16  the absent template, which nobody had ever timed ===
+
+PROGRESS.md 0.16 carries "32x32 template on the P200: 11ms naive, 1ms
+filtered" with its own caveat that both scans stop at the first hit and cover
+only sizeof(shot)/stride rows. So the figure is the cost of finding something
+that IS there -- and the template is lifted from the screen being searched, so
+it is always there, usually early. (That row also has no measurement file
+behind it: no imgfind section exists in p200-run1 or p200-run2.)
+
+The expensive case is the opposite one, and it is the case a wait actually
+pays on every poll where the thing has not appeared yet:
+
+  screen 800x600; searching 800x600 (480000 bytes), template 32x32
+  template from (96,0), 33 distinct values
+  naive     : 0 ms, found at (96,0)
+  filtered  : 0 ms, found at (96,0), 97 first-byte hits
+  absent template: solid index 7, which occurs 0 times (so a miss is certain)
+  naive miss     : 20 ms over 437561 positions
+  filtered miss  : 4 ms, 0 first-byte hits
+  whole screen searched: 600 of 600 rows fit the buffer
+
+A miss is CONSTRUCTED rather than hoped for: histogram the capture, find a
+byte value that does not occur at all, fill the template with it. A block
+requiring a colour the screen does not contain cannot match anywhere. If all
+256 values were in use the rarest is taken instead and the result is checked
+and labelled, so the file never silently reports a hit as a miss.
+
+And the row cap is now stated as a number instead of inherited as a caveat:
+at 800x600 all 600 rows fit the 512 KB buffer, so on the screen this project
+actually targets the caveat does not bite. It bites above about 655 lines at
+800 wide, and on the developer's 1920x1080 host only 273 of 1080 rows were
+searched -- which is what the old caveat was really about.
+
+The filtered strategy wins by 5x on the miss (4ms against 20ms) and ties on
+the hit, which is the opposite of the intuition that filtering helps most when
+there is something to find.
+
+
+=== What this rehearsal does not say ===
+
+None of it is a P200 number. The guest is TCG on a modern host: its deflate
+figures are about a Ryzen, its pump is idle rather than loaded, and the 3 ms
+divergence in 0.15c would be larger on a machine that is actually busy. The
+value of the run is that all three instruments now emit a quantity the old
+ones could not, and that each was seen to do so before anybody carried a
+floppy across town.
