@@ -74,11 +74,16 @@ already built, and the entry was wrong to keep asking for them.**
 - *First delivery.* Answered by use on the Athlon, which has been driven over
   gremote since 2026-10-01. The floppy bootstrap was never needed there.
 
-What stands is the **Pentium 200 itself**, and only that: a NIC with a
+~~What stands is the **Pentium 200 itself**, and only that: a NIC with a
 configured stack on a machine whose only proven channel is still a hand-carried
-floppy. `tools/gen/mkw98kit.sh` gains `GREMOTE.EXE` in stage 1 so that channel
-exists when the box does -- the kit stages 356 KB onto a 1.44 MB floppy and had
-no size check at all.
+floppy.~~ **The NIC is there (2026-10-15).** The box has a configured TCP/IP
+stack, so the floppy carries `GREMOTE.EXE` once and everything after that is
+gremote over port 7401, the way the Athlon has been driven since 2026-10-01.
+Stage 5 is where that gets used; `docs/stage5-plan.md` is the plan. `tools/gen/mkw98kit.sh` gains `GREMOTE.EXE` in stage 1 so that channel
+exists when the box does -- the kit had no size check at all when this was
+written. It has one now, and the figure has moved: 567 KB of a 1.44 MB floppy
+once rebuilt, and about 900 KB after stage 5 adds `GUPDATE.EXE`,
+`FOCUSPROBE.EXE` and a deflate corpus.
 
 **And a naming hazard worth more than it looks.** Most `docs/measurements/*-p200-*.txt`
 files are **Athlon XP** runs; `inifile-absent-key-p200-20261001.txt` even calls
@@ -3084,7 +3089,12 @@ a guess. Take the measurement first.
 **Partly closed, and the measurement now has an instrument (2026-10-02).**
 `UICANCEL` landed with the `input` step list and stops a running list between
 steps and inside any wait -- but only a list. `UITREE` and `UISHOT` still run
-to completion, which is what this entry is actually about.
+to completion, which is what this entry is actually about. **[R -- 2026-10-15]
+That last sentence is stale against the paragraphs below it:** the flag reaches
+all three ops, `TreeSink::onNode` polls it per node (`win/ui/uiengine.cpp`)
+and a cancel for a still-queued id starts that request already stopped
+(`win/ui/uirpc.cpp`). What is left for the P200 is whether the cost this entry
+was written about is real, not whether to build the mechanism.
 
 gremote's ui lane (REMOTE.md step 6) needed a stop for its step lists anyway,
 so the bookkeeping is paid; the marginal cost of stopping a walk turned out to
@@ -3899,7 +3909,13 @@ networking up and our process gone, which is `win/remote/main.cpp:47-62`'s
 
 That also means there is **no software route left to retry from**: gremote
 exits with the session and autostarts on logon, so an unattended box in this
-state needs somebody at the keyboard. The machine was left that way.
+state needs somebody at the keyboard. **[R -- 2026-10-15] Both halves of that
+sentence are now wrong, and stage 4 is why.** gremote survives a logoff
+(`App::survivesLogoff()`), and `RunServices` runs at BOOT rather than per
+session, so it never did come back at the next logon -- see `REMOTE.md`'s
+checklist item 12. The conclusion stands for a different reason: a failed
+poweroff lands on the logon prompt with `RunServices` already spent, so there is
+still no software route left to retry from. The machine was left that way.
 
 **Two causes fit the evidence and this run cannot tell them apart.**
 

@@ -1233,7 +1233,13 @@ matters for anything with a clock in it.
   guest by terminating the process and no teardown runs
   (`tests/python/remote/test_sleep.py` says so).
 - `gremote` memory idle and under load, with and without the client running.
-- Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI numbers in `SYSINFO`.
+- ~~Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI
+  numbers in `SYSINFO`.~~ **ANSWERED 2026-10-14: no, and not for a hardware
+  reason.** `SYSINFO` runs inline on gremote's control lane, whose one rule is
+  kernel32 and Winsock only, because a hung 16-bit app holding Win16Mutex
+  blocks USER and GDI from every 32-bit thread. No install clears that
+  (`ROADMAP.md`'s stage 4 section; `BACKLOG.md` 1423-1429). `PLAN.md:653` has
+  the alternative.
 - **Shutdown with `gremote` installed and running.** *Observed on the real
   P200, 2026-10-01: the machine hung on the way down -- "stuck with no
   desktop", no reboot -- and took two Ctrl+Alt+Dels to force. The reboot had

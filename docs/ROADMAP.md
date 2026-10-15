@@ -42,7 +42,7 @@ in stage 1 for that reason.
 | 3b | Pagination: the bridge stops dividing the transcript — **DONE 2026-10-13** | the guest asks for blocks by range, and `pages.py` is an append-only transcript |
 | 3c | R7: several guest machines against one bridge — **DONE 2026-10-13** | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs — **DONE 2026-10-14** | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
-| 4b | The "agent is driving" indicator — **DONE 2026-10-14** | somebody at the keyboard can see that the desktop is not theirs, and stop it, while gremote or the client is driving |
+| 4b | The "agent is driving" indicator — **DONE 2026-10-15** | somebody at the keyboard can see that the desktop is not theirs, and stop it, while gremote or the client is driving |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
 
@@ -753,12 +753,17 @@ re-derived:
 
 ## Stage 5 — the P200, and the optimisation it justifies
 
-**Resolved, and it stayed in stage 1:** the clipboard run on the Athlon ran
-on 2026-10-11 once the box was powered on
-(`docs/measurements/clipboard-athlon-20261011.txt`). Keeping it was right --
-it found that `[Ctrl+A]` selects all in the text editor there and nothing at
-all in the guest's, which the prose had been stating as a property of the
-platform.
+Planned in `docs/stage5-plan.md`, through two review rounds against the tree
+which between them falsified nine claims and then twenty-two more.
+
+**The box is reachable, and that was not known when this section was first
+written.** It has a NIC with a configured TCP/IP stack -- the one thing
+`BACKLOG.md:77-81` and `gremote-plan.md:254-255` both record as open -- so
+bring-up is one floppy carrying `GREMOTE.EXE`, and after that the Pentium 200
+is driven from Linux over port 7401 exactly as the Athlon has been since
+2026-10-01. It also stays powered and accessible, which makes this a campaign
+rather than a visit: a build can be shipped and re-shipped, and a measurement
+can be re-run.
 
 The bring-up happened in stage 1, so this is the measurements. ~~Eight~~
 **Six** of the twelve `REMOTE.md` P200-checklist bullets are unanswered --
@@ -776,20 +781,60 @@ have.
 item 12, whether gremote survives a LOGOFF, which needed one logoff on any
 real 98 box -- it did not survive, and `RunServices` runs at boot rather
 than per session, so it did not come back at the next logon either
-(`docs/measurements/logoff-vm-20261014.txt`); and item 9, the `rsrc32.dll`
+(`docs/measurements/logoff-vm-20261013.txt`); and item 9, the `rsrc32.dll`
 question, settled as a no on the control lane's kernel32-and-Winsock rule,
 which no install can clear.
 
-Plus gate 0.5c (deflate throughput, still provisional), the six measurements
-`UIAUTOMATION.md` says only the P200 can answer, `BACKLOG.md` 26 -- which closes
-when the P200 says so and not before -- and 22's `-verify 4000` window, never
-measured against a cold start off a 1998 platter.
+Plus gate 0.5c (deflate throughput, still provisional), the five measurements
+`UIAUTOMATION.md:387` says only the P200 can answer, `BACKLOG.md` 26 -- which
+closes when the P200 says so and not before -- and 22's `-verify 4000` window,
+never measured against a cold start off a 1998 platter.
 
 The optimisation that belongs here rather than in stage 2 is the part that needs
-the slow machine to judge: whether `-ot` earns its bytes in the modules it was
-kept for, and whether the guest re-reading its whole tree every sync pass costs
-anything real (`BACKLOG.md` 4, "measure the real cost on the box before building
-anything").
+the slow machine to judge: whether `-ot` earns its bytes in the three modules it
+is still kept for, and whether the guest re-reading its whole tree every sync
+pass costs anything real (`BACKLOG.md` 4, "measure the real cost on the box
+before building anything").
+
+### What the review established before any of it runs
+
+Each of these was opened and read, because a plan built on a summary is a plan
+built on a summary:
+
+- **The flags question is two builds, not three.** `flags-vm-20261011.txt` ran
+  `otexan`, `all-os` and `os-but-hot` -- but that was before 2026-10-11
+  inverted the default, so `os-but-hot` **is** HEAD and `otexan` is a layout
+  that was voted against and deleted. Re-creating it would re-ask a settled
+  question. The stage's own question is HEAD against `all-os`, measured A/B/A.
+  And `BUILD=` alone cannot produce it: `-os` is hardcoded at `win/Makefile:51`
+  and the hot-module override is unconditional at `:859-860`, so one `HOT_OPT`
+  knob comes first.
+- **`GUPDATE.EXE` is not on the floppy**, and `control.cpp:357-361` refuses
+  `UPDATE` without it. Since `REMOTE.md:604-614` keeps there being no remote
+  `QUIT`, and a remote kill strands a box whose `RunServices` has already run,
+  `UPDATE` is the only instrument for the `TIME_WAIT` bullet -- and the only
+  way to get a second build onto the machine without walking over.
+- **Nothing puts the client on the box.** The kit has no `GASTON.EXE` and the
+  client's install path is the ISO, on a machine with no CD. It goes over the
+  wire with `Remote.ship()`, which is its own step, because the
+  shutdown-with-the-client bullet and three of the probes need it there.
+- **Gate 0.5c does not close on a rerun.** `probe.c:477-483` indicts its own
+  corpus in a comment and asks for the project's own prose and code read from a
+  file beside the exe; `:474` caps that file at 256 KB.
+- **`probe evlat` discards the system's event timestamp on purpose** -- its
+  callback already receives it -- so the figures `PROGRESS.md:100` marks
+  unusable stay unusable until that one line changes, and a 55 ms
+  `GetTickCount` quantum survives even then.
+- **`probe imgfind` has only ever timed a template that was present**, over
+  `sizeof(shot)/stride` rows, stopping at the first hit. The expensive case is
+  the absent one.
+- **`BACKLOG.md` 26's cancel is already built** for `UITREE` and `UISHOT`
+  (`uiengine.cpp:182-197`, `uirpc.cpp:129-150`); the entry's opening paragraph
+  is stale against its own body. The P200 decides whether the cost was real,
+  not whether to build the mechanism.
+- **The shipped `GREMOTE.INI` is permissive and bootable** -- `bind=0.0.0.0`,
+  `allow=` empty, `automation=2`, and a secret that is not the one the refusal
+  checks for. That was a QEMU slirp decision and it is wrong on a LAN.
 
 ---
 

@@ -256,6 +256,15 @@ records: whether that box has a NIC and a configured TCP/IP stack, and how
 `GREMOTE.EXE` gets there the first time -- its only proven channel is a 1.44MB
 floppy via `tools/gen/mkw98kit.sh`, which is where it should be added.
 
+**[R -- 2026-10-15] The first of those two preconditions is answered: the box
+has a NIC with a configured TCP/IP stack.** So the floppy carries `GREMOTE.EXE`
+once -- it is in the kit as of 2026-10-10 -- and everything after that is
+gremote over port 7401. The second precondition stands as written, and stage 5
+adds `GUPDATE.EXE` beside it, because without an updater on the disk the first
+build on the box is the last one until somebody walks over
+(`win/remote/control.cpp` refuses `UPDATE` with `no_updater`).
+`docs/stage5-plan.md` is the plan.
+
 ## Progress
 
 ### Done (2026-09-27)
