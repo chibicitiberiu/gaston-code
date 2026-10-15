@@ -132,22 +132,71 @@ def replay_fence(send, conn, a) -> int:
                      f"  /* step {i} */")
     body = "```c\n" + "\n".join(lines) + "\n```\n"
 
+    # A PAGE THAT IS ALREADY LONG WHEN THE LIVE BLOCK STARTS.
+    #
+    # --replay-fence sizes the open block; it says nothing about what is
+    # ALREADY on the page under it, and that is what BACKLOG 31's repaint
+    # question is actually about: "client-side rendering would move repaint
+    # work onto a 1998 CPU -- a repaint-budget question and therefore a P200
+    # question". A live update re-renders the open block against a document
+    # that already holds everything before it, so the cost to measure is how
+    # that grows, not the block in isolation.
+    #
+    # Sealed paragraphs rather than one huge one, because each becomes its
+    # own APPEND and the page ends up with the structure a real conversation
+    # has. They are fed WITHOUT the cadence below -- pacing 60KB of prefill
+    # at 0.1s a line would take an hour and measure nothing.
+    prefill_lines: list[str] = []
+    if a.prefill:
+        j = 0
+        while sum(len(x) + 1 for x in prefill_lines) < a.prefill * 1024:
+            j += 1
+            prefill_lines.append(
+                f"Paragraph {j}: the scanner reads every byte of every file "
+                f"it is given, which is why it is one of the three modules "
+                f"still built at -ot.")
+            prefill_lines.append("")
+
     # One live update per line, which is the WORST realistic count for an
     # answer this long rather than the typical one -- a model emitting faster
     # than ten lines a second has several lines coalesced into one flush. The
     # per-update payload is what makes this faithful: _tail caps it at
     # LIVE_CAP source bytes, which comes out around 4.4KB of markup, and that
     # is the figure the renderer will be handed.
+    prefill_text = "\n".join(prefill_lines) + ("\n" if prefill_lines else "")
     print(f"replaying a {len(body)} byte fence in {len(lines)} lines "
           f"at {a.cadence:.2f}s; LIVE_CAP={B.BlockStream.LIVE_CAP}, so about "
           f"{len(lines) * a.cadence:.0f}s")
+    if prefill_text:
+        print(f"...onto a page prefilled with {len(prefill_text)} bytes in "
+              f"{len(prefill_lines) // 2} sealed paragraphs, sent unpaced")
 
     link = GuestLink()
     link.writer = _SockWriter(conn)
 
     async def drive() -> tuple[int, int]:
         n_live = n_append = 0
+        pre_live = pre_append = 0
         stream = B.BlockStream()
+        # The prefill first and unpaced: it is the page the live block will
+        # be re-rendered against, not part of the thing being timed.
+        #
+        # Counted SEPARATELY, because building a page emits a live update per
+        # paragraph as well as the append that seals it -- 61 paragraphs came
+        # out as 122 live and 61 appends when this was checked against the
+        # real BlockStream. Folding those into the totals below would inflate
+        # the paced figure by more than the thing being measured.
+        for line in prefill_text.splitlines(keepends=True):
+            for u in stream.feed(line):
+                rec = B.encode(u.block) if u.block is not None else b""
+                await link.send_records(None, rec, u.mode, 1)
+                if u.mode == H.LIVE:
+                    pre_live += 1
+                else:
+                    pre_append += 1
+        if prefill_text:
+            print(f"prefill sent: {pre_live} live, {pre_append} appends "
+                  "(unpaced, not part of the timing below)")
         # Fed a line at a time, which is what the paginator works in.
         for line in body.splitlines(keepends=True):
             for u in stream.feed(line):
@@ -200,6 +249,13 @@ def main() -> int:
                          "time, then the APPEND that seals it. This is the "
                          "corpus the live-cost measurement uses; 60 is the "
                          "size it was calibrated at")
+    ap.add_argument("--prefill", type=int, default=0, metavar="KB",
+                    help="seal KB of paragraphs onto the page BEFORE the live "
+                         "fence starts, unpaced. --replay-fence sizes the open "
+                         "block; this sizes what is already under it, which is "
+                         "what BACKLOG 31's repaint budget is about. Pair them "
+                         "and vary this to see whether a live re-render gets "
+                         "dearer as the page grows")
     ap.add_argument("--cadence", type=float, default=0.1, metavar="S",
                     help="seconds between live updates (default 0.1, the "
                          "coalescer's). Lower it to iterate faster, but the "

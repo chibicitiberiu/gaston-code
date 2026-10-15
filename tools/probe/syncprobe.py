@@ -428,8 +428,56 @@ def stage_recovery(g: Guest) -> None:
     print("staged; restart the client, then run --recovery")
 
 
+def timed_scans(g: Guest, passes: int) -> None:
+    """Time N identical no-change SYNCSCANs. BACKLOG 2 and BACKLOG 4.
+
+    BACKLOG 4 records that "the guest re-reads its whole tree on every pass"
+    and tells whoever reads it to "measure the real cost on the box before
+    building anything" -- the cache it would otherwise justify is refused
+    because a per-path entry on a 32MB machine costs memory it does not have.
+    One SYNCSCAN is exactly one of those whole-tree passes, so N of them with
+    nothing changing in between is the measurement, and the spread across
+    them is the disk cache warming.
+
+    SCAN-ONLY ON PURPOSE. The rest of this probe calls dos(), which drives a
+    DOS box through QMP screenshots and pixel-matches Win98's title bar --
+    QEMU-only plumbing that cannot run against a machine on the LAN. This
+    path touches nothing and mutates nothing, so it is the only part of the
+    file that travels to real hardware.
+
+    A timed pass over an EMPTY tree measures nothing. The entry count is
+    printed per pass for that reason: if it is small, the number is about an
+    empty directory and not about this machine.
+    """
+    print(f"timing {passes} identical no-change scans of the work root")
+    times: list[float] = []
+    counts: list[int] = []
+    for i in range(passes):
+        t0 = time.time()
+        rows, _ = g.scan()
+        took = time.time() - t0
+        times.append(took)
+        counts.append(len(rows))
+        print(f"  pass {i + 1}: {took:.3f}s, {len(rows)} entries")
+    if len(set(counts)) != 1:
+        print(f"  *** the entry count MOVED across passes ({counts}) -- "
+              "something is writing to the tree, so these are not identical "
+              "passes and the spread is not cache warming")
+    lo, hi = min(times), max(times)
+    mid = sorted(times)[len(times) // 2]
+    print(f"  median {mid:.3f}s, range {lo:.3f}-{hi:.3f}s over "
+          f"{counts[0]} entries")
+    if counts[0] < 20:
+        print("  *** fewer than 20 entries: populate the work root before "
+              "reading anything into this")
+
+
 def main() -> int:
     ap = probelib.arg_parser()
+    ap.add_argument("--scans", type=int, default=0, metavar="N",
+                    help="time N identical no-change scans and exit "
+                         "(BACKLOG 2 and 4). The only mode that works "
+                         "against hardware -- the rest needs QEMU")
     ap.add_argument("--stage-recovery", action="store_true",
                     help="put the guest tree into a post-crash state and exit")
     ap.add_argument("--recovery", action="store_true",
@@ -455,7 +503,9 @@ def main() -> int:
           f"ver={hello.headers.get('ver')}")
 
     try:
-        if a.stage_recovery:
+        if a.scans:
+            timed_scans(g, a.scans)
+        elif a.stage_recovery:
             stage_recovery(g)
         elif a.recovery:
             run_recovery_check(g)
