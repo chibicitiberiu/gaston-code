@@ -98,8 +98,14 @@ GREMOTE.EXE -- OPTIONAL, AND ONLY IF THIS MACHINE IS ON A NETWORK
   try it:
 
       COPY A:\GREMOTE.EXE C:\GASTON
+      COPY A:\GUPDATE.EXE C:\GASTON
       COPY A:\GREMOTE.INI C:\GASTON\gremote.ini
       C:\GASTON\GREMOTE.EXE
+
+  GUPDATE.EXE goes beside it and is not optional if you want a
+  newer build sent over the network later: GREMOTE refuses to
+  replace itself unless the updater is in its own directory. One
+  file now, or a walk back to this keyboard later.
 
   Edit gremote.ini first: `secret` is a password in plain text on
   a trusted network, and `allow` is the range of addresses that
@@ -112,3 +118,17 @@ GREMOTE.EXE -- OPTIONAL, AND ONLY IF THIS MACHINE IS ON A NETWORK
 
   Deliberately not automatic, and worth undoing with REGEDIT when
   the measurements are finished: it opens a port on this machine.
+
+CORPUS.TXT AND FOCUSPRB.EXE
+
+  CORPUS.TXT is not a document. It is 229K of this project's own
+  text and code, and the deflate step times itself against it --
+  real prose rather than the repeating block it used to use,
+  which compressed 164 to 1 and flattered the result badly. Leave
+  it beside PROBE.EXE; the step says so if it is missing.
+
+  FOCUSPRB.EXE asks whether Windows lets a program raise somebody
+  else's window. It needs TWO Notepads open with one in front of
+  the other, prints a few lines to the screen and writes nothing,
+  so run it from a DOS box with > OUT.TXT if you want the answer
+  as a file.

@@ -728,10 +728,10 @@ dozen smoke-test leftovers called `BIG`, `WRITEME3`, `PINEAPPL` loose in the
 install directory, and scratch in three places. None of it was wrong when it
 was written; it accumulated because nobody said where things went.
 
-    C:\GASTON\      the client: gaston.exe, gaston.ini, view.htm,
-                     spin.gif, tools_detect.ini, gaston.log, gaston.prv
-    C:\GREMOTE\     the server: gremote.exe, gremote.ini, gremote.log,
-                     gremote.prv
+    C:\GASTON\      BOTH programs: the client (gaston.exe, gaston.ini,
+                     view.htm, spin.gif, tools_detect.ini, gaston.log,
+                     gaston.prv) and the server beside it (gremote.exe,
+                     gremote.ini, gupdate.exe, gremote.log, gremote.prv)
     C:\WORK\        the client's work root, and NOTHING else. Conversation
                      folders live under it; it must never contain either
                      program, or the client mirrors itself to the bridge
@@ -739,8 +739,18 @@ was written; it accumulated because nobody said where things went.
                      may write. Emptied at the end of the session that
                      made it
 
-Four directories. Anything a test leaves outside them is a bug in the test,
+Three directories. Anything a test leaves outside them is a bug in the test,
 and `ls` of each of these should be explicable in one sentence.
+
+**`C:\GREMOTE\` was the plan and never the practice**, corrected 2026-10-15
+when stage 5 went looking for the install path and found two answers. Every
+generator puts the server in `C:\GASTON`: `tools/gen/mktools-iso.sh` copies
+`D:\*.EXE` there, follows with `gremote.ini` and `GREMOTE.REG`, and writes the
+`RunServices` value as `C:\GASTON\GREMOTE.EXE`. The deployed guest matches.
+The reason to keep it that way rather than split them is `gupdate.exe`:
+`win/remote/control.cpp` refuses `UPDATE` unless the updater sits **beside the
+running image**, so the server's directory is already a two-file directory, and
+a third place for one program buys nothing.
 
 **`C:\WORK\<CONVERSATION>` is where the agent works, and it does not depend on
 the bridge mirroring anything.** *Corrected 2026-10-01, the same day it bit:

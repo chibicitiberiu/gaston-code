@@ -92,3 +92,9 @@ vm/*.partial.*
 # Watcom ISO staging, like tools-stage: 90MB of unpacked third-party
 # toolchain that the script rebuilds from the installer in seconds.
 vm/*-stage/
+# A per-box gremote.ini: tools/gen/mktools-iso.sh:129 copies this over the
+# permissive heredoc default if it exists, which is how a real machine on a
+# real LAN gets its own secret and its own allow=. Ignored so that secret
+# never reaches the history. vm/gaston.ini IS tracked, and carries only the
+# dev-secret placeholder the QEMU guest uses.
+vm/gremote.ini
