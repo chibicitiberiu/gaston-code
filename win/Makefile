@@ -856,8 +856,28 @@ $(OBJ)/checks/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
 # and runs in 10-15 ms against GetTickCount's ~10 ms resolution, so both
 # builds measured 10-11 ms at level 1. probe.c:479 says as much about its own
 # sample. The round trip through gremote is the instrument that works.
+#
+# HOT_OPT IS A KNOB BECAUSE STAGE 5 HAS TO BUILD THE OTHER ARM.
+#
+# The numbers above are from the QEMU guest, which is TCG on a modern host --
+# so the 23% is a statement about a Ryzen, and the machine the trade is FOR is
+# a 200MHz Pentium with 32MB. docs/stage5-plan.md measures HEAD against -os
+# everywhere on the real box, A/B/A, through tools/probe/flagsprobe.py.
+#
+# BUILD= already gives each arm its own object tree, but the flags were not
+# reachable from the command line: -os is hardcoded above and this override
+# was unconditional, so "all-os" meant editing this file between builds --
+# which is how you end up comparing two trees that differ in more than the
+# thing you meant to change. Now:
+#
+#   make -C win                          HEAD, as shipped
+#   make -C win HOT_OPT=-os BUILD=...    -os everywhere (the subst no-ops)
+#
+# The default is -otexan, so an ordinary build and every gate are unchanged.
+HOT_OPT ?= -otexan
+
 $(OBJ)/third_party/miniz/miniz.o $(OBJ)/sync/scanner.o \
-$(OBJ)/fs/reader.o: CFLAGS := $(subst -os,-otexan,$(CFLAGS))
+$(OBJ)/fs/reader.o: CFLAGS := $(subst -os,$(HOT_OPT),$(CFLAGS))
 
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
 # and the .res is then bound at link time by `option resource=` below. The

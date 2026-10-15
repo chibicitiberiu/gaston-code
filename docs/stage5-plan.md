@@ -211,7 +211,7 @@ gone — a box that answers nothing and cannot be told to.
 
 | result | the change it licenses |
 |---|---|
-| `-ot` earns nothing in the three hot modules | delete `win/Makefile:859-860`. `flags-vm-20261011.txt:25-27` priced whole-program `-os` at **gaston -26,624, gremote -19,456** on the VM; the P200 says whether the 23% is real here |
+| `-ot` earns nothing in the three hot modules | delete `win/Makefile:859-860`, which is worth **5,632 bytes of client image and 5,120 of gremote**, committed at load, both measured on the host 2026-10-15 (`flags-vm-20261015.txt`). **Not** the -26,624 this row used to quote: that figure is against the pre-2026-10-11 default of `-otexan` everywhere, and HEAD is already most of the way to `-os`. The P200 says whether the 24% the guest charges for those bytes is real there |
 | it earns its bytes | nothing changes, and the `:813-858` ladder comment gains P200 numbers beside a TCG measurement. The likelier outcome, and the stage is still worth it |
 | a cancelled walk visibly delays the next call | §26 closes as **justified**; the live follow-on is whether `max_tree_nodes=4000` suits a slow box |
 | it does not | §26 closes as **the problem does not arise**, on the machine it was written about (`BACKLOG.md:3131-3132`) |

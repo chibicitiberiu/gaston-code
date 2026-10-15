@@ -1,0 +1,101 @@
+# Stage 5 E3: the -ot round trip as a tool, rehearsed; and the byte side,
+# which turned out not to need the P200 at all.
+#
+# Machine : the QEMU Win98 SE guest (libvirt domain retroclaude-win98,
+#           qemu:///session), 32288 KB, 800x600, HELLO says
+#           "x86 family 6 model 5, 1 cpu", machine=RETRO98.
+#           NOT the Pentium 200. This run's job is to prove the instrument
+#           reproduces docs/measurements/flags-vm-20261011.txt's shape before
+#           it is pointed at the real box.
+# Driven  : tools/probe/flagsprobe.py (new) over a temporary 7401 hostfwd.
+# Date    : 2026-10-15
+
+
+=== What is actually on the table, measured on the host ===
+
+ROADMAP and the stage plan both priced this trade from
+flags-vm-20261011.txt's "whole program at -os: gaston -26,624, gremote
+-19,456". THAT IS THE WRONG NUMBER NOW, and by a factor of five.
+
+Those figures are relative to the OLD default, which was -otexan everywhere
+with six directories overridden to -os. 2026-10-11 inverted that: the default
+is -os and three modules are the exception (win/Makefile). So HEAD is already
+most of the way to -os, and the only bytes still in play are the three hot
+modules. Built both ways from one tree with the new HOT_OPT knob:
+
+                    file size            committed at load
+  gaston   HEAD      495,616             510,217
+  gaston   all-os    489,984             504,585      -5,632
+  gremote  HEAD      262,656             267,177
+  gremote  all-os    257,536             262,057      -5,120
+
+So the question the P200 answers is whether 5,632 bytes of client image is
+worth what -ot buys in speed -- not 26,624. Nothing in this paragraph needed
+the slow machine; it is arithmetic on two builds, and it should have been done
+before the stage was planned rather than during it.
+
+
+=== The instrument reproduces the 2026-10-11 shape ===
+
+  payload: 377990 bytes, 2.46:1 at level 6, leading byte 0x00
+  target : 127.0.0.1:7401, 5 puts and 5 gets per arm
+
+  arm             put ms  get ms
+  head               283     214
+  all-os             257     265
+  head (2)           265     223
+
+  head    put [290, 303, 260, 251, 283]   get [236, 216, 208, 203, 214]
+  all-os  put [257, 292, 253, 259, 245]   get [356, 249, 265, 243, 268]
+  head(2) put [279, 254, 265, 252, 288]   get [234, 216, 223, 211, 235]
+
+THE GET IS THE MEASUREMENT: guest -> host, so the guest compresses, and
+deflate's search is the thing -ot buys. 214 -> 265 -> 223 is a **24% penalty**
+for all-os with the baseline reproduced either side of it, against the 23%
+flags-vm-20261011.txt measured (0.177 -> 0.219 -> 0.182). Same experiment,
+same answer, now a script instead of a sitting.
+
+The puts are 283 / 257 / 265 -- one spread, no signal. Expected: host -> guest
+means the guest only INFLATES, which is table lookups, and the 2026-10-11 run
+said the same (0.280 / 0.261 / 0.291 / 0.289). A put that ever does move is a
+sign the run is contaminated, which is why the tool prints it.
+
+Absolute times are higher here than in 2026-10-11 (214 against 182 ms) because
+the payload is not byte-identical: the source list has been re-pinned and this
+project's documents have grown since. 377,990 bytes and the leading NUL are
+kept exactly, because that byte is what makes the fs lane classify the payload
+binary and keeps the single-pass CRLF fold off the content -- without it the
+run measures the fold as well as the codec.
+
+
+=== A/B/A is not ceremony, and it paid for itself here ===
+
+all-os's first get was 356 ms against a median of 265. A single pass on that
+arm would have reported a 66% penalty. The closing A -- head measured again at
+223 against its own 214 -- is what says the machine had not drifted and the
+356 was one sample, not a trend. A 98 box warms its disk cache; a number
+measured once has no way to say which it was.
+
+It also leaves the box on the arm it started from, which is a property worth
+having when the box is in another room: the run ends with the shipping build
+installed rather than whatever was measured last.
+
+
+=== self_update three times, with nothing lost ===
+
+Each arm is installed with gremote's own self_update, and all three reconnected:
+2.14 s, 1.18 s, 2.13 s. GREMOTE.OLD is left holding the previous image, which
+is the rollback a person at the keyboard has.
+
+Worth recording because stage 5's E1 was about this: the guest HAS
+GUPDATE.EXE (48,640) beside GREMOTE.EXE, because tools/gen/mktools-iso.sh
+sweeps D:\*.EXE into C:\GASTON. It is the FLOPPY kit that was missing it, and
+the floppy is the only channel the P200 has. So the instrument works here and
+would have failed there, which is the gap E1 closed rather than a gap in this
+measurement.
+
+Free with each install, and the P200 run should read them off the box:
+GREMOTE.LOG's bind-retry line (the TIME_WAIT bullet) and GUPDATE.LOG's
+survival time (BACKLOG 22's -verify window). Neither fired here -- three
+restarts, no "port is busy" line -- which on a machine this fast says nothing
+about the P200 off a 1998 platter.
