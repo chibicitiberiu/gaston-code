@@ -361,12 +361,17 @@ class Remote:
              max_nodes: int = 400, msaa: bool = False, hidden: bool = False,
              text: bool = True, wait_for: str = "", wait_ms: int = 5000,
              settle_ms: int = 0, timeout_ms: int = 8000,
-             items_of: str = "", timeout: float = 60.0) -> UiTree:
+             items_of: str = "", timeout: float = 60.0, on_id=None) -> UiTree:
         """Read the control tree, or one control's items with `items_of`.
 
         The nodes come back as the guest wrote them and the selectors are
         built here, in the order the guest walked -- `:nth(k)` counts matches
         in that order, so nothing may sort or filter the list first.
+
+        `on_id` is handed this call's id before the request goes out, which
+        is the only way another thread can `stop()` a walk that is still
+        running -- BACKLOG 26's measurement needs exactly that race, and
+        `stream()` already calls the hook pre-send for this reason.
         """
         headers = {
             "scope": scope,
@@ -388,7 +393,8 @@ class Remote:
             # names an `item` target addresses.
             headers["acc"] = "1"
             headers["target"] = items_of
-        end, chunks = self.stream("TREE", headers, timeout=timeout)
+        end, chunks = self.stream("TREE", headers, timeout=timeout,
+                                  on_id=on_id)
         return parse_tree(end, chunks, self.acp)
 
     def run(self, steps, *, timeout_ms: int = 120000,
@@ -437,7 +443,7 @@ class Remote:
 
     def shot(self, *, x: int = 0, y: int = 0, w: int = 0, h: int = 0,
              bpp: int = 8, max_bytes: int = 4 * 1024 * 1024,
-             timeout: float = 120.0) -> bytes:
+             timeout: float = 120.0, on_id=None) -> bytes:
         """Photograph the screen, or a rectangle of it. Returns a BMP.
 
         `w` and `h` are a width and a height, not a right and a bottom; 0
@@ -453,7 +459,7 @@ class Remote:
         headers = {"x": str(x), "y": str(y), "w": str(w), "h": str(h),
                    "bpp": str(bpp)}
         end, chunks = self.stream("SHOT", headers, timeout=timeout,
-                                  max_body_bytes=max_bytes)
+                                  max_body_bytes=max_bytes, on_id=on_id)
         data = b"".join(c.body for c in chunks)
         declared = int(end.headers.get("bytes", "0"))
         if declared and len(data) != declared:
