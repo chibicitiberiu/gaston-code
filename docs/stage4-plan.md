@@ -227,7 +227,7 @@ asserted exactly, with `SCREEN_TOOLS` at `:183`; it moves in this commit.
 
 **E11 — the logoff measurement, and whatever it decides.** **Setup the plan previously missed:**
 gremote's `RunServices` key was removed from the QEMU guest after the 2026-09-27 run
-(`docs/measurements/gremote-vm-20260927.txt:175-199`), so the run needs
+(`research/measurements/gremote-vm-20260927.txt:175-199`), so the run needs
 `REGEDIT /S C:\GASTON\GREMOTE.REG` reinstated or gremote started by hand after logon. Then: log
 off at the console, see whether 7401 answers, read `GREMOTE.PRV` — `endSessionKind()` is in
 libcore (`app.cpp:127`) so both programs print the bit. **If the port survives, the commit is

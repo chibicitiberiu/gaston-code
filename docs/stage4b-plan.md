@@ -198,7 +198,7 @@ the failure this project keeps finding.
    code when another process owns the chord; that a `SW_SHOWNOACTIVATE` topmost popup never takes
    the foreground, including when clicked; `SetWindowRgn` as the 9x-safe alternative.
 3. **The strip's width and position** at 800x600 and 640x480, Small and Large Fonts — computed, then
-   seen on the guest once (`docs/measurements/largefonts-vm-20261014.txt` is why).
+   seen on the guest once (`research/measurements/largefonts-vm-20261014.txt` is why).
 
 ---
 
@@ -218,7 +218,7 @@ the failure this project keeps finding.
 | **E9** | hidden during capture: `Screenshot::capture` and the client's `IDM_ATTSHOT` | |
 | **E10** | `[ui] indicator` | `remote/config.cpp` `UI_KEYS` (an unlisted key is refused), `app/config.cpp:19,117,146,302`, `inicheck.cpp:125`'s hand-written comparison, `test_guest_config.py`, the `test_ui_lane.py` INIs + the one on-test |
 | **E11** | `uicheck` `refusals()`: the seam is not entered on the three early returns, is entered once around a list that runs, and `driveEnded` runs when the list fails | a counting `FakeUiLink` + `CASE_COUNT` (`test_uirec_agreement.py:72`, uicheck's 57) |
-| **E12** | the guest run: placement and width at both font sizes, the chord, Stop by both routes during a real drive, a `SHOT` with the strip up, a full-screen DOS box, two strips at once | `docs/measurements/indicator-vm-<date>.txt` + screenshots |
+| **E12** | the guest run: placement and width at both font sizes, the chord, Stop by both routes during a real drive, a `SHOT` with the strip up, a full-screen DOS box, two strips at once | `research/measurements/indicator-vm-<date>.txt` + screenshots |
 | **E13** | docs: 4b closes — `ROADMAP.md`, `PROGRESS.md` (a 4b section, **and** stage 4's, which `512a93a` never wrote), `BACKLOG.md` §19's `:2366-2389`, `:2488`'s two-driver mechanism, §29, `UIAUTOMATION.md`'s `### Two callers, one engine` + `## Where each piece runs`, `REMOTE.md:275-284,496,539` | — |
 
 `imports.py` needs nothing: every new call is USER32/GDI32, already imported by both exes.

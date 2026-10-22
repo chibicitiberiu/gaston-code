@@ -19,7 +19,7 @@ static const GUID RC_IID_IMessageFilter =
  * SINGLE object module, so the one `IID_IUnknown` in QueryInterface below
  * pulled all 1,970 GUIDs into gremote, uicheck, autocheck and the rest, with
  * the linker's own map marking 1,969 of them unreferenced. Measured
- * 2026-10-11 (docs/measurements/imagebytes-host-20261011.txt). The RC_
+ * 2026-10-11 (research/measurements/imagebytes-host-20261011.txt). The RC_
  * prefix is required, not tidiness: unknwn.h already declares the name as
  * `EXTERN_C const IID`, so a static of the same name would not compile. */
 static const GUID RC_IID_IUnknown =

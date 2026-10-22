@@ -106,7 +106,7 @@ def test_a_directory_listing_IS_offered_and_here_is_why():
     """WAS `test_ls_is_not_offered`, whose reasoning was "the machine's own
     shell lists a directory perfectly well". It does not, and the numbers that
     settled it were measured on real Windows 98 on 2026-10-01
-    (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt) -- twelve files
+    (research/measurements/batch-eol-and-dir-b-p200-20261001.txt) -- twelve files
     in one directory:
 
         dir /b <path>    131 bytes -- names, no sizes, no dates
@@ -308,7 +308,7 @@ def test_every_tool_refuses_clearly_with_no_machine_attached():
 # and silently broken through the other.
 #
 # Measured on real Windows 98 the day this was found
-# (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt):
+# (research/measurements/batch-eol-and-dir-b-p200-20261001.txt):
 #
 #   LF.BAT    "@echo off\necho one\nset FOO=bar\necho [%FOO%]\n"  -> "OFF"
 #   CRLF.BAT  the same with \r\n                                  -> "one" "[bar]"

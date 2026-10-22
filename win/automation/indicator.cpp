@@ -265,7 +265,7 @@ LRESULT DriveIndicator::Strip::handle(UINT msg, WPARAM wp, LPARAM lp)
      * honour it: WindowFromPoint returns this window through a
      * WM_NCHITTEST answering HTTRANSPARENT, even with the strip on another
      * thread of the same process, which is the case the documentation says
-     * is covered (docs/measurements/stripprobe-vm-20261014.txt). Code that
+     * is covered (research/measurements/stripprobe-vm-20261014.txt). Code that
      * does nothing on the only platform that runs it is worse than no
      * code: the next person reads it as a mechanism that works. */
 

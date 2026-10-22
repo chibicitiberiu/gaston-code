@@ -639,7 +639,7 @@ def default_sync_root() -> str:
     the client made `C:\WORK\<title>`, named it in the prompt, and nothing
     was mirrored into it. Every file then had to travel by `put_file`, which
     writes bytes with no opinion about line endings, so a batch file written
-    on this side did not run on that side (docs/measurements/
+    on this side did not run on that side (research/measurements/
     batch-eol-and-dir-b-p200-20261001.txt). The sync layer converts; the
     one-off path does not. Having the default be "no mirror" meant the
     cheaper, lossier path was what you got by accident.

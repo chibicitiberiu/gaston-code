@@ -205,7 +205,7 @@ devices = [
 # --- getting an exit code back out of this shell ---------------------------
 #
 # MEASURED ON REAL HARDWARE, 2026-10-01
-# (docs/measurements/exit-codes-via-batch-p200-20261002.txt). `command.com /c`
+# (research/measurements/exit-codes-via-batch-p200-20261002.txt). `command.com /c`
 # exits 0 whatever happened -- for a failing child and for a program that does
 # not exist -- so `exec` through this shell could not say whether a build
 # worked, and a live session verified every single compile with a follow-up
@@ -338,7 +338,7 @@ chkdsk = "/F"
 [note]
 # The exit code fact: measured 2026-09-26 on the vm/ guest, 0 even for a
 # failing child and for a program that does not exist; a direct spawn gets
-# the real code (docs/measurements/execprobe-vm-gui-20260926.txt). Folded
+# the real code (research/measurements/execprobe-vm-gui-20260926.txt). Folded
 # into the chaining bullet below rather than kept as its own line, because
 # this block has a hard budget (tests/python/agent/test_machine.py).
 #

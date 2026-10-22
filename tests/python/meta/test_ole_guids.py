@@ -4,7 +4,7 @@
 `RC_IID_*` constants rather than linking `uuid.lib`, because that library is a
 single object module and one reference to it pulls all 1,970 GUIDs -- 31,744
 bytes of committed image in four exes, measured 2026-10-11
-(`docs/measurements/imagebytes-host-20261011.txt`).
+(`research/measurements/imagebytes-host-20261011.txt`).
 
 `tests/guest/cppcheck.cpp` proves that table right by `memcmp`-ing it against
 `uuid.lib`'s own copies at run time, which is the comparison that matters and

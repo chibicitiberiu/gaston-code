@@ -953,7 +953,7 @@ static bool askTool(HWND parent, ToolRow &r, char *trust, unsigned trustCap)
 
     /* 140, not 128: the buttons sit at y=119 and are 14 high, so they end
      * at 133 and a 128-tall dialog CLIPS THEM. Seen on the guest at Large
-     * Fonts (docs/measurements/largefonts-vm-20261014.txt) and true at any
+     * Fonts (research/measurements/largefonts-vm-20261014.txt) and true at any
      * font size -- the arithmetic was simply wrong and no gate checks a
      * dialog template against its own contents. */
     t.begin(RC_DLGT_MODAL, 250, 140, "Add a tool");

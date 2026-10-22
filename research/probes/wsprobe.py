@@ -1,6 +1,6 @@
 """What the client holds in physical memory: one build against another.
 
-The method of docs/measurements/workingset-vm-20261002.txt, as a tool: each
+The method of research/measurements/workingset-vm-20261002.txt, as a tool: each
 build starts FRESH from its own folder, idle, pointed at a port nothing
 listens on (no session, no transcript); free physical memory is sampled with
 it up and again after it ends, and the two builds alternate, because free

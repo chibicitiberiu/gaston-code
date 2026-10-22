@@ -36,7 +36,7 @@ characters for it. The same fact in both directions: nothing could come back, so
 the old sentinel never matched, so every absent key looked present. That case now
 asserts the property that is true on both platforms instead of a round trip only
 one of them performs; see its comment in inifilecheck.cpp and
-docs/measurements/inifile-absent-key-p200-20261001.txt.
+research/measurements/inifile-absent-key-p200-20261001.txt.
 """
 
 import conftest

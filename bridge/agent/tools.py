@@ -907,7 +907,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     #: get. The sync layer classifies text and converts; put_file did not; so
     #: the same batch file was runnable through one path and silently broken
     #: through the other, and on 2026-10-01 a live session spent eleven tool
-    #: calls finding that out (docs/measurements/
+    #: calls finding that out (research/measurements/
     #: batch-eol-and-dir-b-p200-20261001.txt -- COMMAND.COM reads an LF-only
     #: .bat as ONE command line and exits 0).
     #:
@@ -1556,7 +1556,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         `exec` does the job badly").
 
         Measured on real hardware, twelve files in one directory
-        (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt):
+        (research/measurements/batch-eol-and-dir-b-p200-20261001.txt):
 
             dir /b <path>   131 bytes, names only, no sizes or dates
             dir    <path>   about 1,100 -- volume label, serial number, a

@@ -155,7 +155,7 @@ The two 31 KB findings rest on none of this: both are bounded by explicit first 
 symbol addresses with no foreign symbol between, which is why they are the ones being acted
 on. Lint applies — `make lint` runs ruff over `tools/` (`Makefile:125`).
 
-Measurement into `docs/measurements/imagebytes-host-20261011.txt` for all five capped exes,
+Measurement into `research/measurements/imagebytes-host-20261011.txt` for all five capped exes,
 as the "before" half of the exit condition. (`-host-` because the directory's convention is
 `<topic>-<machine>-<date>` and this one has no guest in it.)
 
@@ -336,7 +336,7 @@ unattributable (commit 2's caveat). A `BACKLOG.md` entry, not a commit, and it l
 what the idea does *not* buy:
 
 - **On Win98 code is demand-paged from the image**, so code nobody touches is already
-  nearly free. This project measured it: `docs/measurements/workingset-vm-20261004.txt:30-32`
+  nearly free. This project measured it: `research/measurements/workingset-vm-20261004.txt:30-32`
   — 66 KB of image cost 36 KB resident *"because the sheet's pages and the inspector are
   code that is not touched until Options is opened."* The gain is against `COMMITTED_CAP`,
   and `win/Makefile:103-106` already says that gate is a proxy for the working set.
@@ -432,7 +432,7 @@ Four prose sites quote the old caps and move with them: `ROADMAP.md:159`, `BACKL
   it measures through, and `control.cpp:33`'s `GastonRemoteSingleInstance` rules out a second
   copy. So: `mem_free_kb` off the **HELLO frame** (`server.cpp:141`) at a fixed point after a
   cold boot, one build per boot, old and new alternated.
-- `docs/measurements/imagebytes-host-20261011.txt` gains its "after" half; a second file for
+- `research/measurements/imagebytes-host-20261011.txt` gains its "after" half; a second file for
   the flag timings.
 - `ROADMAP.md` stage 2 → **DONE**, `BACKLOG.md` 2 and 29 closed, 19 closed on its second
   option, the DLL entry opened, `PROGRESS.md` written up with the current goal moved to

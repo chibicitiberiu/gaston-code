@@ -4,7 +4,7 @@ clearly asked for, and does it ever approve one it should not?
     .venv/bin/python research/probes/checkerprobe.py
 
 Real model calls (Haiku), about two minutes. Results of the 2026-10-04 run
-are in docs/measurements/checker-haiku-20261004.txt.
+are in research/measurements/checker-haiku-20261004.txt.
 """
 from __future__ import annotations
 

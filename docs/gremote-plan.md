@@ -67,7 +67,7 @@ that changed its shape, recorded so they are not re-derived:
 - **Six threads, not the five REMOTE.md's budget names** -- main loop, accept,
   `Connection`'s reader and sender, job, fs -- and `make check` cannot see any
   of them. It sums PE sections; a thread stack is not in the image. Nothing in
-  `docs/measurements/` records what a thread costs on this guest, so the stack
+  `research/measurements/` records what a thread costs on this guest, so the stack
   reserves are chosen against runtime working set on the VM.
 - **Autostart in C would fail the import gate.** ADVAPI32 is not in
   `tools/check/imports.py`'s `ALLOWED_DLLS`, so the `RunServices` key is
@@ -222,7 +222,7 @@ wine-smoke`.
     `test_guest_agreement.py` protects.
 14. Start guest runs from a clean boot. Killing a console program strands its
     DOS VM, and a guest carrying stranded VMs produced a measured BSOD in VMM
-    (`docs/measurements/bsod-vm-20260927.txt`).
+    (`research/measurements/bsod-vm-20260927.txt`).
 15. Prove the self-update rollback on the VM. Shipping a deliberately broken
     binary is the only way to test it, and on the VM a failure costs a CD
     swap.

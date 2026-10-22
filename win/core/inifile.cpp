@@ -64,7 +64,7 @@ bool IniFile::fail(const char *section, const char *key, const char *why)
  * Running inifilecheck there gave 36 rows and one failure, and the failure was
  * reading such a value: zero characters returned. Both directions, the same
  * fact -- so the sentinel could never come back, and every absent key looked
- * present (docs/measurements/inifile-absent-key-p200-20261001.txt).
+ * present (research/measurements/inifile-absent-key-p200-20261001.txt).
  *
  * WINE HANDS IT BACK INTACT, which is why every test passed on three machines
  * and the guest fell over on the first one: `has-absent` and

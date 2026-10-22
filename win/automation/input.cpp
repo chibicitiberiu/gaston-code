@@ -78,7 +78,7 @@ bool Input::focusChild(HWND target)
      * `typeText` learned it on 2026-10-02: typing into an edit box by name
      * left the box empty and reported success, because the window came
      * forward and the keystrokes went to whichever child already had focus
-     * (docs/measurements/keys-named-p200-20261002.txt). The step runner's
+     * (research/measurements/keys-named-p200-20261002.txt). The step runner's
      * `type ... in:` path had the same hole until 2026-10-11, found when a
      * step list reported ok and typed nothing anywhere (BACKLOG 33). It is
      * one function now so the next caller inherits the fix.
@@ -131,7 +131,7 @@ InputResult Input::focus(HWND target)
      * into. Measured on real hardware 2026-10-02: typing into an edit box by
      * name left the box empty and reported success, and the same call after a
      * click worked -- which is why the one live session that hit this got away
-     * with it (docs/measurements/keys-named-p200-20261002.txt).
+     * with it (research/measurements/keys-named-p200-20261002.txt).
      *
      * Only when the target IS a child: for a top-level window
      * SetForegroundWindow already did it, and attaching to another thread's
@@ -239,7 +239,7 @@ InputResult Input::clickAt(HWND expect, int x, int y, bool checkOnly)
              * needed is a foreground change taken from whoever is at the
              * keyboard.
              *
-             * Measured on Win98 SE (docs/measurements/focus-vm-20260927.txt):
+             * Measured on Win98 SE (research/measurements/focus-vm-20260927.txt):
              * SetForegroundWindow from a background process DOES work and
              * puts the window on top, while BringWindowToTop and
              * SetWindowPos(HWND_TOP, SWP_NOACTIVATE) are both ignored
@@ -886,7 +886,7 @@ enum CharWay { CW_KEY, CW_DEAD, CW_ALTNUM, CW_ENTER, CW_TAB, CW_SKIP,
                CW_NONE };
 
 /* How to produce one character on `hkl`. Measured, not assumed
- * (docs/measurements/keyboard-layouts-vm-20261002.txt): VkKeyScanEx can
+ * (research/measurements/keyboard-layouts-vm-20261002.txt): VkKeyScanEx can
  * name a key that produces NOTHING -- EURO on US is "Ctrl+2" -- so a key is
  * trusted only when ToAsciiEx agrees. A dead key is pressed then followed
  * by Space, which yields the bare accent. Everything else printable goes by

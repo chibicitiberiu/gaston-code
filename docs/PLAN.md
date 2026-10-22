@@ -2054,7 +2054,7 @@ RetroAI/
     devtools/                 # fakegui conformance harness
   tests/python/               # Subdivided: agent/ files/ wire/ view/ server/ guest/ meta/ tools/
   tests/guest/                # the check binaries: the shipping C, run under Wine
-  research/                   # guest/ probes/ measurements/ -- apparatus, never product
+  research/                   # guest/ probes/ deflate-speeds/ measurements/ -- apparatus
   tools/                      # vm/ gen/ check/
   vm/                         # disk images and run scripts (gitignored)
   docs/                       # PLAN.md PROGRESS.md BACKLOG.md audit/

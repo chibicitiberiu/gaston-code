@@ -18,7 +18,7 @@ Decided with the user:
 - Exit codes: the lib flags whether a code is meaningful, and the wire stays unchanged.
 
 A probe on the VM (2026-09-26) changed the design. Its raw results are in
-`docs/measurements/execprobe-vm-*-20260926.txt`, from `research/guest/execprobe.cpp`. Only the detached runs count; they behave like a GUI parent. The run
+`research/measurements/execprobe-vm-*-20260926.txt`, from `research/guest/execprobe.cpp`. Only the detached runs count; they behave like a GUI parent. The run
 from the DOS prompt shared its console with the children and misled.
 
 | Finding (Win98, VM) | Design consequence |
@@ -180,7 +180,7 @@ merging origin/master (the guest had to be restarted first; it had hung).
 
 - 0 `78bf95c`: probe, measurements, BACKLOG 14, this file.
 - 0b `a146cf1`: `execprobe --stops`, run on the VM
-  (`docs/measurements/execprobe-vm-stops-20260926.txt`): no strategy ends
+  (`research/measurements/execprobe-vm-stops-20260926.txt`): no strategy ends
   REDIR32; killing the VM is the best (program gone within 2s); a direct
   spawn leaves nothing; each zombie costs ~150KB. So step 5's order stands.
 - 1 `c176f44`: `ExecJob`; one job per EXEC. execcheck found a cancel
@@ -200,7 +200,7 @@ merging origin/master (the guest had to be restarted first; it had hung).
 Committed at load: 387,417 before, 394,601 after (the static 8KB chunk
 went; `Processes` and its vector code came in).
 
-On the VM (`docs/measurements/execkill-vm-20260926.txt`): the client, driven
+On the VM (`research/measurements/execkill-vm-20260926.txt`): the client, driven
 by `research/probes/execkill.py` as a stub bridge, passed 7/7 -- a shell command,
 a timeout, a stale and an id-less EXECKILL ignored, the real one cancelling
 in 2s, a queued EXEC killed before it ran and never running. Its log names
@@ -211,7 +211,7 @@ real memory and codepages); its exec cases need cmd.exe and so only run
 under Wine.
 
 Then the leak itself (2026-09-27, `execprobe --redir`, `--redir2`, `--gentle`,
-`docs/measurements/`): a TerminateProcess on the DOS VM is what makes the
+`research/measurements/`): a TerminateProcess on the DOS VM is what makes the
 zombie, and killing only the Win32 side of the tree lets the job end
 itself with nothing left. `stopJobTree` now does that first, with an 8s
 grace, and kills the VM only for a DOS program that will not end. On the
@@ -219,7 +219,7 @@ VM the client stops a Win32 program under the shell cleanly (0.3s on
 EXECKILL, 3.4s on a 3s timeout); a DOS program still costs one REDIR32,
 logged (`execkill-vm-20260927.txt`). BACKLOG 14 has the rest.
 
-End to end on the VM (2026-09-27, `docs/measurements/e2e-vm-20260927.txt`):
+End to end on the VM (2026-09-27, `research/measurements/e2e-vm-20260927.txt`):
 the real bridge with a Haiku agent, prompts typed into the client. The agent
 ran `ver` through command.com, a Win32 program that timed out (4s and 5s),
 one cancelled by the client's Stop button (EXECKILL, cancelled 1s later), a

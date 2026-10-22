@@ -13,7 +13,7 @@ It CANNOT ask whether Windows 98 sends a suspend query when its standby timer
 expires. That is the question the option turns on, and no amount of Wine or QEMU
 answers it: the QEMU guest has NO APM AT ALL, which is why `REBOOT
 mode=poweroff` there runs the whole teardown, cannot switch the machine off, and
-comes back as a logoff (docs/measurements/gremote-shutdown-fix-vm-20261001.txt).
+comes back as a logoff (research/measurements/gremote-shutdown-fix-vm-20261001.txt).
 With no APM there is no power driver to send anything. Only the user's real
 machine, left idle, can answer it, and gremote logs the query EVEN WHEN THE
 OPTION IS OFF so that measurement does not change the machine's behaviour.

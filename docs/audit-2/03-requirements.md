@@ -220,7 +220,7 @@ Related and separate: `PLAN.md:1156-1159` makes *"Guest free memory is measured
 again at the end of the phase, the same way as above, and compared against the
 28KB baseline"* a Phase 3 gate. Phase 4's close (`PROGRESS.md:2423`) measured
 window creation and chat list but **not** after a turn — the only one of the
-three points the standing rule actually quotes. `docs/measurements/` holds only
+three points the standing rule actually quotes. `research/measurements/` holds only
 the S1 tool-detection runs.
 
 ### 03.8 — `HELLO` grew a body and two headers; the Protocol reference, written to close exactly this gap, does not know **DOC-WRONG**

@@ -485,7 +485,7 @@ int main(void)
          * broadcast, so a PostQuitMessage here is an ExitProcess a second
          * later that kills the driver after Explorer has gone and before
          * Systray is dealt with -- a bare desktop and no reboot, four runs out
-         * of four (docs/measurements/gremote-shutdown-vm-20261001.txt).
+         * of four (research/measurements/gremote-shutdown-vm-20261001.txt).
          *
          * Wine cannot test the shutdown, but it can test the decision: the
          * services are signalled and abandoned exactly as before, and the loop

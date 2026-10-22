@@ -1,6 +1,6 @@
 """Does -ot earn its bytes? The round trip that can answer, as a script.
 
-docs/measurements/flags-vm-20261011.txt settled the whole-program question on
+research/measurements/flags-vm-20261011.txt settled the whole-program question on
 the QEMU guest and recorded the method in prose. Stage 5 asks the remaining
 half on the real Pentium 200 -- whether -ot still earns its place in the three
 modules it is kept for -- and the method had never been a tool, so it was done

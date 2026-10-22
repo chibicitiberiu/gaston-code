@@ -106,7 +106,7 @@
  *    the fact that Windows 2000 works that way. NO MICROSOFT SOURCE SAYS IT OF
  *    WINDOWS 98. The QEMU guest cannot answer it either: it has NO APM at all,
  *    which is why `REBOOT mode=poweroff` there degrades to a logoff
- *    (docs/measurements/gremote-shutdown-fix-vm-20261001.txt).
+ *    (research/measurements/gremote-shutdown-fix-vm-20261001.txt).
  *
  *    So this code LOGS EVERY POWER EVENT IT SEES, EVEN WHEN THE OPTION IS OFF,
  *    and the real machine's GREMOTE.LOG is the instrument. Leaving a box idle

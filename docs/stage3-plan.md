@@ -381,7 +381,7 @@ exactly that round trip, carrying `"`, `;`, `&amp;`, `=`, `<`, `>` and significa
 spaces, and `inifilecheck`'s longest string case is seven bytes (`:160-174`). So B3 does not
 assert platform behaviour from the header: it ships a `rendercheck --dump-templates` mode and
 compares the loaded values byte-for-byte against the repo file **on the VM and on the Athlon**
-before B2's equality proof is trusted. `docs/measurements/inifile-absent-key-p200-20261001.txt`
+before B2's equality proof is trusted. `research/measurements/inifile-absent-key-p200-20261001.txt`
 is the precedent for what skipping this costs.
 
 **Where they live at runtime, which an earlier draft left unstated — and all three obvious shapes
@@ -783,7 +783,7 @@ the ladder's figure and the gate's figure are the same figure.
     test rather than a claim.**
 18. **C6 — the docs and the measurements.** `ROADMAP.md` stage 3 done with its numbers, R7
     renumbered 3b → 3c and the pagination stage inserted; §13 and §31 closed carrying §1's answer
-    and §6's corrections; `docs/measurements/live-*` and the template round-trip;
+    and §6's corrections; `research/measurements/live-*` and the template round-trip;
     `win/Makefile`'s ladder entry.
 
 ---
@@ -916,7 +916,7 @@ more than 10% against A3's baseline; and an absolute floor — above **5 ms per 
 renderer is defective, not the platform.
 
 **A3's baseline is measured and it corrects this section on one point.**
-`docs/measurements/live-before-20261012.txt`: the DOM write alone is **1.05 ms** per 4.25 KB
+`research/measurements/live-before-20261012.txt`: the DOM write alone is **1.05 ms** per 4.25 KB
 update on the Athlon and **3.80 ms** on the 32 MB VM, with the VM losing 9.4 MB of free memory
 to one 60 KB answer and a `dom_max` of 31 ms against its own 3.8 ms mean — the shape of a box
 that has started swapping. So **the ratio test binds on the FAST machine, not the slow one**,
@@ -948,7 +948,7 @@ it is slow, a fifth HELLO key nobody has asked for. Rendering incrementally into
 - **The Athlon proves the CPU**: A3's baseline and the after number, the template round trip,
   `self_update`, `uilaneprobe`, `clipprobe`.
 - **The screenshot**: `viewprobe.py` before (A2/A3) and after (C2, C3), same corpus, same window,
-  both committed under `docs/measurements/`. The only instrument that can see a wrong or unstyled
+  both committed under `research/measurements/`. The only instrument that can see a wrong or unstyled
   class, and after B3 it is also what proves the three files reached the guest.
 - **Every image-moving commit**: `make -C win check` plus `cmovcheck.py` **re-read** — it fails on
   an owned-module hit that does not match the pointer-table pattern (`cmovcheck.py:156-170`) —

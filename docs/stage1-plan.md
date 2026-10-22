@@ -12,7 +12,7 @@ every platform fact the clipboard work turned on and corrected the tool's own
 description in the process; the Athlon, run last once that machine was
 powered on, then corrected one of those corrections -- `[Ctrl+A]` is a fact
 about the program, not the platform. See verification item 3 and
-`docs/measurements/clipboard-athlon-20261011.txt`.
+`research/measurements/clipboard-athlon-20261011.txt`.
 
 Two defects were found along the way. BACKLOG 33 -- a `type` step reporting
 ok having typed nothing -- is fixed and verified on the guest. BACKLOG 32 --
@@ -39,14 +39,14 @@ of them contradict the roadmap I wrote an hour ago, and one contradicts
    failed." So BACKLOG 17's bullet and `ROADMAP.md:55-58` are both stale, and the
    real gap is wrapper-shaped, not `viaShell`-shaped.
 2. **Gate 0.15d has been re-run with the generation word** —
-   `docs/measurements/vm-20260926.txt:90-101`, `distinct pids 2 (neither of them
+   `research/measurements/vm-20260926.txt:90-101`, `distinct pids 2 (neither of them
    us)`, `-> INJECTION WORKS`. Not after a reboot (the generation reads ~9.4
    hours of uptime), on the VM rather than hardware, and in the same session that
    ended with the 0.15h wedge. `UIAUTOMATION.md:656-662,751`, `PROGRESS.md:74` and
    `ROADMAP.md:78-80` all say it has never been run.
 3. **The autostart `.REG` exists, ships, and pre-logon answering is proven** —
    generated at `tools/gen/mktools-iso.sh:136-142`, applied by `SETUP.BAT`
-   (`:237,:246`), and `docs/measurements/gremote-vm-20260927.txt:169-181` records
+   (`:237,:246`), and `research/measurements/gremote-vm-20260927.txt:169-181` records
    the box answering 2 s after a cold boot with nobody logged in. BACKLOG 1b and
    `ROADMAP.md:70-72` carry it as outstanding; `docs/gremote-plan.md:335-341`
    already lists it closed.
@@ -301,7 +301,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   refusal.
 - **Then the run**, cold boot, injection last, health check after, and
   `PROBE.LOG` pulled off over gremote's fs lane rather than mailed by hand.
-  Measurement into `docs/measurements/`, and the three docs that say 0.15d was
+  Measurement into `research/measurements/`, and the three docs that say 0.15d was
   never run corrected against it.
 
 ### 7. The first agent turn through the UI tier, and the kit
@@ -310,7 +310,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   and press a named button — then to read a list box's contents, which is
   precisely the case `PLAN.md:942` says the clipboard exists for and which
   `WM_GETTEXT` cannot answer cross-process. Only probes and gremote have ever
-  driven this tier. Transcript into `docs/measurements/`.
+  driven this tier. Transcript into `research/measurements/`.
 - **The kit, optional and cheap.** `tools/gen/mkw98kit.sh` stages 355,666 bytes
   onto a 1,474,560-byte floppy and has **no size check at all**. Add
   `GREMOTE.EXE` (356,352), `GREMOTE.INI` and `GREMOTE.REG`, and the budget check
@@ -399,7 +399,7 @@ platform:**
    because that is the box where the ui lane's last four bugs were found.
 
    **RUN 2026-10-11, and it earned its place.**
-   `docs/measurements/clipboard-athlon-20261011.txt`. The machine had been
+   `research/measurements/clipboard-athlon-20261011.txt`. The machine had been
    switched off for the whole stage -- four checks, "No route to host" each
    time -- and the open decision recorded here was whether to run it or move
    it to stage 5. It was run, after a `self_update()`: the copy there

@@ -8,9 +8,9 @@ from hardware.** Stage 5 is not a feature stage. It is where a physical Pentium 
 nothing else may answer, and where one optimisation is decided by the machine it exists for.
 
 The box: Pentium 200 MMX, Win98 SE 4.10.2222 A, 32,284 KB, 800x600 at 24bpp, AutoPatcher applied
-(`docs/measurements/p200-run1-20260926.txt:1-2`). It is **not** the Athlon XP 2000+ at 10.0.0.125
+(`research/measurements/p200-run1-20260926.txt:1-2`). It is **not** the Athlon XP 2000+ at 10.0.0.125
 that has been driven over gremote since 2026-10-01; `docs/REMOTE.md:1145-1154` and
-`docs/BACKLOG.md:83-88` both exist because most `docs/measurements/*-p200-*.txt` files are that
+`docs/BACKLOG.md:83-88` both exist because most `research/measurements/*-p200-*.txt` files are that
 other machine, and reading a filename as a machine is how this gate came to look half-closed when
 nothing had run on it.
 
@@ -78,10 +78,10 @@ Nothing to design but the order and the honesty of the instruments. Three princi
    `retroclaude-win98` first. The P200 is 20x slower and in another room; the September visit
    already lost step 18 that way.
 2. **Each session end pays for more than one item.** Four in the whole stage, each named below.
-3. **Every file is `docs/measurements/<name>-p200-<date>.txt` with the machine in its own header**,
+3. **Every file is `research/measurements/<name>-p200-<date>.txt` with the machine in its own header**,
    not in the filename. That is the lesson of `BACKLOG.md:83-88`, and it is why the one P200 figure
    this plan leans on — `PROGRESS.md:106`'s 11 ms naive / 1 ms filtered template scan — is treated
-   as a summary rather than a measurement: **no file in `docs/measurements/` carries it.**
+   as a summary rather than a measurement: **no file in `research/measurements/` carries it.**
 
 ### What must be built before the box is touched
 

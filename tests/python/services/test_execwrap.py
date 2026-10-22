@@ -5,7 +5,7 @@ were indistinguishable from the bridge and the agent had to go and look -- a
 live session verified every single build with a follow-up `dir`.
 
 Everything asserted here was measured on real Windows 98 on 2026-10-01
-(docs/measurements/exit-codes-via-batch-p200-20261002.txt). The three that
+(research/measurements/exit-codes-via-batch-p200-20261002.txt). The three that
 would each have broken it silently:
 
     without `call`, a nested .bat never returns and the verdict never runs
@@ -133,7 +133,7 @@ def test_errorlevel_is_forced_before_the_command_runs():
     at 0. That is the one case the feature was built to close.
 
     Six cases are correct on the Athlon box since the pre-set went in
-    (docs/measurements/exit-codes-via-batch-p200-20261002.txt), including a
+    (research/measurements/exit-codes-via-batch-p200-20261002.txt), including a
     missing program and `javac` on a source file that is not there.
     """
     out = W.body(SHELL, "javac A.java")

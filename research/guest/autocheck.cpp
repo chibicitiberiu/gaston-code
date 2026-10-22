@@ -1313,7 +1313,7 @@ void inputRefusals(void)
          * needs no escape of its own -- and that asymmetry has to be a
          * decision rather than an accident, hence the case. Delivery of all of
          * these is measured on real hardware
-         * (docs/measurements/keys-named-p200-20261002.txt); what is checked
+         * (research/measurements/keys-named-p200-20261002.txt); what is checked
          * here is that the parser accepts them instead of refusing. */
         say("keys-a-closing-bracket-needs-no-escape",
             in.typeText(mine, "a]b", bad, sizeof bad) == INPUT_REFUSED_SELF,

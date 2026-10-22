@@ -34,7 +34,7 @@
  * thread-id out-parameter must be non-NULL, because Win95/98 reject
  * CreateThread(..., NULL) with ERROR_INVALID_PARAMETER while NT accepts it.
  * That second one silently disabled every helper thread in retro-agent for
- * years (docs/measurements/p200-run1-20260926.txt, step 0.11).
+ * years (research/measurements/p200-run1-20260926.txt, step 0.11).
  */
 #ifndef RC_CORE_THREAD_H
 #define RC_CORE_THREAD_H

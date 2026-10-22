@@ -114,13 +114,13 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # the paragraph above warns about, so the runtime number is measured this
 # time and not just this one: free physical memory with the client up,
 # before and after the feature set, on the guest
-# (docs/measurements/workingset-*-20261002.txt).
+# (research/measurements/workingset-*-20261002.txt).
 #
 # 502,768 -> 506,864 (one page), the same day: copy, move and delete of whole
 # trees -- the Recycle Bin, a move that never loses its source, nothing
 # overwritten unless asked (fs/tree.h) -- measured at 506,233. Written as
 # plain data first; the std::string version was 11KB. The runtime number is
-# re-measured on the guest with it (docs/measurements/workingset-*).
+# re-measured on the guest with it (research/measurements/workingset-*).
 #
 # 506,864 -> 515,056 (two pages), the same day: the `ui` listing of one
 # control's items -- what `input`'s `item` targets. About 1.5KB of code and no
@@ -133,7 +133,7 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # room. Trimmed first: a std::vector<std::string> in config.h, included by
 # half the program, cost 25KB and is a TextList (core/textlist.h). The
 # runtime number was measured for the whole set: idle, the client holds
-# 36KB more than before it (docs/measurements/workingset-vm-20261004.txt,
+# 36KB more than before it (research/measurements/workingset-vm-20261004.txt,
 # research/probes/wsprobe.py).
 # 585,728 -> 482,345 on 2026-10-11, and this is the FIRST REDUCTION in the
 # ladder above. Stage 2 took 104,448 bytes out of the image without removing
@@ -882,7 +882,7 @@ $(OBJ)/tests/guest/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
 # Six exceptions and a general rule pointing the other way is a default that
 # has been voted against. So it is turned around, and the four modules
 # nobody had measured came with it. Measured on the QEMU guest,
-# docs/measurements/flags-vm-20261011.txt:
+# research/measurements/flags-vm-20261011.txt:
 #
 #   whole program at -os          gaston -26,624   gremote -19,456
 #                                 but the compressing direction of a

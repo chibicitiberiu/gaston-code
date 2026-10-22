@@ -93,7 +93,7 @@ def test_a_session_end_we_asked_for_does_not_quit_the_loop(verdicts):
     guest, against two builds; the same guest rebooted in three seconds when a
     rundll32 it had launched made the call instead, because rundll32 stays
     parked inside ExitWindowsEx until the machine goes
-    (docs/measurements/gremote-shutdown-vm-20261001.txt).
+    (research/measurements/gremote-shutdown-vm-20261001.txt).
 
     Wine has no 9x shutdown and no Win16Mutex, so it cannot see any of that.
     What it CAN hold is the decision: the services are signalled and abandoned

@@ -14,7 +14,7 @@
  * commands that needed a shell named cmd.exe in the body and left `shell`
  * empty -- the same sidestep rpccheck uses. Which shell runs is not what
  * these cases are about; the guest behaviour of COMMAND.COM is measured by
- * execprobe on the VM instead (docs/measurements/execprobe-vm-*).
+ * execprobe on the VM instead (research/measurements/execprobe-vm-*).
  */
 #include <windows.h>
 #include <process.h>

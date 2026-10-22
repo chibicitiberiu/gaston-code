@@ -219,7 +219,7 @@ Eighteen commits, `dcc448c`..`07e6a96`. The library, the client onto it,
 Committed at load ended at **462,617** (+14,176), with 7,383 of headroom.
 
 Verified on the real Win98 guest, not only under Wine --
-`docs/measurements/libfs-vm-20260927.txt`:
+`research/measurements/libfs-vm-20260927.txt`:
 
 - `fscheck.exe` 42/42, including the drive map with no critical-error dialog
   on a removable.

@@ -159,7 +159,7 @@ def test_an_unknown_key_is_reported_with_the_token():
 #
 # A PROGRAM MAY ADD THE ACCELERATOR, and one measured 2026-10-11 does: two text
 # editors on the same OS, 1999 and 2005, disagree
-# (docs/measurements/clipboard-athlon-20261011.txt). So the note says "may have"
+# (research/measurements/clipboard-athlon-20261011.txt). So the note says "may have"
 # -- an agent that watches the note be wrong learns to discount the next one.
 #
 # THE ARGUMENT DESCRIPTION ALREADY SAID SO AND THE AGENT DID IT ANYWAY, in the
