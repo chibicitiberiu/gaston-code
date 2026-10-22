@@ -186,41 +186,142 @@ def art16():
 
 
 #: The status bar's connection light, three states. A small server box with
-#: an LED, which is what the user described: "server icon with green dot =
-#: ok, orange or red = not ok". The box is what makes it read as a machine
-#: rather than a generic dot; the LED is what carries the state.
+#: a status panel, which is what the user described: "server icon with green
+#: dot = ok, orange or red = not ok". The box is what makes it read as a
+#: machine rather than a generic dot; the panel is what carries the state.
 #:
 #: 16x16 only -- the status bar asks for SM_CXSMICON and nothing else ever
 #: shows these.
+#:
+#: THE LED USED TO BE TWO PIXELS, and this file said so approvingly: "Two
+#: pixels of LED, the only saturated colour in the glyph." On an LCD that
+#: reads. On the Pentium 200's CRT it does not -- reported from the keyboard
+#: 2026-10-23, "i really can't see its color on the CRT" -- and the reason is
+#: physical rather than a matter of taste. A shadow-mask CRT has a convergence
+#: error of most of a pixel at 800x600 and its phosphors bloom into their
+#: neighbours, so two lit pixels ringed by white get washed toward white. Hue
+#: is the first thing to go and the last thing to rely on.
+#:
+#: So the panel is 4 rows by 7 columns -- 28 saturated pixels where there were
+#: 2 -- with a black border all the way round. The border is not decoration:
+#: bloom spreads colour outward, and a dark edge gives it somewhere to go that
+#: is not the white chassis, which is what keeps the shape crisp.
+#:
+#: AND THE STATE IS NOT CARRIED BY HUE ALONE. Each panel has its own mark, so
+#: the three are tellable apart in a black-and-white photograph, by a
+#: red-green colour-blind reader -- 8% of men, and this is a red/green
+#: indicator -- and on a CRT whose guns have drifted:
+#:
+#:     ok     clear panel   nothing in the way, the link is clear
+#:     warn   centre dot    something in the middle of happening
+#:     bad    X             struck out
+#:
+#: The mark is black on lime and yellow, white on red: on a CRT white
+#: separates from saturated red better than black does, and black separates
+#: from yellow better than white.
 _NET = [
     "................",
     "..kkkkkkkkkkkk..",
     "..kwwwwwwwwwwsk.",
     "..kwkkkkkkkkwsk.",
     "..kwkssssssdwsk.",
-    "..kwkssssssdwsk.",
     "..kwkddddddd wsk",
-    "..kwwwwwwwwwwsk.",
-    "..kw@@wwwwwwwsk.",
     "..kwwwwwwwwwwsk.",
     "..kwkkkkkkkkwsk.",
-    "..kwkssssssdwsk.",
-    "..kwkddddddd wsk",
+    "..kwk@@@@@@@wsk.",
+    "..kwk@@@@@@@wsk.",
+    "..kwk@@@@@@@wsk.",
+    "..kwk@@@@@@@wsk.",
+    "..kwkkkkkkkkwsk.",
     "..kwwwwwwwwwwsk.",
     "..kssssssssssk..",
     "..kkkkkkkkkkkk..",
 ]
 
+#: Where the panel's interior starts in _NET, so a mark can be stamped into it
+#: without counting characters in two places that then disagree.
+_NET_PANEL = (8, 5, 4, 7)   # top row, left col, rows, cols
 
-def art_net(led):
-    """The connection light. `led` is the palette char for the LED."""
+#: HOW MUCH OF THE PANEL IS LIT, per state, in panel-local coordinates. "x"
+#: is unlit (black); "." shows the state colour. 4x7 is the most that fits
+#: inside a 16x16 icon that still has to look like a server.
+#:
+#: THE SIGNAL IS BRIGHTNESS FIRST AND HUE SECOND, and that ordering is the
+#: whole redesign. Two earlier attempts put a white MARK on the panel -- an X,
+#: then a bar -- and both made the failure state BRIGHTER than the healthy
+#: one, because white on red out-glows solid lime. On the CRT that is exactly
+#: backwards: the eye reads total light long before it resolves hue, so the
+#: alarming state was the one that looked best.
+#:
+#: So the panel fills like a gauge instead. Lit area, not colour, carries the
+#: state, and the three are still tellable apart on a monochrome monitor, in
+#: a photograph, and to a red-green colour-blind reader -- 8% of men, and this
+#: is a red/green indicator:
+#:
+#:     ok     all four rows lit    full panel, brightest of the three
+#:     warn   bottom half lit      filling, like any gauge in the world
+#:     bad    a bar, dark around   unmistakably not full
+#:
+#: Black for the unlit part rather than grey: a dark surround gives the CRT's
+#: bloom somewhere to go that is not the white chassis, which is what keeps
+#: a saturated colour looking saturated instead of washed toward pink.
+_NET_MARKS = {
+    # Nothing unlit. It is the brightest of the three, which is the right way
+    # round for the state you want to confirm from across a desk.
+    "ok": [
+        ".......",
+        ".......",
+        ".......",
+        ".......",
+    ],
+    # Half, filling upward. Deliberately NOT an animation: this is a 16x16
+    # icon in a status bar and what it must do is stay legible while it
+    # changes.
+    "warn": [
+        "xxxxxxx",
+        "xxxxxxx",
+        ".......",
+        ".......",
+    ],
+    # A bar with the dark around it. Half the lit area of ok and in a
+    # different place, so the two never resolve to "a coloured rectangle"
+    # and leave hue to do the work.
+    "bad": [
+        "xxxxxxx",
+        ".......",
+        ".......",
+        "xxxxxxx",
+    ],
+}
+
+#: The unlit part of the panel, for every state. One colour because it means
+#: one thing.
+_NET_MARK_INK = {"ok": "k", "warn": "k", "bad": "k"}
+
+
+def art_net(state, led):
+    """The connection light. `led` is the palette char for the panel.
+
+    `state` picks the mark stamped into the panel, which is what makes the
+    three tellable apart without relying on hue.
+    """
     c = Canvas(16, 16)
     for y, row in enumerate(_NET):
         for x, ch in enumerate(row):
             if ch in (".", " "):
                 continue
             c.put(x, y, led if ch == "@" else ch)
-    # Two pixels of LED, the only saturated colour in the glyph.
+
+    top, left, rows, cols = _NET_PANEL
+    mark = _NET_MARKS[state]
+    if len(mark) != rows or any(len(r) != cols for r in mark):
+        raise SystemExit(f"mkicon: the {state} mark is not {rows}x{cols}, so "
+                         "it would land outside the panel and over the "
+                         "chassis. Fix the mark or _NET_PANEL.")
+    for dy, row in enumerate(mark):
+        for dx, ch in enumerate(row):
+            if ch == "x":
+                c.put(left + dx, top + dy, _NET_MARK_INK[state])
     return c
 
 
@@ -441,8 +542,10 @@ def main():
     # Lime / yellow / red, the three the VGA palette actually has. Amber
     # would be better than yellow and is not one of the sixteen; a dithered
     # amber on an 8bpp display is noise at this size.
-    for name, led in (("netok", "l"), ("netwarn", "y"), ("netbad", "r")):
-        write_ico(os.path.join(app, name + ".ico"), [art_net(led)])
+    for name, state, led in (("netok", "ok", "l"),
+                             ("netwarn", "warn", "y"),
+                             ("netbad", "bad", "r")):
+        write_ico(os.path.join(app, name + ".ico"), [art_net(state, led)])
     for i in range(PIE_STEPS + 1):
         write_ico(os.path.join(app, "pie%d.ico" % i), [art_pie(i)])
     write_bmp(os.path.join(app, "attach.bmp"), art_clip())

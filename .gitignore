@@ -98,3 +98,7 @@ vm/*-stage/
 # never reaches the history. vm/gaston.ini IS tracked, and carries only the
 # dev-secret placeholder the QEMU guest uses.
 vm/gremote.ini
+# And the same for a per-box client config. vm/gaston.ini stays tracked with
+# the dev-secret placeholder the QEMU guest uses; a real box gets its own file
+# here, pointed at this machine's LAN address rather than 10.0.2.2.
+vm/gaston-*.ini
