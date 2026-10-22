@@ -759,9 +759,12 @@ which between them falsified nine claims and then twenty-two more.
 **The box is reachable, and that was not known when this section was first
 written.** It has a NIC with a configured TCP/IP stack -- the one thing
 `BACKLOG.md:77-81` and `gremote-plan.md:254-255` both record as open -- so
-bring-up is one floppy carrying `GREMOTE.EXE`, and after that the Pentium 200
-is driven from Linux over port 7401 exactly as the Athlon has been since
-2026-10-01. It also stays powered and accessible, which makes this a campaign
+bring-up is one hand-carried kit containing `GREMOTE.EXE`, and after that the
+Pentium 200 is driven from Linux over port 7401 exactly as the Athlon has been
+since 2026-10-01. **The kit travels on a USB stick** (2026-10-23): the box
+reads one, so the 1.44 MB ceiling the rest of this tree assumes stopped being
+the constraint, and `tools/gen/mkw98kit.sh --dest` writes it to the mounted
+volume and verifies every file byte for byte after a flush. It also stays powered and accessible, which makes this a campaign
 rather than a visit: a build can be shipped and re-shipped, and a measurement
 can be re-run.
 

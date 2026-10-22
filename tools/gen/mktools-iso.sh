@@ -125,8 +125,28 @@ call_timeout_ms=2000
 script_ms=600000
 step_ms=120000
 INI
-sed -i 's/$/\r/' "$STAGE/GREMOTE.INI"
-cp "$HERE/vm/gremote.ini" "$STAGE/GREMOTE.INI" 2>/dev/null || true
+# A LOCAL vm/gremote.ini REPLACES THE HEREDOC, and it is said out loud. The
+# copy used to be `2>/dev/null || true` with nothing printed either way, so a
+# missing override was indistinguishable from a present one and the permissive
+# default travelled without anybody choosing to send it.
+#
+# THE CRLF FOLD RUNS AFTER THE COPY, not before. It used to run before, so an
+# overriding file written on Linux landed in the staging directory with bare LF
+# -- which tools/gen/mkw98kit.sh then rejects, correctly, hours later and with
+# the heredoc nowhere in sight. The fold strips \r first so a file that is
+# already CRLF does not come out CRCRLF.
+if [ -f "$HERE/vm/gremote.ini" ]; then
+  cp "$HERE/vm/gremote.ini" "$STAGE/GREMOTE.INI"
+  echo "  gremote.ini: from vm/gremote.ini (per-box, gitignored)"
+else
+  echo "  gremote.ini: the permissive VM default written above"
+fi
+python3 - "$STAGE/GREMOTE.INI" <<'EOL'
+import sys
+p = sys.argv[1]
+d = open(p, "rb").read().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+open(p, "wb").write(d)
+EOL
 
 # Autostart. RunServices runs before anyone logs on, which with
 # RegisterServiceProcess (resolved in win/remote/main.cpp) is what makes a

@@ -19,10 +19,15 @@ nothing had run on it.
 1. **The box already has a NIC with TCP/IP configured.** `docs/gremote-plan.md:254-255` is the clean
    statement of what was unknown — *"Two preconditions nothing in this tree records: whether that
    box has a NIC and a configured TCP/IP stack"* — and `BACKLOG.md:77-81` keeps it as the one thing
-   standing. So bring-up is one floppy for gremote, and after that the box is driven from Linux over
-   port 7401 exactly as the Athlon is.
+   standing. So bring-up is one hand-carried kit for gremote, and after that the box is driven from
+   Linux over port 7401 exactly as the Athlon is.
 2. **The box stays powered and accessible.** A campaign, not an expedition: builds can be shipped
    and re-shipped, and a measurement can be re-run.
+3. **The kit travels on a USB stick, not a floppy image** (settled 2026-10-23, after the plan was
+   written). The box reads one, so the 1.44 MB ceiling every document in this tree assumes is no
+   longer the constraint it was — `mkw98kit.sh --dest` writes the kit straight to the mounted
+   volume and verifies it byte for byte. Nothing else in the stage changes: the kit is 880 KB
+   either way, and the floppy is still the fallback if the stick is not read.
 
 What that buys is that most of the stage becomes a Linux-side script. What it does not buy is the
 five things needing eyes or a hand — the tray icon, the standby timer, a Start-menu shutdown, the
@@ -104,16 +109,26 @@ a drift. The shape to reproduce in rehearsal is the compressing direction, the o
 
 ### The bring-up
 
-One floppy, carried once, after `make -C win probe hookdll autocheck gremote gupdate focusprobe` —
-the kit is ~556 KB once rebuilt (the `build/w98kit/` staging on disk is a stale 739 KB), and with
-`GUPDATE.EXE`, `FOCUSPROBE.EXE` and a 256 KB corpus it lands near 900 KB of 1,474,560. The script's
-own size check prints the real number (`mkw98kit.sh:111-117` sums the staged files, which is what
-goes on the disk — the zip is transport only), and its CRLF check matters because `COMMAND.COM` will
-not run a `.BAT` with bare LF and that failure lands on whoever is at the Windows machine hours
-later.
+One kit, carried once, after `make -C win probe hookdll autocheck gremote gupdate focusprobe`:
 
-At the box: `MD C:\GASTON`, copy, `REGEDIT /S GREMOTE.REG`, and the secret and `allow=` typed in by
-hand — the one secret-bearing step, and it does not travel on a floppy that will sit on a desk.
+    bash tools/gen/mktools-iso.sh          # picks up vm/gremote.ini
+    bash tools/gen/mkw98kit.sh --dest /run/media/tibi/<volume>
+
+880,332 bytes, twelve files, 59% of the floppy the stage no longer needs. The script's own size
+check prints the real number (it sums the staged files, which is what goes on the volume — the zip
+is transport only, for a copy that travels as a file); its CRLF check matters because
+`COMMAND.COM` will not run a `.BAT` with bare LF and that failure lands on whoever is at the
+Windows machine hours later; and `--dest` **re-reads every file after a flush and compares it byte
+for byte**, because this project has twice been served the right length and the wrong blocks off
+removable media, and a stick pulled before the page cache flushed fails in exactly that shape.
+
+At the box: `MD C:\GASTON`, copy, `REGEDIT /S GREMOTE.REG`, and `GREMOTE.EXE`. **The secret is no
+longer typed in by hand** — it travels in `GREMOTE.INI`, because the stick is a two-way channel
+that will make the trip repeatedly and a secret typed at a DOS prompt is a secret typed wrong
+once. What that costs is a 32-character secret in plain text on a stick in a drawer; what it buys
+is a box that is reachable on the first boot rather than after a transcription. `allow=` is the
+**/24, not the host**: the driving machine is on DHCP, `allow` is checked *before* auth, and a /32
+against a lease is a walk across the room the first time the lease moves.
 
 Then, before anything else:
 
@@ -201,7 +216,7 @@ half: `ship()` both builds and re-run W1's sync and view timings.
 **X1 — the injection battery, last, at the keyboard.** `TEST.BAT` part three and
 `AUTOCHK.EXE --health` behind it, then a reboot whatever it says.
 
-Four session ends, two sittings, one floppy. **`mode=poweroff` is never used** and neither is a
+Four session ends, two sittings, one trip with the stick. **`mode=poweroff` is never used** and neither is a
 logoff: `BACKLOG.md:3895-3898` measured a failed poweroff landing on the logon prompt with gremote
 gone — a box that answers nothing and cannot be told to.
 
@@ -284,8 +299,8 @@ are `GetTickCount` and a 55 ms quantum survives the fix; `imgfind` times a miss;
 reproduces the VM's shape; `cancelprobe` reproduces `ui-cancel-vm-20261003.txt`; the client install
 of E6 runs end to end on the guest before it runs on the box.
 
-**On the P200, with a pass written down for each:** gremote answers from Linux after one floppy and
-one reboot; `TEST.BAT` 1-17 completes and comes back; the client connects to the bridge from the
+**On the P200, with a pass written down for each:** gremote answers from Linux after one carried
+kit and one reboot; `TEST.BAT` 1-17 completes and comes back; the client connects to the bridge from the
 box; the icon appears at logon and survives an Explorer restart; an idle standby either asks or does
 not, and the log says which; four session ends and four correct last lines; three updates and three
 bind readings; two arms and three medians.

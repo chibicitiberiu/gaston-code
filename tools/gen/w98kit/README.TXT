@@ -13,8 +13,13 @@ WHAT THIS IS
 HOW TO RUN IT
 
   1. Copy this whole folder onto the machine's hard disk. Do not
-     run it from a floppy or CD -- it writes its results beside
-     itself and needs somewhere writable.
+     run it from a floppy, a CD or a USB stick -- it writes its
+     results beside itself, and on removable media that is both
+     slower than the disk it is trying to measure and one unplug
+     away from losing the log.
+
+     Below, X: is whichever letter this kit arrived on. DIR X:\
+     and check before typing anything that starts with it.
   2. Close anything you care about. Explorer and a DOS box are
      enough. See SAFETY below for why.
   3. Open an MS-DOS Prompt, change to this folder, and run:
@@ -97,9 +102,9 @@ GREMOTE.EXE -- OPTIONAL, AND ONLY IF THIS MACHINE IS ON A NETWORK
   It is NOT started by TEST.BAT and nothing here installs it. To
   try it:
 
-      COPY A:\GREMOTE.EXE C:\GASTON
-      COPY A:\GUPDATE.EXE C:\GASTON
-      COPY A:\GREMOTE.INI C:\GASTON\gremote.ini
+      COPY X:\GREMOTE.EXE C:\GASTON
+      COPY X:\GUPDATE.EXE C:\GASTON
+      COPY X:\GREMOTE.INI C:\GASTON\gremote.ini
       C:\GASTON\GREMOTE.EXE
 
   GUPDATE.EXE goes beside it and is not optional if you want a
@@ -107,21 +112,24 @@ GREMOTE.EXE -- OPTIONAL, AND ONLY IF THIS MACHINE IS ON A NETWORK
   replace itself unless the updater is in its own directory. One
   file now, or a walk back to this keyboard later.
 
-  Edit gremote.ini first: `secret` is a password in plain text on
-  a trusted network, and `allow` is the range of addresses that
-  may connect. Both matter -- whoever has the secret can run
-  anything on this machine.
+  Check gremote.ini before starting it: `secret` is a password in
+  plain text on a trusted network, and `allow` is the range of
+  addresses that may connect. Both matter -- whoever has the
+  secret can run anything on this machine. The copy in this kit
+  already carries both if it was built for a particular box; if
+  `secret` still says vm-secret, it was not, and it should not be
+  started on a network until that is changed.
 
   To have it start at every boot, before anyone logs on:
 
-      REGEDIT /S A:\GREMOTE.REG
+      REGEDIT /S X:\GREMOTE.REG
 
   Deliberately not automatic, and worth undoing with REGEDIT when
   the measurements are finished: it opens a port on this machine.
 
 CORPUS.TXT AND FOCUSPRB.EXE
 
-  CORPUS.TXT is not a document. It is 229K of this project's own
+  CORPUS.TXT is not a document. It is 210K of this project's own
   text and code, and the deflate step times itself against it --
   real prose rather than the repeating block it used to use,
   which compressed 164 to 1 and flattered the result badly. Leave

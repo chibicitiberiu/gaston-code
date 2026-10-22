@@ -77,8 +77,11 @@ already built, and the entry was wrong to keep asking for them.**
 ~~What stands is the **Pentium 200 itself**, and only that: a NIC with a
 configured stack on a machine whose only proven channel is still a hand-carried
 floppy.~~ **The NIC is there (2026-10-15).** The box has a configured TCP/IP
-stack, so the floppy carries `GREMOTE.EXE` once and everything after that is
-gremote over port 7401, the way the Athlon has been driven since 2026-10-01.
+stack, so the carried kit brings `GREMOTE.EXE` once and everything after that
+is gremote over port 7401, the way the Athlon has been driven since 2026-10-01.
+**And the channel is a USB stick, not a floppy (2026-10-23)** -- the box reads
+one, so `mkw98kit.sh --dest` writes the kit to a mounted volume and the 1.44 MB
+ceiling is a fallback figure rather than a limit.
 Stage 5 is where that gets used; `docs/stage5-plan.md` is the plan. `tools/gen/mkw98kit.sh` gains `GREMOTE.EXE` in stage 1 so that channel
 exists when the box does -- the kit had no size check at all when this was
 written. It has one now, and the figure has moved: 567 KB of a 1.44 MB floppy

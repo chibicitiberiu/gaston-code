@@ -255,6 +255,9 @@ confirmed against the VM's measurement. Two preconditions nothing in this tree
 records: whether that box has a NIC and a configured TCP/IP stack, and how
 `GREMOTE.EXE` gets there the first time -- its only proven channel is a 1.44MB
 floppy via `tools/gen/mkw98kit.sh`, which is where it should be added.
+**Both answered since (2026-10-15, 2026-10-23):** the NIC and stack are there,
+and the channel is a USB stick the box reads, written by
+`mkw98kit.sh --dest DIR`. The floppy remains the fallback.
 
 **[R -- 2026-10-15] The first of those two preconditions is answered: the box
 has a NIC with a configured TCP/IP stack.** So the floppy carries `GREMOTE.EXE`
