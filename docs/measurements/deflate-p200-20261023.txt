@@ -1,0 +1,188 @@
+# Gate 0.5c, closed on the machine it was written for. And the first
+# end-to-end wire measurement off a real 1998 NIC.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB,
+#           machine name TIBI. HELLO's own words: "x86 family 5 model 4,
+#           1 cpu" -- family 5 IS Pentium and model 4 IS Pentium MMX, so
+#           this is the box, self-identified, rather than inferred from a
+#           filename. 32,284 KB matches p200-run1-20260926.txt exactly:
+#           same machine as the September visit.
+#           NIC: 00:00:c0:04:81:97 (Western Digital OUI, an NE2000-era
+#           ISA card), on the LAN at 10.0.0.158, 0.79 ms from the host.
+# Driven  : gremote over port 7401 from 10.0.0.45, no port forward and no
+#           emulation anywhere in the path. PROBE.EXE and CORPUS.TXT were
+#           already in C:\GREMOTE, carried there on a USB stick.
+# Date    : 2026-10-23
+#
+# THIS IS THE FIRST NUMBER IN THIS DIRECTORY THAT IS ACTUALLY FROM THE
+# PENTIUM 200. docs/BACKLOG.md:83-88 exists because most of the files here
+# named *-p200-* are the Athlon XP 2000+ at 10.0.0.125, and reading a
+# filename as a machine is how this gate came to look half-closed when
+# nothing had run on it. Hence the header above, and hence no machine name
+# in the filename doing load-bearing work.
+
+
+=== 0.5c  deflate throughput, and the same corpus as the rehearsal ===
+
+  corpus         : 214843 bytes from CORPUS.TXT, crc32 c200f36e
+  level 1 deflate: 214843 -> 95621 (2.25:1) in 209ms  = 1027 KB/s
+  level 6 deflate: 214843 -> 78192 (2.75:1) in 725ms  = 296 KB/s
+  inflate        : 95621 -> 214843 in 60ms = 3580 KB/s  (rc=0)
+  round trip     : PASS
+
+crc32 c200f36e is the SAME corpus the QEMU rehearsal measured four days
+earlier, byte for byte. That is the entire reason the crc exists, and it
+paid for itself on its first real use: these two runs are one experiment on
+two machines rather than two experiments, and nobody has to remember which
+documents moved in between.
+
+Against the guest (which ran 234,481 bytes -- a DIFFERENT corpus, so the
+ratios below are shape, not scale):
+
+                    guest (TCG/Ryzen)      P200          slower by
+  level 1           6699 KB/s              1027 KB/s     6.5x
+  level 6           2726 KB/s              296 KB/s      9.2x
+  inflate          58620 KB/s             3580 KB/s     16.4x
+
+The shape holds on real silicon: level 6 is SLOWER than level 1 (725 ms
+against 209 ms), because more search costs more time. That ordering was
+inverted in the original gate -- which reported 184 ms at level 1 on the
+fast XP against "1 ms" at level 6 -- and the cause was that the first level
+measured paid miniz's allocation. Fixed on the guest, confirmed here.
+
+Note the asymmetry in how much slower this box is. Compression falls off by
+6-9x and INFLATE by 16x. Inflate is table lookups and memory traffic; a
+200 MHz Pentium with a 1998 memory bus loses more there than it does on the
+search, which is cache-resident work.
+
+
+=== What the gate was actually for, and the answer is a relief ===
+
+The probe prints its own threshold: "At ~750 KB/s LAN, compression is worth
+it only if the deflate rate above comfortably exceeds it."
+
+  level 1 at 1027 KB/s   -- exceeds 750, but by 1.37x, not comfortably
+  level 6 at  296 KB/s   -- is less than HALF the wire
+
+So the question is no longer academic, and it has a right answer that this
+project already picked. win/wire/connection.cpp:170 is
+`mz_deflateInit(&def, 1)` -- level 1, the only place the guest ever
+compresses. Had it been level 6, every transfer off this box would be
+bottlenecked on the CPU at 296 KB/s against a wire that does better than
+twice that.
+
+MEASURED, NOT REASONED. Three timed gets of CORPUS.TXT through the fs lane,
+host-side clock, 214,843 source bytes each:
+
+  get #1   389 ms   = 539 KB/s of source through the lane
+  get #2   339 ms   = 618 KB/s
+  get #3   382 ms   = 550 KB/s
+
+Taking #1: 209 ms of that is the level-1 compression measured above, which
+leaves ~180 ms to move 95,621 compressed bytes = ~531 KB/s on the wire.
+That is a 10BASE-T card doing roughly 4.3 Mbit/s effective while its CPU is
+also deflating, which is a believable number for the hardware and is the
+first time this project has had one.
+
+Which prices all three options on this box for 214,843 bytes of text:
+
+  level 1, as shipped   209 ms compress + 180 ms wire =  389 ms  (measured)
+  no compression          0 ms          + 404 ms wire =  404 ms  (derived)
+  level 6                725 ms compress + 147 ms wire =  872 ms  (derived)
+
+**Level 1 is break-even and level 6 is a 2.2x pessimisation.** The shipped
+choice is vindicated rather than merely unrefuted, and the honest reading of
+the 389-against-404 is that compression buys this machine ~4% -- within the
+spread of the three gets above. It is not the win the design assumed; it is
+also not a cost. What it DOES buy is the dialup case the probe's second
+sentence names, and that is where the ratio still matters.
+
+A conclusion this does NOT support: dropping compression. The 2.25:1 is
+also 2.25x less wire time for anything sharing the segment, the numbers
+above are one payload shape (2.25:1 prose and code), and the payload the
+design actually sends in bulk is a 24bpp screenshot, which compresses
+differently and has not been measured yet. W1's full-screen shot() is where
+that comes from.
+
+
+=== 0.7  platform, which came with a surprise ===
+
+  GetVersion      : C0000A04  (4.10)
+  family          : Win9x
+  build           : 4.10.2222  ' A '
+  physical memory : 32284 KB total, 0 KB free
+  page file       : 779372 KB free
+  free resources  : system 80%, GDI 91%, USER 80%
+
+ZERO KB FREE, and nothing is wrong. docs/BACKLOG.md:172-176 already
+corrects this exact scare from the other direction: dwAvailPhys EXCLUDES
+the disk cache Win98 shrinks under pressure, so it is not headroom and a
+small figure is not evidence that anything is short. Here it reads 0 while
+779 MB of page file is free and the GDI and USER heaps -- the resources that
+actually kill 9x applications -- sit at 91% and 80% free.
+
+Watched across this session the field read 0, then 68, then 264, then 1300
+KB within a few minutes of ordinary work, which is the cache moving, not the
+machine filling and emptying.
+
+**THIS BREAKS AN INSTRUMENT, and better to find out here than in W1.**
+tools/probe/memprobe.py exists to answer docs/REMOTE.md's "gremote memory
+idle and under load", and EVERY figure it reports is a mem_free_kb
+differential -- it says so in its own docstring, and calls the attribution
+"by construction rather than by measurement". On a box where that field
+reads 0 and then 1300 for reasons unrelated to the load, the differential is
+noise with a unit. Its sampling thread, its medians and its before/after
+pair all still work; what they measure on this machine is the disk cache.
+
+The fix is not obvious and is not attempted here. `free resources` above --
+system, GDI and USER percentages, which PROBE.EXE already prints and gremote
+does not expose -- is the quantity that would actually answer the bullet,
+and getting it over the wire means a new control-lane field rather than a
+better driver. Recorded, not fixed.
+
+And the box is NOT quiet. PS over the lane shows RealPlayer (8 threads), TV
+Viewer's TVWAKEUP and ANNCLIST (5 threads), PowerMenu, MSTASK, TASKMON,
+SYSTRAY, WMIEXE and IPTEST all resident alongside Explorer. This is somebody's
+actual Windows 98 machine, not a clean install, and any memory figure taken
+here is a figure about that machine on that day. Worth knowing before C1 puts
+a 510,217-byte client on it.
+
+
+=== Two records this run corrects ===
+
+1. **The P200 has a CD-ROM drive.** drives() reports F: as type 5,
+   DRIVE_CDROM. docs/stage5-plan.md and tools/gen/mkw98kit.sh both rest on
+   "the P200 has no CD", which is why the kit was a floppy at all. It also
+   has D: (MS-DOS_6, 2,096,160 KB) and E: (DATA, 1,770,568 KB) besides
+   C: (WIN98, 1,245,416 KB with 784,132 free), so disk space was never the
+   constraint either.
+
+2. **gremote lives in C:\GREMOTE on this box**, which settles a divergence
+   the stage plan left open. docs/REMOTE.md:731-733 specifies client in
+   C:\GASTON and server in C:\GREMOTE; tools/gen/mktools-iso.sh:208 sweeps
+   D:\*.EXE into C:\GASTON and contradicts it. The machine follows
+   REMOTE.md. The generator is the file that should move.
+
+   There is no C:\GASTON at all -- LS refuses it with `missing`. The client
+   is not installed, which is C1's job and not done.
+
+And one the run does NOT correct but should be fixed: tools/gen/mkcorpus.py's
+own comment says "Level 6 is miniz's default and what the sync lane actually
+sends at". The sync lane sends through the wire connection, and the wire
+compresses at level 1. The only level-6 calls in the tree outside third_party
+are inside probe.c, measuring. Wrong when written, and the kind of wrong that
+would have made this section's conclusion sound alarming instead of reassuring.
+
+
+=== What this run did not do ===
+
+No TEST.BAT, so no steps 1-17 and no comparison against
+p200-run1-20260926.txt. No evlat and no imgfind, the other two instruments
+E2 built -- both want the desktop and one starts Notepads. No memory
+baseline with gremote stopped, which cannot be taken over the wire by
+construction. No client, so nothing here is about GASTON.EXE.
+
+What it does establish is that the box is reachable, the lane works end to
+end over real Ethernet, and the slowest thing in the path is neither the
+network nor the CPU but the two of them together at 389 ms for a 215 KB
+file.
