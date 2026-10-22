@@ -1999,7 +1999,7 @@ our own window from a dialog it had not read.
 ## 17. Gaps found testing exec on the guest
 
 **Status:** recorded 2026-09-27 from the libexec work on the VM (probes,
-`tools/probe/execkill.py`, and an end-to-end run with a Haiku agent,
+`research/probes/execkill.py`, and an end-to-end run with a Haiku agent,
 `docs/measurements/e2e-vm-20260927.txt`). Each line says where it is owned.
 
 - **No way to bring a window to the front.** *Fixed 2026-09-27, same day:*
@@ -3108,7 +3108,7 @@ all three ops there, and **the client's `UICANCEL` now raises it for all three
 too** rather than for step lists alone.
 
 **The VM's number, 2026-10-03** (`docs/measurements/ui-cancel-vm-20261003.txt`,
-`tools/probe/cancelprobe.py`): a full MSAA-enriched desktop walk is **0.16 s
+`research/probes/cancelprobe.py`): a full MSAA-enriched desktop walk is **0.16 s
 at 72 nodes and 0.58-0.71 s at 109**, well under the 8 s default deadline. So
 on an emulator a cancelled enumeration costs the next request well under a
 second -- the cheap end this entry already guessed at. A cancelled capture is
@@ -3691,7 +3691,7 @@ eleven over eight minutes cost, and idling costs almost nothing. About
 15.6 KB each, with no plateau over 21 connections.
 
 At that rate a few hundred connections is the whole of a 32MB machine's
-headroom. Every probe in `tools/probe/` opens one per run, `ship()` opens
+headroom. Every probe in `research/probes/` opens one per run, `ship()` opens
 another after the restart, and the agent's own reconnect loop opens one per
 retry -- so this is not a theoretical number of connections.
 
@@ -3734,7 +3734,7 @@ instrument, and the entry stays open to say which:
 ### What this costs elsewhere, which is the reason to keep the entry
 
 **Free physical memory is used as a proxy for a program's footprint in at
-least two places**: `tools/probe/wsprobe.py` and the method in
+least two places**: `research/probes/wsprobe.py` and the method in
 `docs/measurements/workingset-vm-20261002.txt`, which §29 leans on for
 gremote's trim. If the number drifts down with activity and does not
 recover when the process exits, a "working set" read that way is measuring

@@ -346,7 +346,7 @@ rather than at the desk:
   "two things nothing records about it: a configured TCP/IP stack, and how
   `GREMOTE.EXE` gets there the first time." Answered by use: the Athlon XP
   2000+ at 10.0.0.125 has been driven over gremote since 2026-10-01, and
-  `tools/probe/treeprobe.py` documents the `--remote 10.0.0.125:<secret>`
+  `research/probes/treeprobe.py` documents the `--remote 10.0.0.125:<secret>`
   form. The floppy bootstrap in `tools/gen/mkw98kit.sh` was never needed.
 - **The ui lane**, which was "step 6 and unchanged by any of this" -- it is
   now step 6 and built. Its own plan is REMOTE.md step 6 plus the op table in

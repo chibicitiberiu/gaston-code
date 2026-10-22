@@ -2,7 +2,7 @@
 
 The format was written four times and verified zero times: `win/sync/syncrpc.cpp`
 produces it, `bridge/server.py` parsed it inline, `tests/python/files/test_sync_wire.py`
-re-implemented the producer for the tests, and `tools/probe/syncprobe.py`
+re-implemented the producer for the tests, and `research/probes/syncprobe.py`
 re-implemented the parser. `synccheck.exe` -- the only thing that runs the real
 C against the real Python -- printed a *different*, tab-separated format of its
 own, so it proved the classifier and the checksums and never touched the wire

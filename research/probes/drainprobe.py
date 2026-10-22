@@ -12,7 +12,7 @@ Reordering shutdown on Win9x is exactly where this project has twice produced
 a GPF dialog at exit, so it has to be watched on the real machine rather than
 reasoned about.
 
-    python3 -u tools/probe/drainprobe.py --port 7890 --burst 24
+    python3 -u research/probes/drainprobe.py --port 7890 --burst 24
 
 Start it INSTEAD OF the bridge, launch the client, then close the client while
 this is running. Every frame is printed with the milliseconds since the burst
@@ -24,7 +24,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

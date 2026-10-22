@@ -4081,7 +4081,7 @@ below where this work started.
 
 **Verified on the QEMU guest, eleven of eleven**
 (`docs/measurements/ui-lane-verify-vm-20261003.txt`,
-`tools/probe/uilaneprobe.py`): a desktop tree and a per-process one, `inproc`
+`research/probes/uilaneprobe.py`): a desktop tree and a per-process one, `inproc`
 refused rather than quietly served, focus-type-and-read-back in one list, a
 failing list that still reports what ran, a held key released after a
 failure, a malformed list refused before it is sent, a screenshot as BMP and
@@ -4171,7 +4171,7 @@ bridge's side; they now filter guest rows too, case-folded.
 
 **Memory.** The whole set cost 66 KB of committed image (515,056 to
 580,649; cap 585,728) and 36 KB of idle working set on the guest
-(docs/measurements/workingset-vm-20261004.txt, tools/probe/wsprobe.py).
+(docs/measurements/workingset-vm-20261004.txt, research/probes/wsprobe.py).
 25 KB of that image was one `std::vector<std::string>` in config.h before it
 became a TextList.
 
@@ -4399,7 +4399,7 @@ it, because the same field is used as a footprint proxy elsewhere.
 
 Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
 `agent-turn-ui-vm-20261011.txt` and its screenshot, `clipboard-athlon-20261011.txt`.
-Probes: `tools/probe/clipprobe.py`.
+Probes: `research/probes/clipprobe.py`.
 
 **The third place, and why holding the stage open for it paid.** The plan's
 verification named three machines and only two had been used; the Athlon was

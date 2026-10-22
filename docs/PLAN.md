@@ -2053,7 +2053,9 @@ RetroAI/
     wire/                     # Protocol framing, link socket, compression
     devtools/                 # fakegui conformance harness
   tests/python/               # Subdivided: agent/ files/ wire/ view/ server/ guest/ meta/ tools/
-  tools/                      # vm/ gen/ check/ probe/
+  tests/guest/                # the check binaries: the shipping C, run under Wine
+  research/                   # guest/ probes/ measurements/ -- apparatus, never product
+  tools/                      # vm/ gen/ check/
   vm/                         # disk images and run scripts (gitignored)
   docs/                       # PLAN.md PROGRESS.md BACKLOG.md audit/
 ```

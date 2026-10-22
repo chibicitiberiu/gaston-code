@@ -3,7 +3,7 @@
 Like uilaneprobe.py and unlike every other probe here, this needs no client
 and no bridge: it drives gremote directly, which is the point of the lane.
 
-    python3 -u tools/probe/clipprobe.py --remote 127.0.0.1:vm-secret
+    python3 -u research/probes/clipprobe.py --remote 127.0.0.1:vm-secret
 
 Wine answers every case in uicheck and tests/python/remote, round trip
 included. What only a real 98 settles is whether CF_TEXT means what the code

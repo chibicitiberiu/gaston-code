@@ -16,10 +16,19 @@ somebody wrote the constant.
     toolkit.on_path()            # so `import bridge...` works
     from bridge.wire import protocol
 
-Getting to this module is the one path a script still spells out, and it is
-one level to a sibling directory that is not going to move:
+Getting to this module is the one path a script still spells out. For a
+script under `tools/` that is one level up to a sibling directory:
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+The probes moved out of `tools/` to `research/probes/`, and that is the
+sentence this file used to carry -- "a sibling directory that is not going
+to move" -- happening anyway. `REPO` did not notice, because it is found
+rather than counted; only this one line had to change, to up three and back
+down into `tools/`:
+
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "tools"))
 """
 
 from __future__ import annotations

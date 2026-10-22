@@ -28,7 +28,7 @@ A/B/A, NOT A/B. The first arm is measured again at the end. A single pass
 cannot tell a regression from a drift: a 98 box warms its disk cache, and a
 number that only gets measured once has no way to say which it was.
 
-    .venv/bin/python tools/probe/flagsprobe.py \\
+    .venv/bin/python research/probes/flagsprobe.py \\
         --remote 10.0.0.125:7401:the-secret \\
         --arm head=build/win/gremote.exe \\
         --arm all-os=/tmp/allos/gremote.exe
@@ -50,7 +50,8 @@ import sys
 import time
 import zlib
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import toolkit
 
 toolkit.on_path()

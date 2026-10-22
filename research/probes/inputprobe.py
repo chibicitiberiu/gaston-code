@@ -9,7 +9,7 @@ and prints each list's UIEND and per-step lines. Most lists verify
 themselves: they end in a `wait_text` that only passes if the keystrokes
 became the right characters.
 
-    python3 -u tools/probe/inputprobe.py --host 127.0.0.1 --port 7893
+    python3 -u research/probes/inputprobe.py --host 127.0.0.1 --port 7893
 
 Start it INSTEAD OF the bridge, then launch the client. It needs a Notepad
 open on the guest (`--launch` asks gremote to start one), and it ends that
@@ -25,7 +25,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

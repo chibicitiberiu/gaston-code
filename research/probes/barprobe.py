@@ -14,7 +14,7 @@ so none of that has ever been exercised on the machine by anything but a live
 bridge with an API key and a cooperating agent. This does it deliberately, one
 step at a time, pausing so each state can be screenshotted.
 
-    python3 -u tools/probe/barprobe.py --port 7890
+    python3 -u research/probes/barprobe.py --port 7890
 
 Start it INSTEAD OF the bridge, then launch the client. It sends no EXEC and
 no SYNC frame, so it cannot touch the guest's disk.
@@ -30,7 +30,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

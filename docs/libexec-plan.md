@@ -201,7 +201,7 @@ Committed at load: 387,417 before, 394,601 after (the static 8KB chunk
 went; `Processes` and its vector code came in).
 
 On the VM (`docs/measurements/execkill-vm-20260926.txt`): the client, driven
-by `tools/probe/execkill.py` as a stub bridge, passed 7/7 -- a shell command,
+by `research/probes/execkill.py` as a stub bridge, passed 7/7 -- a shell command,
 a timeout, a stale and an id-less EXECKILL ignored, the real one cancelling
 in 2s, a queued EXEC killed before it ran and never running. Its log names
 the one REDIR32 each stop leaves, and the process list afterwards holds

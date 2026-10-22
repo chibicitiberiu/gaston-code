@@ -5,7 +5,7 @@ the reasons in win/fs/ops.cpp are classified on Windows 98's own error codes,
 which only the guest can produce. Works in its own scratch folder under
 C:\\GTEST and removes it.
 
-    python3 -u tools/probe/opsprobe.py --host 127.0.0.1 --port 7893 \\
+    python3 -u research/probes/opsprobe.py --host 127.0.0.1 --port 7893 \\
         --remote 127.0.0.1:vm-secret
 
 Start it INSTEAD OF the bridge, then launch the client. `--remote` puts the
@@ -18,7 +18,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

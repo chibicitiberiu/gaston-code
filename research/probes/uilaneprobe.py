@@ -4,7 +4,7 @@ Unlike every other probe here this one is NOT a bridge stub: it needs no
 client and no bridge, because that is the point of the lane. It drives
 gremote directly.
 
-    python3 -u tools/probe/uilaneprobe.py --remote 127.0.0.1:vm-secret
+    python3 -u research/probes/uilaneprobe.py --remote 127.0.0.1:vm-secret
 
 It kills any NOTEPAD or CALC it finds and opens one Notepad of its own --
 exactly one, because a desktop with two of anything makes every selector

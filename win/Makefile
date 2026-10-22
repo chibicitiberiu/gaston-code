@@ -134,7 +134,7 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # half the program, cost 25KB and is a TextList (core/textlist.h). The
 # runtime number was measured for the whole set: idle, the client holds
 # 36KB more than before it (docs/measurements/workingset-vm-20261004.txt,
-# tools/probe/wsprobe.py).
+# research/probes/wsprobe.py).
 # 585,728 -> 482,345 on 2026-10-11, and this is the FIRST REDUCTION in the
 # ladder above. Stage 2 took 104,448 bytes out of the image without removing
 # a feature: 31,744 of uuid.lib GUIDs that one reference pulled whole, ~45,000
@@ -919,7 +919,7 @@ $(OBJ)/tests/guest/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
 # The numbers above are from the QEMU guest, which is TCG on a modern host --
 # so the 23% is a statement about a Ryzen, and the machine the trade is FOR is
 # a 200MHz Pentium with 32MB. docs/stage5-plan.md measures HEAD against -os
-# everywhere on the real box, A/B/A, through tools/probe/flagsprobe.py.
+# everywhere on the real box, A/B/A, through research/probes/flagsprobe.py.
 #
 # BUILD= already gives each arm its own object tree, but the flags were not
 # reachable from the command line: -os is hardcoded above and this override

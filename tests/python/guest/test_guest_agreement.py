@@ -293,7 +293,7 @@ def test_the_guest_s_real_manifest_rows_parse_with_the_bridge_s_real_parser(
     """The manifest row format was written four times and verified zero times.
 
     win/sync/syncrpc.c produced it, the bridge parsed it, test_sync_wire.py
-    re-implemented the producer for the tests, and tools/probe/syncprobe.py
+    re-implemented the producer for the tests, and research/probes/syncprobe.py
     re-implemented the parser. synccheck.exe -- the one thing that runs the
     real C against the real Python -- printed a DIFFERENT, tab-separated
     format of its own, so it proved the classifier and the checksums and

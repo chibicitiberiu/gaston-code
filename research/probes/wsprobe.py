@@ -7,7 +7,7 @@ it up and again after it ends, and the two builds alternate, because free
 memory on 98 drifts as the disk cache settles and only a pair taken together
 compares.
 
-    .venv/bin/python tools/probe/wsprobe.py --remote 127.0.0.1:7401:vm-secret \\
+    .venv/bin/python research/probes/wsprobe.py --remote 127.0.0.1:7401:vm-secret \\
         --old ~/backups/gaston-baseline-91b6b76.exe --new build/win/gaston.exe
 
 The machine's own client (C:\\GASTON) is single-instance, so it is stopped
@@ -22,7 +22,8 @@ import statistics
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import toolkit
 
 toolkit.on_path()

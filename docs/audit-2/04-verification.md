@@ -21,7 +21,7 @@ detached worktree pinned to **`b6880fa`**, the commit that was `HEAD` when this
 audit started. Where the live tree has since made a latent finding *actual*,
 that is stated as such (04.7). That reorganisation also moved every script in
 `tools/` one directory down — `tools/cmovcheck.py` became `tools/check/
-cmovcheck.py`, `tools/syncprobe.py` became `tools/probe/syncprobe.py`, and so
+cmovcheck.py`, `tools/syncprobe.py` became `research/probes/syncprobe.py`, and so
 on. Citations below use the **new** paths, because that is where a reader will
 find them; at `b6880fa` they are all one level up.
 
@@ -106,7 +106,7 @@ the target. Or invert the CRC comparison so a corrupted transfer commits.
 Or make `do_get` chunk from the wrong offset after a retry. Every one of those
 compiles, links, and passes `make test`, `make wine-smoke` and `make check`.
 The only thing in the repo that would catch them is
-`tools/probe/syncprobe.py` — and its own docstring says how it is used:
+`research/probes/syncprobe.py` — and its own docstring says how it is used:
 *"Start it INSTEAD OF the bridge, then launch the client on the guest."* It is a
 human-driven acceptance tool, it is not collected by pytest, it is in no gate,
 and `PROGRESS.md:2335`'s *"54/54 on the sync probe"* is a record of one person
@@ -184,7 +184,7 @@ pending-echo settle, the page cache and the chat list.
 
 Some of this is unavoidable — driving a Win32 message pump from pytest is not a
 weekend's work — and the project compensates honestly with
-`tools/probe/barprobe.py`, `viewprobe.py`, `drainprobe.py` and screenshots on
+`research/probes/barprobe.py`, `viewprobe.py`, `drainprobe.py` and screenshots on
 the real machine. What is worth saying is where the boundary sits and that it is
 not where the gate labels imply. `make wine-smoke` is described in `Makefile:73`
 as running *"the SHIPPING guest C"* and it runs about 40% of it.
@@ -505,7 +505,7 @@ output that says "this answer is about the code".
 **And there is no guest-side runner.** `tools/vm/vmship.sh` rebuilds
 `vm/tools.iso` and ejects-then-inserts it (correctly — the `change-media
 --update` no-op cost an evening and the script says so). `tools/vm/watchvm.sh`
-screenshots and OCRs. `tools/probe/syncprobe.py`, `barprobe.py`, `viewprobe.py`
+screenshots and OCRs. `research/probes/syncprobe.py`, `barprobe.py`, `viewprobe.py`
 and `drainprobe.py` are launched by hand. Nothing collects a guest-side result,
 nothing records which check binary last ran on the guest at which commit, and
 the only record that any of it happened is prose in `PROGRESS.md`. A claim like
@@ -743,7 +743,7 @@ All 16 findings (04.1 through 04.16) addressed, verified, and closed.
 
 - **04.1 (Guest sync transfer handlers test):** Fixed. Added `--sync-rpc` mode in `tests/guest/rpccheck.c` executing `rc_syncrpc_handle` for `SYNCPUT` + `SYNCPUTEND` (happy-path commit, CRC mismatch refusal, `if_crc` refusal), `SYNCMKDIR` (nested hierarchy creation), and `SYNCGET`. Added `test_guest_syncrpc_handlers` in `tests/python/guest/test_guest_rpc.py` driving this under Wine and asserting both C-level verdicts and Python-side filesystem state (atomic commit, temp file cleanup, directory structure).
 - **04.2 (Shared log file in repo root & clamp timing):** Fixed. `tests/python/conftest.py`'s `run_guest` now isolates Wine executions into a temporary directory when `cwd is None`, eliminating `retroclaude.log` root collision. `win/core/log.h` and `log.cpp` return `int` (0 on success, -1 on failure), checked by `rpccheck.c` and `netcheck.c`. Replaced fixed 1500ms sleep in `rpccheck.c` with a 50ms polling loop up to 3000ms.
-- **04.3 (GUI layer verification boundary):** Fixed. Explicitly documented the boundary between headless automated C logic and the 6,993 lines of Win32 GUI message pump/window controls in `Makefile` and `CLAUDE.md`. Cross-language contract tests (`test_frame_contract.py`, `test_guest_css.py`) guard interface drift, and manual VM acceptance (`tools/probe/*probe.py`) verifies windowing.
+- **04.3 (GUI layer verification boundary):** Fixed. Explicitly documented the boundary between headless automated C logic and the 6,993 lines of Win32 GUI message pump/window controls in `Makefile` and `CLAUDE.md`. Cross-language contract tests (`test_frame_contract.py`, `test_guest_css.py`) guard interface drift, and manual VM acceptance (`research/probes/*probe.py`) verifies windowing.
 - **04.4 (Frame-type inventory contract):** Fixed. Created `tests/python/meta/test_frame_contract.py` parsing `g_dispatch[]` (`win/app/main.cpp`), `RC_LANE_TABLE` (`win/net/frameproto.cpp`), and `rc_syncrpc_handle` (`win/sync/syncrpc.cpp`), diffing bidirectional frame vocabularies against `bridge/wire/protocol.py` and `bridge/files/synctransport.py`.
 - **04.5 (Vacuous manifest refusal assertion & parser fix):** Fixed. Corrected assertion in `tests/python/guest/test_guest_agreement.py` (`test_a_row_that_would_not_fit_is_refused_rather_than_truncated`) to strictly require `rows == {}`. Fixed latent parsing bug in `bridge/files/manifest.py:parse_rows` where slice extraction failed to validate `len(raw) == plen`, silently accepting truncated paths.
 - **04.6 (Static PE audit BSS budget ceiling):** Fixed. Added budget ceiling check in `win/Makefile`'s `check` target asserting BSS usage is <= 450,000 bytes (currently ~377k bytes), failing with non-zero exit if exceeded.

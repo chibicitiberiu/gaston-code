@@ -16,8 +16,8 @@ whatever frames the test wants. It talks to the SHIPPING gaston.exe over a
 real socket, so what it proves is about the binary on the Windows 98 machine
 and not about a model of it.
 
-    python3 tools/probe/syncprobe.py            # run every check
-    python3 tools/probe/syncprobe.py --port 7890
+    python3 research/probes/syncprobe.py            # run every check
+    python3 research/probes/syncprobe.py --port 7890
 
 Start it INSTEAD OF the bridge, then launch the client on the guest.
 """
@@ -29,7 +29,8 @@ import sys
 import time
 import zlib
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

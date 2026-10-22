@@ -127,7 +127,7 @@ No code. `docs/stage2-plan.md` written from this file, then:
 ### 2. The instrument, and the artefacts the "after" will need
 
 **Keep the "before" first, because no later commit can.** `build/` is gitignored and
-commit 3 rebuilds `gaston.exe` in place, while `tools/probe/wsprobe.py:54-55` needs
+commit 3 rebuilds `gaston.exe` in place, while `research/probes/wsprobe.py:54-55` needs
 `--old <path>` to exist. So this commit's first act is to copy `gaston.exe`, `gremote.exe`
 and their maps out of the tree, named by hash. `build/win/` is also partially stale right
 now (`uicheck.map` is missing although `win/Makefile:434` emits one), so the before-figures
@@ -422,7 +422,7 @@ Four prose sites quote the old caps and move with them: `ROADMAP.md:159`, `BACKL
 
 ### 11. The runtime number, and the close
 
-- **The client, on the VM:** `tools/probe/wsprobe.py --old <the exe commit 2 kept> --new
+- **The client, on the VM:** `research/probes/wsprobe.py --old <the exe commit 2 kept> --new
   build/win/gaston.exe` — the 2026-10-02 method as a tool: each build fresh from its own
   folder, idle, pointed at a dead port, five samples 2 s apart, median, alternated twice. An
   image 69 KB smaller should show as tens of KB less held; the two previous runs tracked the
@@ -523,7 +523,7 @@ Nothing about speed is decided here.
 
 **On the Athlon over gremote**, the machine `BACKLOG.md` 29 was written about: a
 `self_update()` to the trimmed build (its own rollback is the safety net), the ui lane through
-`tools/probe/uilaneprobe.py` and `clipprobe.py` — which is also the only way
+`research/probes/uilaneprobe.py` and `clipprobe.py` — which is also the only way
 `CallDeadline::QueryInterface` and the MSAA path get exercised with a real `oleacc.dll` — and
 the HELLO `mem_free_kb` pairs for gremote's working set. `[ui] msaa=0` is tested here if
 commit 9 implements it, since this is the box where MSAA actually answers.

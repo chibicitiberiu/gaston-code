@@ -395,7 +395,7 @@ platform:**
    string level 2 left there, so it is a real clipboard. `clip=1` is
    declared at every rung including 0 -- the capability is the build's, the
    level is the machine's.
-3. On the Athlon over gremote (`tools/probe/`, `Remote("10.0.0.125", <secret>)`),
+3. On the Athlon over gremote (`research/probes/`, `Remote("10.0.0.125", <secret>)`),
    because that is the box where the ui lane's last four bugs were found.
 
    **RUN 2026-10-11, and it earned its place.**
@@ -405,7 +405,7 @@ platform:**
    it to stage 5. It was run, after a `self_update()`: the copy there
    predated this build and declared no `clip` key at all.
 
-       .venv/bin/python -u tools/probe/clipprobe.py --remote 10.0.0.125:<secret>
+       .venv/bin/python -u research/probes/clipprobe.py --remote 10.0.0.125:<secret>
 
    Seven of eight agreed with the guest, including both refusals and
    `no_clip_text` on an empty clipboard. The eighth did not, and that is the

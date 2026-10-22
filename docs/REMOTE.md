@@ -969,7 +969,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    first (`research/guest/execprobe.cpp`) found that a stop never worked on 98 --
    the pid exec held was `REDIR32.EXE`, which TerminateProcess cannot end
    (`BACKLOG.md` 14) -- so a stop now ends the whole tree. Verified on the
-   VM: the client passes the stub-bridge run (`tools/probe/execkill.py`),
+   VM: the client passes the stub-bridge run (`research/probes/execkill.py`),
    and a stop now kills only the Win32 side and lets the job end itself,
    which leaves nothing; only a DOS program that must be stopped still
    costs one REDIR32 (~150KB), logged (`BACKLOG.md` 14).
@@ -1032,7 +1032,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    as fast compressed. The VM run -- `docs/measurements/ui-lane-verify-vm-20261003.txt` is eleven of
    eleven on the guest, `ui-lane-vm-20261003.png` is the screenshot it took
    while the client sat beside it unable to reach its bridge, and
-   `tools/probe/uilaneprobe.py` re-runs the list. What the Athlon alone can
+   `research/probes/uilaneprobe.py` re-runs the list. What the Athlon alone can
    settle is listed at the bottom of PROGRESS.md's entry.
    *Scoped 2026-10-02.* The library landed in step 5a's wake and was proven in
    the client first, as every lib here is, so this step is the **lane**, not
