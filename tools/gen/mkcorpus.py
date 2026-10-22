@@ -153,6 +153,20 @@ def main() -> int:
     if a.check:
         return 0
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    # WRITTEN ONLY WHEN THE BYTES CHANGED, so the mtime means something. The
+    # eleven sources are listed above rather than in win/Makefile, because a
+    # second copy of that list is a copy that drifts -- which is the exact
+    # failure the crc32 above exists to catch. The cost of keeping one list is
+    # that the make rule has to run unconditionally; the cost of running it
+    # unconditionally would be a corpus whose mtime moved on every build, for
+    # no change in content. So: regenerate always, touch the file never unless
+    # it is actually different. tools/gen/mkw98kit.sh checks the carried copy
+    # against this one by crc32 rather than by mtime, for the same reason.
+    if os.path.isfile(a.out):
+        with open(a.out, "rb") as fh:
+            if fh.read() == data:
+                print(f"unchanged {a.out}")
+                return 0
     with open(a.out, "wb") as fh:
         fh.write(data)
     print(f"wrote {a.out}")

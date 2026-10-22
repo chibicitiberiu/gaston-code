@@ -676,10 +676,20 @@ PROBE_OBJS = $(call objs,checks/probe.c $(MINIZ)) $(LIBCORE)
 # the corpus here fixes it at the source rather than teaching one caller to
 # carry its own copy -- tools/gen/mkw98kit.sh copies this same file onto the
 # floppy, so there is one generator and one output.
-probe: $(BUILD)/probe.exe $(BUILD)/CORPUS.TXT
+#
+# THE CORPUS HAS NO DEPENDENCY LIST HERE, ON PURPOSE. It is derived from eleven
+# files across docs/, win/ and bridge/, and that list lives in mkcorpus.py.
+# Repeating it here would be a second list, and a second list drifts -- so a
+# document edit would leave the corpus stale, its crc32 would stop matching
+# what the tree produces, and two measurement files would disagree with no
+# reason visible in either. The recipe therefore runs on every `make probe`
+# and mkcorpus writes only when the bytes actually changed, which leaves the
+# mtime honest for tools/gen/mkw98kit.sh's staleness check.
+probe: $(BUILD)/probe.exe corpus
 
-$(BUILD)/CORPUS.TXT: $(TOP)/tools/gen/mkcorpus.py
-	@$(PYTHON) $(TOP)/tools/gen/mkcorpus.py -o $@ | sed 's/^/  /'
+.PHONY: corpus
+corpus:
+	@$(PYTHON) $(TOP)/tools/gen/mkcorpus.py -o $(BUILD)/CORPUS.TXT | sed 's/^/  /'
 $(BUILD)/probe.exe: $(PROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
