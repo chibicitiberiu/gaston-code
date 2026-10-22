@@ -689,7 +689,7 @@ probe: $(BUILD)/probe.exe corpus
 
 .PHONY: corpus
 corpus:
-	@$(PYTHON) $(TOP)/tools/gen/mkcorpus.py -o $(BUILD)/CORPUS.TXT | sed 's/^/  /'
+	@$(PYTHON) $(TOP)/research/deflate-speeds/mkcorpus.py -o $(BUILD)/CORPUS.TXT | sed 's/^/  /'
 $(BUILD)/probe.exe: $(PROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"

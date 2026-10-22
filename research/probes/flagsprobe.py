@@ -69,8 +69,9 @@ PAYLOAD_BYTES = 377_990
 REMOTE_DIR = "C:\\TEMP\\GR"
 REMOTE_PAYLOAD = REMOTE_DIR + "\\PAYLOAD.BIN"
 
-#: The same explicit, sorted list idea as tools/gen/mkcorpus.py: a directory
-#: walk would let a new file change the payload with nothing saying so.
+#: The same explicit, sorted list idea as research/deflate-speeds/mkcorpus.py:
+#: a directory walk would let a new file change the payload with nothing
+#: saying so.
 SOURCES = [
     "docs/PLAN.md",
     "docs/PROGRESS.md",

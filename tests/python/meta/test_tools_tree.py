@@ -50,6 +50,7 @@ FOLDERS = {
 RESEARCH_FOLDERS = {
     "probes": "bridge stubs that drive the guest's own code",
     "guest": "the probes that run ON the machine, in C",
+    "deflate-speeds": "one experiment: gate 0.5c and the corpus it needs",
 }
 
 

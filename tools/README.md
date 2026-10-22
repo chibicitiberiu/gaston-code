@@ -3,7 +3,7 @@
 | folder | what lives there |
 |---|---|
 | `vm/` | drive the guest from outside it — QMP, screenshots, the DOS box, shipping a build |
-| `gen/` | generate what ships — the icon, the spinner, the CD images |
+| `gen/` | generate what ships — the icon, the spinner, the CD images and the kit |
 | `check/` | the static gates `make check` runs against the built PE |
 
 The host-side probes used to be a fifth folder here, `probe/`. They are

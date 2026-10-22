@@ -26,8 +26,10 @@ THE CEILING IS NOT ARBITRARY. `probe.c` reads this into a 256 KB static
 committed-at-load bytes on a machine with 32 MB. So the corpus is sized to
 the buffer rather than the buffer to the corpus.
 
-    python3 tools/gen/mkcorpus.py            # write vm/tools-stage/CORPUS.TXT
-    python3 tools/gen/mkcorpus.py --check    # report only, write nothing
+    # write vm/tools-stage/CORPUS.TXT
+    python3 research/deflate-speeds/mkcorpus.py
+    # report only, write nothing
+    python3 research/deflate-speeds/mkcorpus.py --check
 """
 from __future__ import annotations
 
@@ -37,6 +39,13 @@ import sys
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# TWO LEVELS, AND THE DEPTH IS LOAD-BEARING. This lived at tools/gen/ until
+# the apparatus was split out of the product; research/deflate-speeds/ is the
+# same two directories down, which is the only reason this line did not have
+# to change with the file. Checked rather than assumed, and the backstop is
+# below: every path in SOURCES is required to exist, so a REPO that is wrong
+# by a level exits with "the corpus list is stale" rather than quietly
+# building a shorter corpus and printing a crc32 for it.
 REPO = os.path.dirname(os.path.dirname(HERE))
 
 # 256 KB, matching probe.c's src[]. One byte over and the probe would have to

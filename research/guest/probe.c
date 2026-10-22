@@ -507,12 +507,13 @@ static void probe_deflate(void)
      * the number got quoted anyway, for a year, across four documents.
      *
      * So the sample is now CORPUS.TXT beside the exe: this project's own
-     * prose and code, 2.76:1, built by tools/gen/mkcorpus.py and carried on
-     * the floppy by tools/gen/mkw98kit.sh. If it is absent this section
-     * REFUSES rather than falling back, because a fallback is exactly how the
-     * unusable number came to be believed: a run with no corpus would print a
-     * plausible figure under the same heading, and nothing downstream could
-     * tell the two apart. A refusal cannot be misread.
+     * prose and code, 2.76:1, built by research/deflate-speeds/mkcorpus.py
+     * and carried on the floppy by tools/gen/mkw98kit.sh. If it is absent
+     * this section REFUSES rather than falling back, because a fallback is
+     * exactly how the unusable number came to be believed: a run with no
+     * corpus would print a plausible figure under the same heading, and
+     * nothing downstream could tell the two apart. A refusal cannot be
+     * misread.
      *
      * src[] is 256 KB and the corpus is sized to it rather than the reverse:
      * growing this static costs committed-at-load bytes on a 32 MB machine. */
@@ -536,7 +537,7 @@ static void probe_deflate(void)
         say("  section used to build compressed 164:1 and its throughput was");
         say("  never a usable threshold, so there is deliberately no");
         say("  fallback. Copy CORPUS.TXT from the kit, or rebuild it with");
-        say("  python3 tools/gen/mkcorpus.py.");
+        say("  python3 research/deflate-speeds/mkcorpus.py.");
         return;
     }
     total = (unsigned)fread(src, 1, sizeof(src) - 1, cf);
@@ -552,7 +553,8 @@ static void probe_deflate(void)
      * corpus is derived from eleven files in the tree, so it moves whenever
      * one of them is edited. A throughput figure is only comparable against
      * another run of the same bytes, and the machines this gate needs are
-     * measured days apart. tools/gen/mkcorpus.py prints the same number. */
+     * measured days apart. research/deflate-speeds/mkcorpus.py prints the
+     * same number. */
     say("corpus         : %u bytes from CORPUS.TXT, crc32 %08lx", total,
         (unsigned long)mz_crc32(MZ_CRC32_INIT, (const unsigned char *)src,
                                 total));
