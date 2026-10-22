@@ -37,7 +37,7 @@
  *
  * BEFORE the C++ guard, deliberately. win/net/caps.h needs
  * RC_BLOCKS_VERSION for the HELLO key it declares, and caps.h is included
- * by win/checks/capscheck.c, which is C -- the agreement check that
+ * by tests/guest/capscheck.c, which is C -- the agreement check that
  * compares every RC_* capability constant against bridge/files/caps.py.
  *
  * Putting the guard at the top of this file broke that build, and only

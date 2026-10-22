@@ -2,7 +2,7 @@
 
 `win/view/render.cpp` is stage 3's whole point: the bridge stops emitting
 markup and sends what a block IS, and this turns that back into the HTML
-MSHTML has always been given. These diff `win/checks/rendercheck.cpp`'s
+MSHTML has always been given. These diff `tests/guest/rendercheck.cpp`'s
 verdicts rather than trusting the header.
 
 The cases worth naming are the ones that killed a design choice while the

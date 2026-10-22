@@ -2001,7 +2001,7 @@ static void probe_hooks(void)
 
     /* A window to send messages to. WS_POPUP, never shown, and messages are
      * SENT not posted, so the proc runs on this thread and no pump is
-     * needed -- the same trick win/checks/windowcheck.cpp uses. */
+     * needed -- the same trick tests/guest/windowcheck.cpp uses. */
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = (WNDPROC)hook_sink_proc;
     wc.hInstance = GetModuleHandleA(NULL);

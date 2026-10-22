@@ -256,7 +256,7 @@ returns one hit, `PLAN.md:590`, about the Open Watcom import question. Nothing
 else.
 
 What exists: `win/app/tooldet.cpp` (219 lines), `win/app/tooldet.h`,
-`win/tools_detect.ini` (86 lines), `win/checks/toolcheck.cpp`,
+`win/tools_detect.ini` (86 lines), `tests/guest/toolcheck.cpp`,
 `bridge/agent/toolrules.py` (200), `bridge/agent/toolrep.py` (117),
 `bridge/agent/toolnotes.py` (66), `bridge/profiles/`, a new wire payload in
 `HELLO`'s body, `machine.py`'s `tools_block` (`bridge/agent/machine.py:197`),

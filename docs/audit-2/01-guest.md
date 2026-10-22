@@ -1439,7 +1439,7 @@ Fixed: 01.39 (NEW, found ON THE GUEST) THE BAR'S Alt-KEYS WERE SHADOWED BY THE M
 ## The 32 new tests
 
 - `tests/python/guest/test_guest_agreement.py` (+14) -- `synccheck --putpath` drives the REAL `rc_syncrpc_put_path` over bodies shaped as the bridge builds them, with file content glued to the path. Ordinary `//`, `http://` and `/../` bodies must parse; escapes, absolute paths and drive specs must still be refused; the no-separator and length-past-end cases must refuse; and the data offset must be where the content starts.
-- `win/checks/rpccheck.c` (+3 assertions) -- `rc_exec_run` refuses a 4095-byte command and an 1100-byte shell command as `too_long`, and does NOT refuse a short one.
+- `tests/guest/rpccheck.c` (+3 assertions) -- `rc_exec_run` refuses a 4095-byte command and an 1100-byte shell command as `too_long`, and does NOT refuse a short one.
 - `tests/python/meta/test_import_gate.py` (+11) -- the import gate goes red for six NT-only symbols, a new DLL and a stray W-suffix; stays green for the real binary and the two accepted W imports; and is checked for parsing symbol names rather than ordinals.
 - `tests/python/meta/test_mnemonics.py` (+5) -- no bar button shares an Alt-key with a menu-bar entry, the menu bar has no internal collision, the descriptor table keeps its mnemonics, and both regexes are asserted to match something so the checks cannot pass vacuously.
 

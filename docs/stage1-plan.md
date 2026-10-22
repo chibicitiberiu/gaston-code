@@ -238,7 +238,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   refuse an oversized `set` outright, since a clipped selector-shaped string is a
   different string.
 - `uicheck.exe` gains cases through the existing `FakeUiLink`
-  (`win/checks/uicheck.cpp:533`, with `ended()`, `status()` and
+  (`tests/guest/uicheck.cpp:533`, with `ended()`, `status()` and
   `recordFrames()`): round-trip, refusal at each level, an empty clipboard, a
   body at the cap. Two cases already there are the templates —
   `tree-refused-when-automation-is-off` (`:623`) and the step list at

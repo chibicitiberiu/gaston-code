@@ -3,7 +3,7 @@
 `win/core/inifile.cpp` is the config reader for gremote.exe (docs/REMOTE.md,
 Configuration), and its whole job is to refuse: a value present but wrong
 stops startup instead of running on something nobody wrote. These diff
-`win/checks/inifilecheck.cpp`'s verdicts rather than trusting the header.
+`tests/guest/inifilecheck.cpp`'s verdicts rather than trusting the header.
 
 The cases worth naming are the ones GetPrivateProfileString gets wrong on its
 own, because nothing else in the tree would notice them.

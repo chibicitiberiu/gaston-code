@@ -10,7 +10,7 @@
  * table keyed by kind. The table is not style: Watcom inlines a static
  * function called once, and inlining a dozen of these would put every
  * emitter's locals in one frame at the same time -- which is
- * win/checks/fscheck.cpp:1053-1058's 13,268-byte frame, caught by
+ * tests/guest/fscheck.cpp:1053-1058's 13,268-byte frame, caught by
  * stackframes.py. An indirect call cannot be inlined. It is also POD, so it
  * clears the static-constructor gate.
  *

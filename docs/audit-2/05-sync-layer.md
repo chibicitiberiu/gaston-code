@@ -95,9 +95,9 @@ like they would each stop one step short:
   says these replies exist only so an out-of-order frame gets an honest answer.
   So `test_fakegui_conformance.py` cannot reach it.
 - **`synccheck.exe` tests `rc_sync_contained` correctly, in isolation.**
-  `win/checks/synccheck.c:93` calls it over a table of **path-only** cases. The
+  `tests/guest/synccheck.c:93` calls it over a table of **path-only** cases. The
   function is not what is broken.
-- **`rpccheck.exe` only classifies the frame.** `win/checks/rpccheck.c:107-108`
+- **`rpccheck.exe` only classifies the frame.** `tests/guest/rpccheck.c:107-108`
   asserts `SYNCPUT` and `SYNCPUTEND` land in `RC_LANE_STREAM`, and stops there.
 
 `bad_path` appears in the whole Python suite once, at
@@ -347,7 +347,7 @@ All 6 findings (05.1 through 05.6) addressed, verified, and closed.
 - **05.1 (Push path containment check):** Confirmed already fixed. `rc_syncrpc_put_path` (`win/sync/sync.cpp`) was refactored to extract and length-bound the path into `g_put.rel` before validating containment via `rc_sync_contained(g_put.rel)`, eliminating the concatenation with file payload that rejected `//` in file bodies. Verified with `synccheck --putpath` and `test_guest_syncrpc_handlers`.
 - **05.2 (`Baseline.save` atomicity and `.prev` recovery):** Fixed in `bridge/files/sync.py`. `Baseline.save()` copies the existing baseline aside to `.prev` first, then atomically replaces `tmp` into `path` with `os.replace(tmp, path)` and fsyncs the parent directory, eliminating the window where `path` is absent. `Baseline.load()` now checks if `path` is missing but `path + ".prev"` exists, raising `RuntimeError` rather than returning an empty baseline (which would resurrect all deletions). Verified in `tests/python/files/test_sync_diff.py` (`test_missing_baseline_with_prev_refuses`, `test_save_is_atomic_path_never_absent`).
 - **05.3 (`rc_sync_commit` join check):** Confirmed already fixed. `rc_sync_commit` in `win/sync/sync.cpp:637` checks `rc_sync_join(full, sizeof(full), root, rel)` and logs/returns `-4` if the joined path does not fit.
-- **05.4 (Failed commit restores read-only attribute):** Fixed in `win/core/rc_cpp.h` and `win/sync/sync.cpp`. Introduced `ReadOnlyGuard` RAII class that strips `FILE_ATTRIBUTE_READONLY` on entry and restores it on scope exit across every exit path (`-3`, `-4`, or `0`), preventing failed commits on busy/locked files from silently clearing write protection. Verified with `readonly_ok` and `readonly_fail` test cases in `win/checks/synccheck.c` and Python assertions in `tests/python/guest/test_guest_agreement.py`.
+- **05.4 (Failed commit restores read-only attribute):** Fixed in `win/core/rc_cpp.h` and `win/sync/sync.cpp`. Introduced `ReadOnlyGuard` RAII class that strips `FILE_ATTRIBUTE_READONLY` on entry and restores it on scope exit across every exit path (`-3`, `-4`, or `0`), preventing failed commits on busy/locked files from silently clearing write protection. Verified with `readonly_ok` and `readonly_fail` test cases in `tests/guest/synccheck.c` and Python assertions in `tests/python/guest/test_guest_agreement.py`.
 - **05.5 (`RC_SYNC_MAX_FILES` handshake declaration):** Fixed. Added `RC_CAP_MAXFILES` to `win/net/caps.h` and emitted `HDR("maxfiles", RC_STR(RC_CAP_MAXFILES))` in `win/net/net.cpp`. Added `maxfiles` to `Caps` dataclass in `bridge/files/caps.py` and parsed from HELLO with fallback default `MAXFILES_GASTON = 2000`. Updated `bridge/files/syncrun.py` to use `self.caps.maxfiles` in the `too_many` error message. Added to `FAKE_CAPS` in `fakegui.py`, `capscheck.c`, and verified with `tests/python/guest/test_guest_caps.py` and `tests/python/files/test_caps.py`.
 - **05.6 (Absent `root=` in `SYNCEND`):** Fixed in `bridge/files/syncrun.py`. `scan_guest` now explicitly refuses with `SyncError` if `root` is absent or empty in `SYNCEND`, ensuring the tree-identity check cannot be bypassed and `guest_root` is always populated for MAX_PATH budgeting. Verified in `tests/python/files/test_sync_wire.py` (`test_absent_root_in_syncend_is_refused`).
 

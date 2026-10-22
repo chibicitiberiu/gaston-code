@@ -2,7 +2,7 @@
 
 The guest's worker had one job slot and no name for the difference between "a
 command that can run for two minutes" and "a syscall that must never wait on
-one." `win/checks/rpccheck.c` links the real `rpc.c` and `frameproto.c` and
+one." `tests/guest/rpccheck.c` links the real `rpc.c` and `frameproto.c` and
 drives `rc_rpc_route`/`rc_rpc_submit` directly -- no live bridge needed, see
 the comment at the top of that file -- to prove two things: the lane table
 classifies each frame type the way the code that reads it actually behaves,

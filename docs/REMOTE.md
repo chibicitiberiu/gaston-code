@@ -92,7 +92,7 @@ Rules for the libraries:
   `RegisterServiceProcess` are all `GetProcAddress`. Input stays on
   `keybd_event`/`mouse_event`: `SendInput` exists on 98 but not on 95 or
   NT4 before SP3.
-- Each lib has a check exe under `win/checks/` that runs under Wine
+- Each lib has a check exe under `tests/guest/` that runs under Wine
   (`make wine-smoke`), in the style of `rpccheck`/`netcheck`.
 
 ## C++ structure

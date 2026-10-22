@@ -355,7 +355,7 @@ what the idea does *not* buy:
 measured before it is done.** `ui/uirec.cpp`'s `rc_uirec_inproc` and `rc_uirec_item` are 928
 bytes unreferenced in gremote, which refuses that tier (`win/remote/uiops.cpp:397-403`,
 *"`inproc` is REFUSED, not ignored"*) — but they are referenced by `win/ui/uirpc.cpp:342,347,362,367`
-and `win/checks/uicheck.cpp:231,242`, and `uirec.cpp` is linked into gaston, uicheck,
+and `tests/guest/uicheck.cpp:231,242`, and `uirec.cpp` is linked into gaston, uicheck,
 netcheck, rpccheck *and* gremote. Splitting them adds a TU to five exes to save 928 bytes in
 one, against the ~2,144 this same stage cites per TU. And `uirec.h:32`'s
 `#include "inproc/shm.h"` cannot move with them: `RC_IN_DEPTH_MAX` is used at `uirec.h:63-64`

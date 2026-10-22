@@ -67,7 +67,7 @@ def _pin_corpus_to_the_guests_real_chunk_size():
     change to the chunk size would otherwise leave this corpus quietly
     testing the OLD boundary while every test using it kept passing.
 
-    `synccheck --chunk` prints that constant (win/checks/synccheck.c); this
+    `synccheck --chunk` prints that constant (tests/guest/synccheck.c); this
     also cross-checks it against the bridge's OWN chunk size
     (bridge/files/syncrun.py's CHUNK), since a disagreement there means the
     guest's chunked read and the bridge's chunked send would carry at

@@ -1,4 +1,4 @@
-"""libfs under Wine, through win/checks/fscheck.exe.
+"""libfs under Wine, through tests/guest/fscheck.exe.
 
 Wine proves the code and never the platform (CLAUDE.md), and fscheck splits
 its output accordingly: `pass`/`FAIL` rows are arithmetic and control flow

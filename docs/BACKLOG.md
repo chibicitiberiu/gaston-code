@@ -425,7 +425,7 @@ file unreliable, which is the thing stage 4's exit condition depends on.**
 - ~~**The netem gate is no longer blocked on sudo, and still has not been
   run.**~~ **Discharged 2026-09-18** (01.62), with the plan's own named
   fallback rather than netem: a deliberate slow reader
-  (`win/checks/netcheck.c --slowsend` driven from
+  (`tests/guest/netcheck.c --slowsend` driven from
   `tests/python/test_guest_net.py`). It fills the guest's outbound queue
   directly, which is what the named weaknesses actually need, and it lives in
   the suite instead of being run by hand.
@@ -2359,7 +2359,7 @@ client that never said keeps them, no new parameter on `build`, the stale
 conversation refused); `tests/python/meta/test_hello_headers.py` (declared at
 the handshake; the budget checks already cover 29 of 32 with 3 free);
 `tests/python/agent/test_machine.py` (the prompt stays honest);
-`tests/python/guest/test_guest_config.py` + `win/checks/inicheck.cpp` (the
+`tests/python/guest/test_guest_config.py` + `tests/guest/inicheck.cpp` (the
 setting round-trips, defaults on, and `automation=maybe` refuses startup).
 
 `test_agent_tools.py`'s `_registered_names` had to learn that `tools=[...]` is
@@ -2644,7 +2644,7 @@ floppy:
   `tests/python/remote/test_fs.py::test_drives_does_not_probe_removable_media_unless_asked`
   (proves the code path -- quiet by default, same letters either way -- not
   the silence; Wine has no floppy motor to prove that on) and by
-  `win/checks/fscheck.cpp`'s `caseDrives` (`drives.quiet_leaves_removable_unknown`,
+  `tests/guest/fscheck.cpp`'s `caseDrives` (`drives.quiet_leaves_removable_unknown`,
   `drives.probe_asks_what_quiet_skipped`), which also only prove the
   branch is taken.
 - **the agent's `drives` tool** (`bridge/agent/tools.py` ->
@@ -2775,7 +2775,7 @@ one. Both directions are tested
 (`tests/python/agent/test_conversations.py`,
 `tests/python/services/test_session.py`).
 
-*And the guest half is run, not read.* `win/checks/idcheck.cpp` drives the
+*And the guest half is run, not read.* `tests/guest/idcheck.cpp` drives the
 shipping `app/machineid.cpp` under Wine --
 `tests/python/guest/test_guest_machineid.py` reads its verdicts -- because
 every way this can go wrong is invisible from outside the process: a client

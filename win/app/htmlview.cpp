@@ -55,7 +55,7 @@
  * name is a redeclaration with different linkage and will not compile.
  *
  * The bytes were read out of the linked image rather than typed, and
- * win/checks/cppcheck.cpp compares every one of them against uuid.lib's own
+ * tests/guest/cppcheck.cpp compares every one of them against uuid.lib's own
  * copy on each build -- because a wrong byte here does not fail a gate, it
  * fails CoCreateInstance on the guest and leaves no transcript at all. */
 static const GUID RC_IID_IUnknown =

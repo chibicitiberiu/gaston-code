@@ -102,7 +102,7 @@ def test_ls_of_a_file_is_not_an_empty_listing(remote, tree):
 # the fix, 29 after, while Wine said 4 either way. It is kept because it
 # documents the contract and would catch a regression that broke roots
 # everywhere -- but the thing that actually guards this is running fscheck on
-# the guest. See the comment on caseList in win/checks/fscheck.cpp.
+# the guest. See the comment on caseList in tests/guest/fscheck.cpp.
 def test_ls_of_a_drive_root_lists_it(remote):
     """Found on a real 98 machine: every root answered 0 entries while
     C:\\GASTON answered 7, and `dir C:\\ /B` answered 21. A root already

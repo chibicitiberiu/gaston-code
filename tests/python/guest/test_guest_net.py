@@ -2,7 +2,7 @@
 free-text PASS:/FAIL: verdicts and was run by a human, or not at all, so a
 green `make test` said nothing about the guest's networking and framing code.
 
-`netcheck.exe` links the REAL net.cpp and frameproto.cpp (see win/checks/
+`netcheck.exe` links the REAL net.cpp and frameproto.cpp (see tests/guest/
 netcheck.c) and drives a full connect / HELLO / INPUT / TEXT / TURN round
 trip -- the same code path win/app/mainwindow.cpp uses, without needing GUI
 automation to drive it.
@@ -83,7 +83,7 @@ async def netcheck_result(harness):
 def test_netcheck_gets_a_real_reply_and_a_clean_turn_end(netcheck_result):
     """The three failure modes netcheck.c reports that are genuinely about
     this round trip working at all: an error frame, a timed-out wait, or no
-    text ever arriving. See win/checks/netcheck.c's four `FAIL:` checks --
+    text ever arriving. See tests/guest/netcheck.c's four `FAIL:` checks --
     the fourth, the leaked-frame count, is asserted on its own below."""
     text, err = netcheck_result
     assert "FAIL: error frame or link failure" not in text, (text, err)
@@ -122,7 +122,7 @@ def test_netcheck_reports_no_leaked_frames(netcheck_result):
 # rc_net_send that backpressure causes.
 #
 # MEASURED against the code before this fix (do not re-derive this by hand --
-# rerun win/checks/netcheck.c's --slowsend mode against a stalled reader if
+# rerun tests/guest/netcheck.c's --slowsend mode against a stalled reader if
 # it needs re-checking): three rc_net_send calls in a row, each already over
 # the 64KB cap, each waited its full ~5s budget and then queued the frame
 # ANYWAY -- 65558, then 98337, then 131116 bytes, every single one reported
@@ -151,7 +151,7 @@ async def stalled_reader():
     """A bare TCP listener that accepts one connection and never reads it.
 
     Deliberately NOT the `harness` fixture: this scenario does not speak the
-    wire protocol at all (win/checks/netcheck.c's --slowsend mode skips HELLO
+    wire protocol at all (tests/guest/netcheck.c's --slowsend mode skips HELLO
     negotiation and hammers rc_net_send directly), so a real Bridge would be
     answering a HELLO that never arrives instead of doing anything useful.
     """
@@ -180,7 +180,7 @@ async def _run_slowsend(port):
         proc.kill()
         await proc.communicate()
         pytest.fail("netcheck.exe --slowsend did not finish within 90s -- "
-                    "see win/checks/netcheck.c's SLOWSEND_MAX_FRAMES/"
+                    "see tests/guest/netcheck.c's SLOWSEND_MAX_FRAMES/"
                     "SLOWSEND_SLOW_STREAK, which are meant to bound this")
     return (out.decode("latin-1", "replace"), err.decode("latin-1", "replace"),
             proc.returncode)

@@ -3364,7 +3364,7 @@ receives a HELLO. `tests/python/meta/test_hello_headers.py` now parses the
 stay free: the header list IS the capability declaration, so a full array
 means the next client rule has nowhere to go.
 
-`win/checks/idcheck.cpp` runs the shipping `MachineId` under Wine, because
+`tests/guest/idcheck.cpp` runs the shipping `MachineId` under Wine, because
 every one of its failure modes is invisible from outside the process: the
 mint, the file, the same id on the second launch, a different id in a
 different directory, trailing CRLF trimmed, garbage replaced AND the
@@ -3448,7 +3448,7 @@ The `lParam` was being thrown away (`(void)lp`). Both handlers now print
 whether it was a logoff, which is what BACKLOG/REMOTE's "does `gremote`
 survive a logoff" question needs in order to be answerable by reading a file.
 
-`win/checks/appcheck.cpp` grew eight cases (21 -> 29) and reads the log files
+`tests/guest/appcheck.cpp` grew eight cases (21 -> 29) and reads the log files
 back, because these are claims about what is IN THE FILE after the program has
 gone. They come last in that binary on purpose: everything above runs with no
 log open, so `App`'s own lines cannot land in the files being read. One

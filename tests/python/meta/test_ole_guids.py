@@ -6,7 +6,7 @@ single object module and one reference to it pulls all 1,970 GUIDs -- 31,744
 bytes of committed image in four exes, measured 2026-10-11
 (`docs/measurements/imagebytes-host-20261011.txt`).
 
-`win/checks/cppcheck.cpp` proves that table right by `memcmp`-ing it against
+`tests/guest/cppcheck.cpp` proves that table right by `memcmp`-ing it against
 `uuid.lib`'s own copies at run time, which is the comparison that matters and
 needs the toolchain. This file closes the other half, and needs nothing: that
 the two SHIPPING copies still say what the checked table says. Without it a
@@ -25,7 +25,7 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 
-CHECKED = ROOT / "win" / "checks" / "cppcheck.cpp"
+CHECKED = ROOT / "tests" / "guest" / "cppcheck.cpp"
 SHIPPING = (
     ROOT / "win" / "app" / "htmlview.cpp",
     ROOT / "win" / "automation" / "calldeadline.cpp",

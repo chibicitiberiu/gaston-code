@@ -107,7 +107,7 @@ void ContentScanner::finish(char *clsOut, unsigned long *rawOut,
         *crcOut = (cls == RC_CLS_TEXT) ? m_crcNorm : m_crcRaw;
 }
 
-/* --- the C names, for win/checks/rpccheck.c ------------------------------
+/* --- the C names, for tests/guest/rpccheck.c ------------------------------
  *
  * rpccheck.c is a C program and drives these three directly. It never
  * dereferences the pointer, so the opaque `rc_sync_scanner` in sync.h can be

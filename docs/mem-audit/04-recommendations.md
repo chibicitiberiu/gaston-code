@@ -5,7 +5,7 @@
 > `GdiObj`, `MemoryDC`, `File`, `Dll`, `MenuGuard`, `WindowGuard`, and the
 > three that need more than the resource itself — `WindowDC`, `Selected`,
 > `TempFile`. `UniqueObj<T>`/`UniqueArr<T>` cover `delete`/`delete[]`.
-> Seventeen cases were added to `win/checks/cppcheck.cpp` (34 pass), and
+> Seventeen cases were added to `tests/guest/cppcheck.cpp` (34 pass), and
 > `TempFile`'s F1 case was verified to go RED when the bug is reintroduced.
 > **No call site has been converted yet**, so `retroclaude.exe` is unchanged
 > and the defects below are all still live. R1 and R2 are now edits to

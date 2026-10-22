@@ -4,7 +4,7 @@
 initializeServices, startServices, main, stopServices, cleanup -- that a
 derived app fills, holding its services as UniqueObj members it creates and
 takes down itself. Its ordering promises are the kind that read right and
-behave otherwise, so `win/checks/appcheck.cpp` records every call into a
+behave otherwise, so `tests/guest/appcheck.cpp` records every call into a
 trace and these assert on the trace, not on the header's description of it.
 
 Tokens: I. initialize, P. parseArgs, C. cleanup, f. preTranslate consumed;

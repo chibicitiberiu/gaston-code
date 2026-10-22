@@ -1,6 +1,6 @@
 """libexec, run as the shipping code under Wine.
 
-`win/checks/execcheck.cpp` drives `ExecJob` directly: the refuse-rather-than-
+`tests/guest/execcheck.cpp` drives `ExecJob` directly: the refuse-rather-than-
 truncate guard, output reaching the sink, the cap, the exit code, a failed
 spawn, the timeout, both kinds of cancel, a reader that goes away and the
 via-shell flag. What COMMAND.COM does on the

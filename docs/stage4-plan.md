@@ -137,10 +137,10 @@ previous draft called them six while listing eight. `RC_MAX_VAL` is 256 against 
 buffers, so a buggy bridge reaches them; real ids are `f12`/`u7`, so this is robustness and the
 message says so. **`win/ui/uirec.cpp:97` is left alone for the right reason:** the measured tree
 is 4 to 6 deep (`tree.cpp:26`), not because of the depth cap and not because
-`win/checks/uicheck.cpp:320` pins it — that check never truncates in the case it exercises (33 of
+`tests/guest/uicheck.cpp:320` pins it — that check never truncates in the case it exercises (33 of
 64 bytes), so it would stay green either way, and at three-digit siblings 17 components is 67
 bytes, over budget by the same arithmetic that clears `tree.cpp:208`. **The check goes in
-`win/checks/rpccheck.c`**, which links `fsrpc.cpp`, `syncrpc.cpp` and `uirpc.cpp`
+`tests/guest/rpccheck.c`**, which links `fsrpc.cpp`, `syncrpc.cpp` and `uirpc.cpp`
 (`win/Makefile:650`) and is driven by `test_guest_rpc.py`, which pins named verdicts rather than a
 count; `uicheck` links none of these sites. `uiops.cpp`'s three are gremote's, covered by
 `tests/python/remote/`.
