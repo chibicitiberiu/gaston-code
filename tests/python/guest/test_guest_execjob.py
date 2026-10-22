@@ -5,7 +5,7 @@ truncate guard, output reaching the sink, the cap, the exit code, a failed
 spawn, the timeout, both kinds of cancel, a reader that goes away and the
 via-shell flag. What COMMAND.COM does on the
 real guest -- REDIR32, the DOS VM, the always-zero exit code -- Wine cannot
-show; `win/checks/execprobe.cpp` measures that on the VM
+show; `research/guest/execprobe.cpp` measures that on the VM
 (docs/measurements/execprobe-vm-*).
 
 Since 2026-10-02 it also drives `exec/cpuid.cpp`, which is libexec too. Those

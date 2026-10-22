@@ -966,7 +966,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    *Done in code 2026-09-26 (`docs/libexec-plan.md` has the steps and
    hashes):* `ExecJob`, `Processes`, `readSystemInfo`/`requestReboot` in
    `win/exec/`, the client on them, EXECKILL id-checked. A probe on the VM
-   first (`win/checks/execprobe.cpp`) found that a stop never worked on 98 --
+   first (`research/guest/execprobe.cpp`) found that a stop never worked on 98 --
    the pid exec held was `REDIR32.EXE`, which TerminateProcess cannot end
    (`BACKLOG.md` 14) -- so a stop now ends the whole tree. Verified on the
    VM: the client passes the stub-bridge run (`tools/probe/execkill.py`),

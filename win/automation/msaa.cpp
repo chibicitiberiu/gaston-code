@@ -30,7 +30,7 @@ static const GUID RC_IID_IAccessible =
 
 /* REFIID is `const IID &` in C++ and `const IID *` in C, and the interface
  * methods are called directly rather than through lpVtbl. This file is C++;
- * win/checks/probe.c does the same work in C and therefore looks different. */
+ * research/guest/probe.c does the same work in C and therefore looks different. */
 typedef HRESULT (WINAPI *PFN_AOFW)(HWND, LONG, REFIID, void **);
 typedef UINT (WINAPI *PFN_ROLETEXT)(DWORD, LPSTR, UINT);
 typedef HRESULT (WINAPI *PFN_ACCCHILDREN)(IAccessible *, LONG, LONG,

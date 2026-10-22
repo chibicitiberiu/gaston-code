@@ -76,7 +76,7 @@ SOURCES = [
     "docs/REMOTE.md",
     "docs/UIAUTOMATION.md",
     "docs/BACKLOG.md",
-    "win/checks/probe.c",
+    "research/guest/probe.c",
     "win/automation/input.cpp",
     "win/remote/server.cpp",
     "win/ui/uiengine.cpp",

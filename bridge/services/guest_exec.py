@@ -339,7 +339,7 @@ class GuestExecService:
         if entry.no_shell and status == ExecStatus.SPAWN_FAILED:
             parts.append(prompts.text("tools.exec.notes.no_shell").strip())
         # Through COMMAND.COM /c on Windows 98 `code` is ALWAYS 0, even for a
-        # program that does not exist (measured: win/checks/execprobe.cpp,
+        # program that does not exist (measured: research/guest/execprobe.cpp,
         # docs/measurements/execprobe-vm-gui-20260926.txt); a program spawned
         # with no shell reports its real code. So a zero here proves nothing
         # on that shell, which is why only a non-zero code is ever said.

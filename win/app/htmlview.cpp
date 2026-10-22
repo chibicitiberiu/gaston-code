@@ -49,7 +49,7 @@
  *
  * win/automation/msaa.cpp:25 already did this for oleacc's IID, for a
  * different reason (a toolchain whose import library lacks it cannot fail
- * the link), and win/checks/probe.c:566 does it in C. The RC_ prefix is not
+ * the link), and research/guest/probe.c:566 does it in C. The RC_ prefix is not
  * decoration: oleidl.h, exdisp.h and mshtml.h already declare these names
  * as `EXTERN_C const IID`, so a file-scope `static const GUID` of the same
  * name is a redeclaration with different linkage and will not compile.

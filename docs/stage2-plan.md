@@ -169,7 +169,7 @@ check exes pull it for **`IID_IUnknown` alone**, at `win/automation/calldeadline
 The codebase already has the fix, written down twice and applied twice:
 `win/automation/msaa.cpp:25-26` — *"Spelled out rather than linked from uuid.lib, so a
 toolchain whose import library lacks oleacc's IID cannot fail the link"* — and
-`win/checks/probe.c:566`. `calldeadline.cpp:13-15` spells out `RC_IID_IMessageFilter`
+`research/guest/probe.c:566`. `calldeadline.cpp:13-15` spells out `RC_IID_IMessageFilter`
 seventy-nine lines above the line that does not.
 
 - **The locals must be renamed, and this is not cosmetic.** The stock names are already
@@ -197,7 +197,7 @@ seventy-nine lines above the line that does not.
   names `comctl32.lib` at `win/Makefile:142` like every other link and does not import
   `COMCTL32.DLL`. (An earlier draft cited the map's "Libraries Used" section for this; do
   not — the two reviews disagree about what it contains, and the import table settles it
-  either way.) `win/checks/htmlspike.c:61-67,213,214,227,253` keeps referencing ten of
+  either way.) `research/guest/htmlspike.c:61-67,213,214,227,253` keeps referencing ten of
   these and keeps linking `uuid.lib`; it is a spike and is untouched.
 - **The guard is a check-exe case, not a generator.** An earlier draft proposed extracting
   the bytes from `uuid.lib` and comparing in `tests/python/meta`. Both halves were wrong:
@@ -281,7 +281,7 @@ guest, not under Wine. Wine proves the code, never the platform."* A `-os`/`-ot`
 from a Wine timing is precisely what that rule exists to stop, so Wine's only job here is
 "it runs and produces output". On the VM, for the three things that are genuinely loops:
 
-- `probe deflate` for miniz — it exists (`win/checks/probe.c:472`), discards a warm pass,
+- `probe deflate` for miniz — it exists (`research/guest/probe.c:472`), discards a warm pass,
   and documents why its corpus flatters the ratio.
 - The sync scanner's CRC pass, timed from the bridge as `SCAN` sent to `MANIFEST` received
   over a fixed corpus, so no guest instrumentation is needed. Expect the platter to

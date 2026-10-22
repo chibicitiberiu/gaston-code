@@ -1,7 +1,9 @@
 # 04 — Verification: what is proved and what is claimed
 
 Audit date 2026-09-21. Scope: the tests and the verification tooling, not the
-product code — `tests/python/**`, `win/checks/*`, `Makefile`, `win/Makefile`,
+product code — `tests/python/**`, the check binaries and probes (then
+`win/checks/*`, now `tests/guest/*` and `research/guest/*`), `Makefile`,
+`win/Makefile`,
 `make/`, `pytest.ini`, `tools/`, and the gate and verification-status claims in
 `docs/PROGRESS.md` and `docs/PLAN.md`.
 

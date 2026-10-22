@@ -1,7 +1,8 @@
 # 01 — Guest audit: win/
 
 **Date** 2026-09-21. **Scope**: every `.c`, `.cpp` and `.h` under `win/` except
-`win/third_party/` — the ~13k shipping lines plus `win/checks/` and
+`win/third_party/` — the ~13k shipping lines plus the check binaries and
+probes (then `win/checks/`, now `tests/guest/` and `research/guest/`) and
 `win/Makefile`. **Not** the bridge, except where a guest behaviour can only be
 judged against what the bridge actually sends, in which case the bridge line is
 cited too.

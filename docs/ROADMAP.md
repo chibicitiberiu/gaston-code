@@ -559,7 +559,7 @@ The decisions, as they were settled 2026-10-13:
   conclusion from a real four-band run -- deflate beat GDI's own RLE at every
   depth where both exist. The "2.8x faster and 2x larger" this section carried
   has no measurement file behind it, and its likely source is a *discarded*
-  2.7x single-band number at `win/checks/probe.c:1658`, sign flipped. Two of
+  2.7x single-band number at `research/guest/probe.c:1658`, sign flipped. Two of
   four repo documents already said no; now all four do.
 - ~~**`COMMITTED_CAP` +4,096**~~ **Closed 2026-10-11 without being taken.**
   Stage 2 freed 31,520 bytes of CONST against the 126 needed.

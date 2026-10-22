@@ -930,7 +930,7 @@ nobody noticed because each was read on its own.
 **The 2.8x figure has no measurement file behind it.** Nothing in
 `docs/measurements/` contains the string RLE; gate 0.12b's depth ladder prints
 an RLE column and its output was never saved. The nearest real number is in
-`win/checks/probe.c`, in the comment explaining why an EARLIER number was
+`research/guest/probe.c`, in the comment explaining why an EARLIER number was
 **discarded**: *"The first version sampled a single strip of mostly-flat
 desktop and concluded deflate beats RLE by 2.7x, which is a claim about that
 band and not about screenshots."* That is 2.7x the other way round -- deflate
@@ -943,7 +943,7 @@ shouldCompress` in `win/wire/connection.cpp`, `should_compress` in
 `bridge/wire/compress.py`, and the same shape again in `gremote/client.py`.
 Each has a decoder, one of which treats an unknown `enc` as raw rather than
 refusing. The encoder is unwritten -- RLE in this tree exists only in
-`win/checks/probe.c`, where GDI produces it for free inside a DIB, which is a
+`research/guest/probe.c`, where GDI produces it for free inside a DIB, which is a
 different thing from a wire codec over an arbitrary frame body. Add a HELLO
 negotiation bit and it is a day, for a codec measured as worse on the link we
 have.
@@ -1421,7 +1421,7 @@ control has somewhere to go.
 **The measurement this entry asked for could not be taken, and that is the
 part worth keeping.** It said `GetFreeSystemResources` was "already ruled out
 (9x-only 16-bit export, no 32-bit equivalent worth resolving)", which is half
-wrong: `win/checks/probe.c:75-93` already resolves it through `rsrc32.dll`
+wrong: `research/guest/probe.c:75-93` already resolves it through `rsrc32.dll`
 and reports system/GDI/USER separately. But on this Win98 SE install the
 answer is `rsrc32.dll not present`, measured 2026-09-19 -- the Resource Meter
 is not installed, so there is no USER/GDI percentage to read without
@@ -1442,7 +1442,7 @@ the thunk is the reason it applies and `PLAN.md` marks that route
 proposes what to report instead -- our own GDI object counts plus working
 set, neither of which needs a 9x-only dynamic resolve.
 
-A probe off that lane (`win/checks/probe.c` already does it) remains
+A probe off that lane (`research/guest/probe.c` already does it) remains
 perfectly fine for anyone who installs the Resource Meter and wants a
 number. What WAS measured, with only the app running (launched
 from Start > Run, no DOS box, no Explorer window): **5208 KB free at window

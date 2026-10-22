@@ -18,7 +18,7 @@ Decided with the user:
 - Exit codes: the lib flags whether a code is meaningful, and the wire stays unchanged.
 
 A probe on the VM (2026-09-26) changed the design. Its raw results are in
-`docs/measurements/execprobe-vm-*-20260926.txt`, from `win/checks/execprobe.cpp`. Only the detached runs count; they behave like a GUI parent. The run
+`docs/measurements/execprobe-vm-*-20260926.txt`, from `research/guest/execprobe.cpp`. Only the detached runs count; they behave like a GUI parent. The run
 from the DOS prompt shared its console with the children and misled.
 
 | Finding (Win98, VM) | Design consequence |

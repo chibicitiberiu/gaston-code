@@ -78,7 +78,7 @@ fi
 # Refuse to ship a probe older than its source. A kit built from a stale
 # exe looks identical to a fresh one and the results come back answering
 # last week's question.
-if [ "$HERE/win/checks/probe.c" -nt "$PROBE" ]; then
+if [ "$HERE/research/guest/probe.c" -nt "$PROBE" ]; then
   echo "mkw98kit: probe.c is newer than probe.exe. Run: make -C win probe" >&2
   exit 1
 fi

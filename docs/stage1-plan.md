@@ -73,7 +73,7 @@ Recorded in commit 1, before any code, because stage 3 reads them.
 | **Export** | **The guest renders it.** One renderer, no drift, and `win/app/cache.cpp` already holds rendered pages, so export becomes "assemble what is cached and write it". `bridge/view/html.py:677-679` argues the exported copy must match the screen; this makes that true by construction. Replaces the three-option list in BACKLOG 13 step 2 and 31 step 5. |
 | **Vocabulary capability** | One `HELLO` key, a small integer version, bridge refuses an unknown value rather than guessing — per **client rules are declared at handshake**. Covers both 13's class names and 31's block kinds. The client has 14 free HELLO slots (`win/net/net.cpp:236` `RC_HELLO_MAX 48`, 34 in use) and `tests/python/meta/test_hello_headers.py` asserts two remain after. |
 | **Cache format** | The cache keeps holding **rendered markup**, not blocks, so a reconnect costs no re-render on a 1998 CPU; the format key gets a bump so pages written by an older renderer are discarded rather than shown. |
-| **0.15d scope** | The reboot run plus BACKLOG 15's harness. Foreign-process GDI capture (the probe's own D4, `win/checks/probe.c:2874-2883`) stays deferred **with its reason restated**, not silently. |
+| **0.15d scope** | The reboot run plus BACKLOG 15's harness. Foreign-process GDI capture (the probe's own D4, `research/guest/probe.c:2874-2883`) stays deferred **with its reason restated**, not silently. |
 
 ---
 
@@ -270,7 +270,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
 
 ### 6. The harness, and then the run
 
-`tools/`, `tools/gen/w98kit/TEST.BAT`, `win/checks/probe.c`.
+`tools/`, `tools/gen/w98kit/TEST.BAT`, `research/guest/probe.c`.
 
 - **Move the injection steps last.** They are 9-11 of 20
   (`TEST.BAT:48-53`), with nine screen/MSAA steps and the whole `AUTOCHK.EXE`
@@ -278,18 +278,18 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   prompt, and the `[1/18]` label fixed.
 - **`PROBE.EXE` with no argument runs every section including `inject`.** The 25
   sections dispatch as `if (!only || !strcmp(only, "x")) probe_x();`
-  (`win/checks/probe.c:3822-3846`), so excluding the three injection sections
+  (`research/guest/probe.c:3822-3846`), so excluding the three injection sections
   from the no-arg sweep is dropping `!only ||` from `:3842-3844`. The no-arg path
   is what an operator types, and it should not be able to reach the gates that
   wedged the box by accident.
 - **The health check goes in `autocheck.exe --health`, not in the probe.**
   `probe.c` has no input injection at all — `PostMessageA` is the most it does
   (`:217`, `:2689`) — while `autocheck.exe` links libautomation, already has
-  `--shot`, `--type-into` and `--click` (`win/checks/autocheck.cpp:2158-2162`)
+  `--shot`, `--type-into` and `--click` (`research/guest/autocheck.cpp:2158-2162`)
   and already registers its own window classes (`:271-275`, `:455-477`). So all
   three of BACKLOG 15's assertions fit one exe that is already in the kit: create
   a window, focus it, type into it with `Input`, read it back with `WM_GETTEXT`,
-  and write a file. `win/checks/focusprobe.cpp` stays what it is — a one-question
+  and write a file. `research/guest/focusprobe.cpp` stays what it is — a one-question
   measurement, not a liveness check — and does not need wiring in.
 - **A rollback script.** `virsh destroy retroclaude-win98`, copy
   `vm/win98.qcow2` to a timestamped known-good, start, run, restore on failure.

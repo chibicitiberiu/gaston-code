@@ -2450,7 +2450,7 @@ static void probe_evlat(void)
  * not marshal, and seeing an app go idle -- because both need exactly this:
  * our code in their address space and a way to report back.
  */
-/* Must match win/checks/hookdll.c exactly. Two declarations of one shared
+/* Must match win/inproc/hookdll.c exactly. Two declarations of one shared
  * layout is a hazard, and the alternative -- a header both include -- means
  * the DLL picks up whatever else that header drags in, on a file that gets
  * mapped into other people's processes. Kept in step by hand, deliberately. */

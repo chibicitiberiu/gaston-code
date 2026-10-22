@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build CORPUS.TXT: the deflate corpus that gate 0.5c has been waiting for.
 
-`win/checks/probe.c`'s deflate sample is one two-line block repeated. It
+`research/guest/probe.c`'s deflate sample is one two-line block repeated. It
 compresses about 164:1 and the comment beside it has asked for this file
 since the gate was written: "a realistic corpus (the project's own prose and
 code, which measured 2.16:1) read from a file next to the exe".
@@ -49,7 +49,7 @@ CEILING = 256 * 1024
 # every one is checked to exist, because a silently missing file would change
 # the corpus and nothing would say so.
 #
-# win/checks/probe.c IS DELIBERATELY NOT HERE, and it was until it bit: the
+# research/guest/probe.c IS DELIBERATELY NOT HERE, and it was until it bit: the
 # program that reads this corpus is the program whose source was in it, so
 # every edit to the probe changed the bytes the probe measures. That showed up
 # as the size moving 234,481 -> 234,505 -> 234,509 across one afternoon of

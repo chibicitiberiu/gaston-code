@@ -351,7 +351,7 @@ OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
-HTMLSPIKE_OBJS = $(call objs,checks/htmlspike.c)
+HTMLSPIKE_OBJS = $(call objs,research/guest/htmlspike.c)
 htmlspike: $(BUILD)/htmlspike.exe
 $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 	@$(WLINK) $(LFLAGS) library ole32.lib, oleaut32.lib, uuid.lib \
@@ -415,7 +415,7 @@ $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
 # Not a check: measures on the guest what libexec's design depends on --
 # Toolhelp, whether a grandchild outlives its killed shell, exit codes through
 # COMMAND.COM, socket inheritance, launch's show value. Read back over COM1.
-EXECPROBE_OBJS = $(call objs,checks/execprobe.cpp) $(LIBCORE)
+EXECPROBE_OBJS = $(call objs,research/guest/execprobe.cpp) $(LIBCORE)
 execprobe: $(BUILD)/execprobe.exe
 $(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -430,7 +430,7 @@ $(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
 # a loaded layout, ToAsciiEx as a dead-key test, AltGr as Ctrl+Alt, and
 # Alt+Numpad -- measured into its own edit control. Wine's layouts are the
 # host's, so only the guest answers. Writes KEYPROBE.TXT beside itself.
-KEYPROBE_OBJS = $(call objs,checks/keyprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
+KEYPROBE_OBJS = $(call objs,research/guest/keyprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
 keyprobe: $(BUILD)/keyprobe.exe
 $(BUILD)/keyprobe.exe: $(KEYPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -446,14 +446,14 @@ $(BUILD)/keyprobe.exe: $(KEYPROBE_OBJS)
 # SW_SHOWNOACTIVATE really keeps it out of the foreground (load-bearing:
 # keyboardTargetOk refuses every typing step while one of ours is in
 # front). Writes STRIPPRB.TXT beside itself.
-STRIPPROBE_OBJS = $(call objs,checks/stripprobe.cpp) $(LIBCORE)
+STRIPPROBE_OBJS = $(call objs,research/guest/stripprobe.cpp) $(LIBCORE)
 stripprobe: $(BUILD)/stripprobe.exe
 $(BUILD)/stripprobe.exe: $(STRIPPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
 
-FOCUSPROBE_OBJS = $(call objs,checks/focusprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
+FOCUSPROBE_OBJS = $(call objs,research/guest/focusprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
 focusprobe: $(BUILD)/focusprobe.exe
 $(BUILD)/focusprobe.exe: $(FOCUSPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -584,7 +584,7 @@ $(BUILD)/uicheck.exe: $(UICHECK_OBJS)
 	  map=$(BUILD)/uicheck.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
 
-AUTOCHECK_OBJS = $(call objs,checks/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
+AUTOCHECK_OBJS = $(call objs,research/guest/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
 autocheck: $(BUILD)/autocheck.exe
 $(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0, \
@@ -662,7 +662,7 @@ $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	  $(LINKIN)
 	@echo "built $@"
 
-PROBE_OBJS = $(call objs,checks/probe.c $(MINIZ)) $(LIBCORE)
+PROBE_OBJS = $(call objs,research/guest/probe.c $(MINIZ)) $(LIBCORE)
 # The corpus is a PREREQUISITE of the probe, not an optional extra beside it.
 # `probe deflate` reads CORPUS.TXT from its own directory and REFUSES without
 # it -- deliberately, because the synthetic sample it used to build compressed
@@ -998,8 +998,11 @@ $(LIBVIEW): $(call objs,$(VIEW_SRCS))
 #
 #   check-sources refuses strcpy/sprintf/alloca and dropped path separators.
 #   A check harness builds real paths and writes real files, so it is
-#   exactly the code that wants refusing.
-SRCDIRS = $(CURDIR) $(TOP)/tests/guest
+#   exactly the code that wants refusing. research/guest/ is here for the
+#   stronger version of the same reason: probe.c is 4,036 lines of C that
+#   runs on the real 1998 machine, and a dropped separator there is a probe
+#   that measures nothing and says it measured something.
+SRCDIRS = $(CURDIR) $(TOP)/tests/guest $(TOP)/research/guest
 
 # The map is not a debugging nicety: `make check` needs symbol names to gate on
 # stack frame sizes, and objdump cannot read Watcom's OMF objects.
