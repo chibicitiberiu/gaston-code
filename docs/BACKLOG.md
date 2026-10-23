@@ -4358,7 +4358,22 @@ taskbar appeared; adding the icon`" is a KEYBOARD step in the plan, and it is
 one for a reason. It was attempted over the wire because the flag was there,
 not because the plan asked for it.
 
-**Not started.** The guard change is one line and should wait for the
-diagnosis, because "why did gremote die" is the part worth knowing -- if it
-is (2) or (3), the same fault is reachable whenever Explorer crashes on its
-own, which needs no `force` and no remote caller at all.
+**Guard tightened 2026-10-23; the diagnosis is STILL OWED.**
+`EXPLORER.EXE` moved from the `!force` tier into the always-refused list in
+`win/exec/process.cpp`, beside `KERNEL32.DLL` and `MSGSRV32.EXE`. There is no
+call for which a remote caller wants a dead shell and a live link, and a flag
+that only ever gets somebody into trouble is better spelled "no". The Win16
+half of the old condition stays where it was: a hung 16-bit app holding
+Win16Mutex is a different problem with a real reason to force.
+
+**The question this entry is actually about is unanswered**, and the change
+above does not answer it. The repeat that would -- kill the shell again,
+watch whether gremote survives, read `GREMOTE.PRV` -- is **refused by Claude
+Code's permission classifier** as "Interfere With Workloads", which is a
+reasonable thing for it to refuse and leaves the measurement to a person at
+the keyboard. Until it is taken, candidates (2) and (3) stay live, and if
+either is right then the same fault is reachable whenever Explorer crashes on
+its own, with no `force` and no remote caller involved. Tightening the guard
+protects against the deliberate case and nothing else.
+
+`gremote.exe` unchanged at 262,656 bytes, 267,177 committed at load.

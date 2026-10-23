@@ -146,9 +146,36 @@ KillStatus Processes::kill(DWORD pid, bool force, DWORD waitMs)
     if (!p)
         return KILL_NO_SUCH_PID;
 
+    /* EXPLORER.EXE joined this list 2026-10-23 (BACKLOG 40), moved up from
+     * the `!force` tier below. It was refused unless the caller passed
+     * `force`, which reads as caution and was load-bearing: done over
+     * gremote on the Pentium 200, the shell died and TOOK GREMOTE WITH IT --
+     * the link reset mid-call, Windows stayed perfectly well (ping 0.53 ms,
+     * port 139 answering) and 7401 refused for half an hour until somebody
+     * walked over, because RunServices starts gremote at BOOT and there is
+     * no remote QUIT by design.
+     *
+     * There is no call for which a remote caller wants a dead shell and a
+     * live link: it cannot see the desktop it just destroyed, and on the
+     * evidence it does not keep the link either. A flag that only ever gets
+     * somebody into trouble is better spelled "no".
+     *
+     * STILL OWED, and it is the more interesting half: WHY gremote died is
+     * not established. 9x instability after TerminateProcess on the shell,
+     * a fault in our own tray code when the notification area vanishes
+     * mid-call (win/remote/tray.cpp handles a shell that was never there,
+     * which is not the same path as one that disappears underneath it), or
+     * the shell watch firing outside a session end. If it is the second or
+     * third, the same fault is reachable whenever Explorer crashes on its
+     * own -- no force, no remote caller, nobody doing anything wrong -- and
+     * this change does nothing for that case. BACKLOG 40 keeps the question.
+     *
+     * The Win16 half of the old condition stays where it was: a hung 16-bit
+     * app holding Win16Mutex is a different problem with a real reason to
+     * force. */
     static const char *const always[] = {
         "KERNEL32.DLL", "MSGSRV32.EXE", "MPREXE.EXE", "MMTASK.TSK",
-        "REDIR32.EXE"
+        "REDIR32.EXE", "EXPLORER.EXE"
     };
     const char *name = baseName(p->exe);
     for (unsigned i = 0; i < sizeof always / sizeof always[0]; i++)
@@ -157,8 +184,7 @@ KillStatus Processes::kill(DWORD pid, bool force, DWORD waitMs)
             rc_log("process: kill %08lx (%s) refused: never", pid, name);
             return KILL_DENIED;
         }
-    if (!force && (lstrcmpiA(name, "EXPLORER.EXE") == 0 ||
-                   isWin16Exe(p->exe)))
+    if (!force && isWin16Exe(p->exe))
     {
         rc_log("process: kill %08lx (%s) refused without force", pid, name);
         return KILL_DENIED;
