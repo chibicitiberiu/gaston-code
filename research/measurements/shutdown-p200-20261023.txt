@@ -1,0 +1,107 @@
+# S1: the self-asked reboot, on the machine the fix was written for.
+# It did not happen, and the box is now holding a session that is gone.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, at
+#           10.0.0.158. Same box and evening as deflate-p200-20261023.txt,
+#           wire-p200-20261023.txt and ui-cancel-p200-20261023.txt.
+#           A real install with RealPlayer, a TV tuner, PowerMenu and the
+#           rest resident -- which matters for a shutdown more than for
+#           anything else here, because any one of them can veto one.
+# Driven  : gremote on port 7401, client closed first so a hang has one
+#           suspect (docs/stage5-plan.md's S1).
+# Date    : 2026-10-23
+
+
+=== What was asked, and what happened ===
+
+Every log was pulled off the box first -- gremote.log, gremote.prv,
+gupdate.log, gupdate.prv, PROBE.LOG, gaston.log, gaston.prv, seven files --
+because docs/REMOTE.md records the evidence being destroyed by the recovery
+twice before rc_log_open learned to rename. They are in this session's
+scratchpad and the relevant ones are quoted below.
+
+  uptime before          6,741 s
+  client                 closed first; KILL answered `pending` and the
+                         process was gone on the next PS
+  r.reboot("reboot")     returned None, no exception
+  the box going down     NEVER. Polled every 3 s for 300 s; port 7401
+                         answered throughout
+  since then             every AUTH refused `busy`, for 140+ s of polling
+                         and counting
+
+And Windows itself is entirely well:
+
+  ping                   3/3, 0.56-0.99 ms
+  port 139 (NetBIOS)     open
+  port 7401              open, listening, refusing
+
+**So this is not the hang this entry was written to look for.** BACKLOG 35
+and REMOTE.md are about a machine that wedges on the way down and needs
+Ctrl+Alt+Del twice. This machine never started going down. The OS is
+healthy, the shell is up, the network stack is answering on two ports.
+gremote is the stuck component, and it is stuck in a specific way: it is
+listening, it believes a client is live, and gremote is single-session, so
+every new caller gets `busy` and a FIN.
+
+
+=== What that rules in and out ===
+
+REMOTE.md names two lines that appear only when the shutdown DID NOT happen,
+and says seeing either on the P200 is a finding:
+
+  gremote: the shell is still gone a minute after the session end, ...
+  gremote: three minutes after the session end this machine is still here,
+           so nothing is left to drive; exiting so a new copy can be started
+
+**Neither has fired**, and the second one is the tell. It is a three-minute
+watch and more than seven minutes have passed, so if the watch had armed,
+gremote would have exited and the port would be closed. The port is open.
+
+That points at the session end never having been signalled AT ALL rather
+than at it being signalled and then stalling. The watch counts from the
+session end; no session end, nothing to count from. Which in turn means the
+interesting question is not "why did Windows not reboot" but "did
+ExitWindowsEx get called, and what did it return" -- and the log that would
+say so cannot be read while the port refuses to authenticate.
+
+A plausible mechanism worth testing rather than asserting: something on this
+desktop vetoed WM_QUERYENDSESSION. It is a real install, and a Notepad
+"illegal operation" dialog was seen on this box earlier in the evening.
+9x will silently abandon a shutdown a running app refuses. That is a guess
+and is labelled one.
+
+
+=== The second defect, which is the one worth fixing ===
+
+Whatever stopped the reboot, **gremote should not be in this state
+afterwards.** The REBOOT caller's connection was closed by the host in the
+ordinary way when the `with Remote(...)` block exited. The guest did not
+notice, because the server thread was in the shutdown path and never
+processed the FIN. So the single session slot is pinned by a peer that is
+gone, and the box is unreachable from anywhere for as long as that lasts --
+with no remote QUIT, deliberately (REMOTE.md), and RunServices running at
+BOOT, so nothing short of a reboot puts a new copy up.
+
+A box that cannot be reached and cannot be told to do anything is the exact
+failure BACKLOG 35 closed `mode=poweroff` to avoid. This is a different road
+to the same place.
+
+What it argues for: the session-end path should either tear the listener's
+session down on its way out, or the shutdown watch should arm when REBOOT is
+ACCEPTED rather than when a session end is observed -- so that "I asked for a
+reboot and nothing happened" is a state the server recovers from by itself
+instead of one that needs somebody in the room.
+
+
+=== Recovery, which is also S3 ===
+
+The box needs a restart from the Start menu by hand. That is not wasted: it
+IS docs/stage5-plan.md's S3, the somebody-else-asked shutdown, and what the
+PRVs say afterwards is the measurement. Expected per REMOTE.md:1329 -- the
+last clause should be `nothing below this line is ours` rather than `this
+process stays up to drive the shutdown it asked for`, because the session end
+will have been the Start menu's and not gremote's.
+
+S1 and S2 remain unmeasured. S1 cannot be retried until the box is back, and
+should be retried, because one failure does not say whether this is
+reproducible or a one-off caused by whatever had a dialog open.
