@@ -1,6 +1,85 @@
-# Tool configuration only. The bridge is run from the source tree and has no
-# build step; this file exists so `make lint` and every editor agree on what
-# the rules are, rather than each carrying its own flags.
+# Tool configuration, and -- since the release build -- a package definition.
+#
+# This file used to say "tool configuration only. The bridge is run from the
+# source tree and has no build step". That was true and is still how it is
+# developed: nothing below changes `make lint`, `make test-fast` or running
+# `python -m bridge.server` out of a checkout. What it adds is the ability to
+# INSTALL the bridge, which the three host-side release artefacts all need --
+# the AppImage and the Windows zip embed a Python and install into it, and
+# `gaston-bridge` as a console script is what each one's launcher calls.
+#
+# The guest side is not here and never will be: it is C++98 built by Open
+# Watcom, packaged by tools/gen/mkrelease.sh.
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaston-code-bridge"
+# One spelling of the version for the HOST side. The guest's lives in
+# win/app/resource.h, because that is what the linker stamps into the image,
+# and tools/gen/mkrelease.sh refuses a mismatch between it and the tag. These
+# two are released together and carry the same number.
+version = "0.4.0"
+description = "The modern-host half of Gaston Code: runs Claude Code and speaks the wire protocol to a Windows 98 client"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Tiberiu Chibici" }]
+keywords = ["claude", "windows98", "retrocomputing", "agent"]
+
+# Deliberately the same two direct dependencies as requirements.in, and no
+# pins here. A LIBRARY that pins its transitives is a library that cannot be
+# installed beside anything; the pinning belongs in requirements.txt, which
+# is what the release builds install from.
+#
+# Neither of these brings Claude Code with it. claude-agent-sdk SPAWNS the
+# `claude` CLI off PATH, so every artefact built from this either carries
+# that CLI (the container image does) or requires it to be installed
+# separately (the AppImage and the Windows zip do).
+dependencies = [
+    "claude-agent-sdk>=0.2.153",
+    "pillow>=12.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/chibicitiberiu/gaston-code"
+Source = "https://github.com/chibicitiberiu/gaston-code"
+
+[project.scripts]
+gaston-bridge = "bridge.server:main"
+
+[tool.setuptools]
+# Named rather than discovered. Auto-discovery at this repository's root
+# finds `tests`, `tools`, `research` and `vm` and tries to package them.
+packages = [
+    "bridge",
+    "bridge.agent",
+    "bridge.devtools",
+    "bridge.files",
+    "bridge.services",
+    "bridge.view",
+    "bridge.wire",
+    "gremote",
+    # No __init__.py in either, so they are not importable packages and
+    # nothing imports them -- but setuptools sees a directory of files under
+    # a package and warns "would be ignored" on every build unless they are
+    # named. Listed here so that warning is gone and a real one is visible.
+    "bridge.profiles",
+    "bridge.prompts",
+]
+
+[tool.setuptools.package-data]
+# The shell grammars and the prompt text are DATA the bridge reads at
+# runtime, not documentation: bridge/agent/profiles.py and prompts.py both
+# resolve `Path(__file__).parent.parent / <dir>`, so these files have to be
+# installed beside the package or every tool profile and every system prompt
+# is missing and the failure is a confusing empty inventory rather than an
+# import error.
+"bridge.profiles" = ["*.toml"]
+"bridge.prompts" = ["*.toml"]
 
 [tool.ruff]
 line-length = 88
