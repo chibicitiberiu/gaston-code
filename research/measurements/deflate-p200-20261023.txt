@@ -204,9 +204,13 @@ own predecessor, arriving on schedule.
 
 Two practical consequences:
 
-  * `tools/gen/mkw98kit.sh` will now REFUSE to build a kit, because its crc
-    check compares the staged `CORPUS.TXT` against what the tree produces.
-    That is the check doing its job; `make -C win probe` regenerates it.
+  * `tools/gen/mkw98kit.sh` does NOT refuse, and this file said it would
+    before the claim was tested. Its crc check compares the staged
+    `CORPUS.TXT` against what the tree produces NOW, and `make -C win probe`
+    -- which `make -C win check` runs, and which had already run -- had
+    regenerated the staged copy to match. So the kit builds, carrying
+    3d3fc64c at 214,801 bytes. The refusal only fires for somebody who builds
+    a kit without rebuilding first, which is the case it was written for.
   * The copy on the box is still c200f36e, so a rerun of `probe deflate`
     THERE is still comparable with the figure above until somebody ships a
     new corpus. Check the crc line the probe prints before assuming it.
