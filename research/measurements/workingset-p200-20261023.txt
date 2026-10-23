@@ -1,0 +1,70 @@
+# What the client holds in physical memory, HEAD against all-os, on the
+# Pentium 200. The other half of the -ot question: U1 priced it in TIME,
+# this prices it in RAM.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, at
+#           10.0.0.158, uptime 79 min, 2,864 KB free before the run. Same
+#           box as the other *-p200-20261023.txt files.
+# Driven  : research/probes/wsprobe.py over gremote. Each build starts
+#           FRESH from its own folder, idle, pointed at a port nothing
+#           listens on -- no session, no transcript -- and the two
+#           alternate, because free memory on 98 drifts as the disk cache
+#           settles and only a pair taken together compares.
+# Date    : 2026-10-23
+
+                          file size      median holds
+  all-os  (WSOLD)          489,984          1,350 KB
+  HEAD    (WSNEW)          495,616          1,342 KB
+
+  round 0  WSOLD  free up 876  down 2,244  holds 1,368 KB
+  round 0  WSNEW  free up 880  down 2,236  holds 1,356 KB
+  round 1  WSOLD  free up 896  down 2,228  holds 1,332 KB
+  round 1  WSNEW  free up 888  down 2,216  holds 1,328 KB
+
+
+=== The answer: the bytes -ot costs do not show up in RAM ===
+
+HEAD is **5,632 bytes larger on disk** and holds **8 KB less** in physical
+memory. The sign is the opposite of the intuition and the magnitude is
+inside the spread -- the four readings run 1,368 / 1,356 / 1,332 / 1,328, a
+40 KB range -- so the honest statement is not "it holds less" but **"the
+difference is below what this measurement can see."**
+
+Which is the useful answer, and it completes the -ot decision rather than
+complicating it:
+
+  * U1 priced the TIME: 24.8% on every compressed transfer
+    (wire-p200-20261023.txt).
+  * This prices the MEMORY: nothing measurable, against a 40 KB noise floor.
+  * The file is 5,632 bytes bigger, and on a box with 761 MB free on C:
+    that is not a constraint anybody has.
+
+So `-ot` is paid for in disk bytes nobody is short of and bought back in time
+on the one operation this product does constantly. `win/Makefile`'s hot-module
+override stays, and this file is the reason the memory objection does not
+need raising again.
+
+**Why the image difference does not become working set** is not established
+here and is not guessed at. The plausible account -- the extra code is in
+pages that are never all resident, and the client's footprint is dominated by
+its heap, its GDI objects and MSHTML rather than by its own image -- is
+consistent with 1.34 MB held against a 495 KB file, but nothing in this run
+tests it.
+
+
+=== What this measurement is, and is not ===
+
+It is a differential of `dwAvailPhys` around a process starting and ending,
+which attributes a delta to a program BY CONSTRUCTION rather than by
+measurement -- the same caveat as memory-p200-20261023.txt, and the reason
+the tool alternates the builds rather than measuring each once.
+
+It is NOT the client under load. Each build is idle and pointed at a dead
+port, so no session, no transcript, no view rendered. docs/REMOTE.md's
+"with and without the client" pair is in memory-p200-20261023.txt; this is
+one build against another, which is a different question that happens to use
+the same field.
+
+And the absolute figure is worth keeping beside the other one: the client
+holds about **1.34 MB** on a 32 MB machine, which is the number to budget
+against, not the 495 KB on disk.
