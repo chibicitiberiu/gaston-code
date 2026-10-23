@@ -1,0 +1,113 @@
+# X1: the injection battery on the Pentium 200, and the machine survived it.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, at
+#           10.0.0.158. A real install with a TV tuner, RealPlayer and the
+#           rest resident, and the client running throughout.
+# Driven  : gremote's exec lane, one probe at a time with AUTOCHK --health
+#           between each, so a wedge would have had one suspect.
+# Date    : 2026-10-23
+#
+# docs/stage5-plan.md puts these last and alone: "These three load a DLL
+# into programs that did not ask for it. They have killed Explorer once, and
+# one session in September ended with this machine spinning at full speed
+# and taking no input, hours after every gate had passed." Neither happened.
+
+
+=== [18/21] can our code get into another process? YES ===
+
+  generation 9687233, counters zeroed
+  patch target set to this process only (pid 4294763201, PROBE.EXE)
+  HOOKDLL.DLL loaded, proc found
+  attaches so far 1 (this process)
+  WH_CBT with a DLL       : installed
+  notepad started         : yes
+  attaches (processes that mapped the DLL) : 3
+  hook calls, all processes                : 9
+  distinct processes that ran the proc     : 2
+     -> INJECTION WORKS. Our code ran inside another program.
+  IAT patch took in 1 process(es); 1 text draws seen
+     pid 4294763201 @7,9  "GASTON-SELFTEST"
+     -> GDI text capture works; that is text no message gives.
+
+
+=== [19/21] can it be aimed at ONE process? YES ===
+
+  deny list (no force escape): EXPLORER.EXE MSGSRV32.EXE KERNEL32.DLL
+                               MPREXE.EXE MMTASK.TSK SYSTRAY.EXE RUNDLL32.EXE
+    may_inject(notepad.exe)             = 1
+    may_inject(C:\WINDOWS\EXPLORER.EXE) = 0
+    may_inject(explorer.exe)            = 0  (case must not matter)
+  WH_CALLWNDPROC     installed; +0 calls, +0 distinct pids
+  WH_GETMESSAGE      installed; +22 calls, +1 distinct pids
+  WH_CBT             installed; +0 calls, +0 distinct pids
+  WH_CALLWNDPROCRET  installed; +0 calls, +0 distinct pids
+  attaches 2, calls 22, distinct pids 1 (us 0, target 1, other 0)
+     -> TARGETED INJECTION WORKS: our code ran in the target and in no
+        other process.
+
+**`WH_GETMESSAGE` is the only one of the four that delivered.** Three hooks
+installed and produced nothing; the fourth produced all 22 calls. Worth
+knowing before anybody picks a hook type by reasoning about which sounds
+right.
+
+And the deny list holds case-insensitively, which is the check that matters
+-- a list compared with `strcmp` would let `explorer.exe` through.
+
+
+=== [20/21] which text call does each module make? ===
+
+  (this exe)     TextOutA
+  MSHTML.DLL     TextOutW ExtTextOutW ExtTextOutA DrawTextW DrawTextA
+  COMCTL32.DLL   ExtTextOutW ExtTextOutA DrawTextExA
+  USER32.DLL     no text entry point imported by name
+  COMDLG32.DLL   DrawTextA ExtTextOutA TextOutA
+  SHELL32.DLL    ExtTextOutA
+  RICHED32.DLL   TextOutA ExtTextOutA
+
+**This is a finding against D4, not a confirmation.** The probe's own note:
+"D4 patches TextOutA and ExtTextOutA. If the module that draws a web page
+imports something else, D4 captures nothing from the one target it exists
+for." MSHTML -- the one target -- imports **TextOutW, ExtTextOutW, DrawTextW
+and DrawTextA** as well, and the first three are not patched. COMCTL32 and
+COMDLG32 add `DrawTextExA` and `DrawTextA`.
+
+So a D4 built on today's patch list would read some of a web page and
+silently miss the rest, which is worse than reading none. Widen the list to
+the W forms and the DrawText family before anybody builds on it. Reading an
+import table needs no injection, so this check is free to repeat on any
+machine.
+
+
+=== [21/21] is the machine still healthy? YES, after every step ===
+
+  health before    : ALL PASS
+  health after inject   : ALL PASS
+  health after targeted : ALL PASS
+  health after gditext  : ALL PASS
+
+The three checks are `health-a-window-takes-the-foreground`,
+`health-a-keystroke-changes-the-screen` (typed=0 sent=6, read back 'health')
+and `health-a-write-lands`. Run between each probe rather than once at the
+end, so that if the machine had stopped answering the previous line would
+name which step did it.
+
+**Nothing died.** Explorer stayed up, the client stayed up, gremote stayed
+up, and the box did not spin. The September incident did not recur -- which
+is not proof it was these steps' fault or not, only that one more run passed
+without it.
+
+
+=== One thing to fix, found while doing this ===
+
+`PROBE.EXE` opens `PROBE.LOG` with a bare `fopen("PROBE.LOG", "a")` --
+relative to the CURRENT DIRECTORY. gremote runs a child in a scratch
+directory and deletes it afterwards, so **every probe run driven over the
+exec lane writes its log into something that is about to vanish**, and
+`C:\GREMOTE\PROBE.LOG` still holds an older run taken when the working
+directory happened to be right. The output above survived only because exec
+captures stdout.
+
+`probe.c` already has `beside_exe()`, added for `CORPUS.TXT`, so the fix is
+to use it for the log too. Same bug and same fix as `focusprobe.cpp`'s
+earlier today. Not done here, because changing the probe between its battery
+and its health check is exactly the kind of thing this file exists to avoid.
