@@ -35,12 +35,15 @@ rather than a copy of Franquin's art.
 - **Pentium MMX 200MHz.** Compression is a tradeoff, not a freebie.
 - **10Mbps LAN (~750 KB/s), sometimes dialup (~5 KB/s).** Bandwidth is a
   first-class design input.
-- **Open Watcom 2.0**, plain C, ANSI Win32 APIs only.
+- **Open Watcom 2.0**, C++98 with its STL, ANSI Win32 APIs only. Nothing
+  NT-only, ever: one NT-only static import kills the image at load,
+  before `WinMain`, with no log written.
 
 ## Layout
 
 ```
-docs/       PLAN.md, FEASIBILITY.md, FORKED.md, PROGRESS.md
+docs/       PLAN.md the design, PROGRESS.md what was built, BACKLOG.md
+            what was deferred, ROADMAP.md the order of the rest
 make/       ow.mk -- shared Open Watcom rules
 win/        the guest executables -- GASTON.EXE, GREMOTE.EXE, GUPDATE.EXE
 bridge/     Python: Agent SDK, MCP tools, pagination, markdown, compression
@@ -48,7 +51,8 @@ gremote/    Python driver for the guest server, and how a build is shipped
 tests/      protocol, markdown, encoding, PE import allowlist
             guest/ is the check binaries: the shipping C, run under Wine
 research/   apparatus, not product -- probes, their host stubs, the numbers
-tools/      qmp.py, vm scripts, the build's own gates
+tools/      check/ the build's own gates, vm/ QEMU and QMP scripts,
+            gen/ the icon, the tools ISO and the install kit
 vm/         QEMU run scripts (images gitignored)
 ```
 
@@ -60,14 +64,18 @@ one directory name that said neither.
 
 ## Status
 
-Phase 0. See `docs/PROGRESS.md`.
+Phases 0 through 5 are built and demonstrated on real hardware; phase 6 is
+part-built. As of 2026-10-23 it runs on a physical Pentium 200 MMX under
+Windows 98 SE, installed over the network, driving a tool-calling turn end
+to end. What is left is a clean install by somebody who is not the author,
+and publishing. See `docs/PROGRESS.md` and `docs/ROADMAP.md`.
 
 ## Build
 
 ```sh
 make              # build the Win98 guest binary
-make check        # static PE audit of the guest
-make check        # static PE audit: version gate, imports, CMOV, size
+make check        # static PE audit of the guest: imports, CMOV, frames, BSS
+make test-fast    # the Python suite except the Wine runs -- the inner loop
 make wine-smoke   # run under Wine (code sanity only, NOT a Win98 proof)
 ```
 

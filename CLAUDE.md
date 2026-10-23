@@ -1,6 +1,6 @@
 # Gaston Code
 
-A native Windows 98 GUI client for Claude Code (`win/`, C89, Open Watcom) talking
+A native Windows 98 GUI client for Claude Code (`win/`, C++98, Open Watcom) talking
 to a Python bridge (`bridge/`) on Linux over one TCP socket.
 
 `docs/PLAN.md` is the design. `docs/PROGRESS.md` is what is built and why
