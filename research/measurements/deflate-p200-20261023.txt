@@ -186,3 +186,27 @@ What it does establish is that the box is reachable, the lane works end to
 end over real Ethernet, and the slowest thing in the path is neither the
 network nor the CPU but the two of them together at 389 ms for a 215 KB
 file.
+
+
+=== Added the same evening: the corpus has already drifted ===
+
+The tree no longer produces the corpus this gate closed on. `mkcorpus --check`
+now reports **crc32 3d3fc64c** against the **c200f36e** above, because three of
+its eleven sources are documents in `docs/` and a reorganisation that evening
+moved `docs/measurements/` to `research/measurements/` and fixed the citations
+that named it -- `docs/REMOTE.md` among them.
+
+Nothing is wrong and nothing needs undoing. This is the machinery working: the
+figure above carries the crc of the bytes it was measured on, so a later run
+reporting 3d3fc64c is visibly a different experiment rather than a confusing
+disagreement. It is the same lesson `flags-vm-20261015.txt` recorded about its
+own predecessor, arriving on schedule.
+
+Two practical consequences:
+
+  * `tools/gen/mkw98kit.sh` will now REFUSE to build a kit, because its crc
+    check compares the staged `CORPUS.TXT` against what the tree produces.
+    That is the check doing its job; `make -C win probe` regenerates it.
+  * The copy on the box is still c200f36e, so a rerun of `probe deflate`
+    THERE is still comparable with the figure above until somebody ships a
+    new corpus. Check the crc line the probe prints before assuming it.

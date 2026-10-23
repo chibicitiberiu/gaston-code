@@ -257,6 +257,39 @@ gone — a box that answers nothing and cannot be told to.
 | **E12** | **X1**: the injection battery and the health check, reboot after | `inject-p200-<date>.txt`, the `--health` verdict pass or fail |
 | **E13** | docs: stage 5 closes — `ROADMAP.md`; `PROGRESS.md` (0.5c at `:80`, gate 1.9 at `:123`, the "Real hardware access" row at `:63`, the current-goal paragraph); `BACKLOG.md` §1b, §2, §4, §9, §22, §26, §31; `REMOTE.md`'s checklist; `UIAUTOMATION.md:387` | — |
 
+## Status, 2026-10-23 — what this plan met and what it did not
+
+The run-down per commit is in `docs/ROADMAP.md`'s stage 5 section and is not
+repeated here. What belongs with the PLAN is where the plan itself was wrong,
+because that is what the next one should learn from:
+
+- **E5 was overtaken.** The whole bring-up section assumes a floppy carried
+  across town. The box reads a USB stick, the owner had already copied the kit
+  onto it, and first contact was over the wire. `TEST.BAT` 1-17 was never run
+  and the comparison against `p200-run1-20260926.txt` is still not taken.
+- **"`focusprobe` needs `exec` with a redirect and a `get`" is wrong.** It
+  returns zero bytes at the 120 s cap, twice, redirect or not. BACKLOG 9 is
+  unanswered and focusprobe is a keyboard instrument, which is what its own
+  header always said.
+- **The plan treated S1 as a confirmation.** "If one hangs, the stage stops
+  and the hang is the work" was the right instinct and the wrong failure mode:
+  the box did not hang, it declined to reboot at all and then refused every
+  caller. Three independent recovery paths all failed because they run on the
+  one blocked thread.
+- **Nothing anticipated that the measurement apparatus would move the
+  desktop.** Every hidden walk taken for BACKLOG 26 opened the Start menu, a
+  thing `probe.c` has refused to do since phase 0. The plan's instruments were
+  audited for whether they measured the right quantity, not for whether they
+  disturbed the machine.
+- **`memprobe` was built against a field that reads 0 here.** Written in E4,
+  useless on the target, found before it was used rather than after.
+
+What the plan got right and is worth keeping: rehearsing every instrument on
+the guest first, the A/B/A discipline that caught a 356 ms outlier on the VM
+and a 1,106 ms one here, and printing a crc32 beside the corpus -- which is
+the only reason the P200's 0.5c figure and the rehearsal's are known to be
+the same experiment.
+
 ## Record corrections this stage carries
 
 Each opened and read:

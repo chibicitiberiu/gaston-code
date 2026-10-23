@@ -841,6 +841,63 @@ built on a summary:
 
 ---
 
+
+### Where it got to, 2026-10-23
+
+The box came up on the LAN at 10.0.0.158 and was driven from Linux all
+evening. **Six of the thirteen commits are done and the stage's central
+question is answered.**
+
+| | | |
+|---|---|---|
+| E0-E4 | the apparatus, built and rehearsed on the guest | done |
+| **E5** | K1, the bring-up | **superseded** -- no floppy and no `TEST.BAT`; the owner had already put the kit on the box from a USB stick, so first contact was over the wire |
+| **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
+| **E7** | W1, the wire session | **partly** -- UI lane, screen capture, exit codes and the cancel question done; `focusprobe`, `memprobe`, `wsprobe` and the stub-based sync/view timings not |
+| E8 | K2, the keyboard sitting | not started, needs the keyboard |
+| **E9** | S1-S3, the session ends | **S1 FAILED AND IS A FINDING** -- see below |
+| **E10** | U1, the two arms | **done**, and it is the headline |
+| E11 | the code the numbers demand | one change so far (`focusprobe`'s `setvbuf`, which did not work) |
+| E12 | X1, the injection battery | not started, needs the keyboard |
+| E13 | docs | in progress |
+
+**`-ot` earns its bytes, which is what the stage existed to decide.** Two
+arms from one tree via `HOT_OPT`, A/B/A, on the machine in question: HEAD
+673 ms, `all-os` 840 ms, HEAD again 673 ms. A **24.8% penalty** with the
+closing A reproducing the opening A to the millisecond, against 23% on the
+QEMU guest and 24% four days earlier. `win/Makefile:859-860` stays, for
+5,120 bytes of gremote image.
+
+**Gate 0.5c closed** on the real CPU against the identical corpus the
+rehearsal used, crc32 `c200f36e` -- which is exactly what that crc was added
+for. 0.15c and 0.16 closed with it.
+
+**Three things the hardware found that nothing else would have:**
+
+- **MSAA costs 3.4x on this processor** (315 ms against 92 ms for the same
+  53 nodes), and a walk including hidden windows takes **155 seconds**. The
+  cancel built for BACKLOG 26 cannot stop it -- a stop accepted in 2 ms took
+  88 s to take effect -- because the flag is read between nodes and a node
+  is 2.1 s. BACKLOG 26 closed as "the cost is real and the grain needs
+  fixing"; BACKLOG 39 opened for the fix.
+- **Walking hidden windows opens the Start menu**, reported from the
+  keyboard. `win/checks/probe.c` has known this since phase 0 and refuses to
+  do it; gremote's `TREE` offers `hidden=1` with `msaa=1` defaulted on and
+  says nothing. BACKLOG 39.
+- **S1 did not reboot the box, and left it refusing every caller.**
+  `reboot("reboot")` returned cleanly, the machine never went down, and
+  gremote has held its single session slot against a peer that is gone ever
+  since. Windows is fine throughout -- ping 0.7 ms, NetBIOS open. Every
+  recovery path gremote has for this runs on the thread that is stuck: the
+  three-minute watch never armed because no session end was signalled, and
+  the 30 s heartbeat never fired because its reader is the blocked one.
+  `research/measurements/shutdown-p200-20261023.txt`. **The box needs a
+  restart by hand**, which is S3, so that measurement is not lost.
+
+**What is left needs somebody at the machine**: S1 retried and S2, S3's
+PRVs, K2's tray and standby judgements, and X1's injection battery. The
+stage does not close until they are taken.
+
 ## Stage 6 — a clean install, and publish
 
 **The gate: a from-scratch install on a clean Windows 98 install, not the dev
