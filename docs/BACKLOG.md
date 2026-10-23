@@ -4277,9 +4277,30 @@ is too coarse -- a cancel accepted in 2 ms took 88 s to take effect once and
 had not taken effect at all after 300 s on an earlier attempt, with every
 `TREE` in between refused `busy`.
 
-**Not started.** Recorded at the owner's instruction -- "put it in task list,
-it's for later" -- with the three options above so the decision is not
-re-derived.
+**FIXED 2026-10-23, option (2), and verified on the P200.** One condition in
+`TreeSink::onNode`: `if (msaa && ctx->msaa.available() && n.visible)`. The
+node is still reported with its class, text and rect from the window tree;
+only the oleacc enrichment is skipped, which is strictly narrower than
+`probe.c`'s answer of not walking hidden windows at all.
+
+All four symptoms, measured before and after on the same box:
+
+    hidden+msaa desktop walk     155,410 ms  ->  330 ms
+    the cancel                   88 s to take effect, sometimes never
+                                 ->  moot: stop() returns False because the
+                                     walk finishes in 0.34 s first
+    the Start menu               opened on every walk  ->  five consecutive
+                                 walks, Start button unpressed, photographed
+    the wedged reboot            no threads left inside unbounded calls,
+                                 so the mechanism is gone
+
+A ~470x improvement, and the cancel question resolves the way the Athlon's
+did -- **the problem does not arise** -- rather than needing the grain
+fixed. See 26, which should be read as closed by this rather than by its own
+measurement.
+
+`gaston.exe` and `gremote.exe` unchanged at 495,616 and 262,656 bytes; no cap
+moved.
 
 ## 40. Killing the shell over gremote kills gremote
 

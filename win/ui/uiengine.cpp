@@ -199,8 +199,42 @@ bool TreeSink::onNode(const Node &n)
     /* Only when asked. Each field is a marshalled call into another
      * process and a tree is hundreds of nodes; this is the difference
      * between a tree that reads in a second and one that does not read
-     * at all. */
-    if (msaa && ctx->msaa.available())
+     * at all.
+     *
+     * AND NEVER FOR A HIDDEN WINDOW. One condition, four symptoms, all of
+     * them measured on the Pentium 200 on 2026-10-23 (BACKLOG 39, and
+     * research/measurements/ui-cancel-p200-20261023.txt):
+     *
+     *  1. IT MOVES THE DESKTOP. win/checks/probe.c has refused to walk
+     *     hidden windows since phase 0 and says why: "probe msaa left the
+     *     Start menu open every run while probe screen, same driving, never
+     *     did. A closed Start menu is a window that still exists and is
+     *     merely hidden, and asking oleacc for its accessible object appears
+     *     to realise it." gremote offered `hidden=1` with `msaa=1` defaulted
+     *     on and reproduced exactly that, four times in one evening, on
+     *     somebody's desk. A lane whose job is to observe must not disturb.
+     *  2. IT IS WHERE THE TIME GOES. 53 visible nodes enrich in 315 ms;
+     *     adding 72 hidden ones costs 155 SECONDS, about 2.1 s each. And it
+     *     is NOT call_timeout_ms -- measured at 200 and 2000, four runs, no
+     *     difference, because callTimeoutMs reaches only the WM_GETTEXT in
+     *     win/automation/tree.cpp and win/automation/msaa.cpp has no timeout
+     *     at all. These calls are UNBOUNDED.
+     *  3. IT BREAKS THE CANCEL. The stop check above calls a node "the right
+     *     grain: one more WM_GETTEXT at a bounded timeout". That is true of
+     *     a visible node and false of a hidden one at 2.1 s, so a stop
+     *     accepted in 2 ms took 88 s to take effect once and had not taken
+     *     effect after 300 s on another try.
+     *  4. IT WEDGES THE MACHINE. Threads left inside those unbounded calls
+     *     are why a REBOOT asked of that box never happened and why it then
+     *     refused every caller for half an hour -- every recovery path
+     *     gremote has runs on the blocked thread.
+     *
+     * The node is still REPORTED; only the enrichment is skipped. So a
+     * caller asking for hidden windows still gets them with their class,
+     * text and rect from the window tree, which is what the window tree is
+     * for -- this is strictly narrower than probe.c's answer of not walking
+     * them at all. */
+    if (msaa && ctx->msaa.available() && n.visible)
     {
         int want = Selector::WANT_NAME | Selector::WANT_STATE
                  | Selector::WANT_ACTION;
