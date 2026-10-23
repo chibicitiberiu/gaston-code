@@ -139,3 +139,109 @@ session whose socket is closed, checked where the listener already accepts --
 is what would have turned a seven-minute outage into a reconnect. Noted here
 rather than in BACKLOG because it belongs with 35 and the shutdown work, and
 whoever picks that up should see the measurement that argues for it.
+
+
+################################################################
+# S1 RETRIED AND PASSED. Everything above is still true and its
+# headline conclusion was wrong. Read this section with it.
+################################################################
+
+=== S1, on a freshly booted box: all six lines, N = 126 ms ===
+
+After the owner restarted the machine by hand, S1 was repeated with nothing
+else changed -- client closed, same build, same INI:
+
+  uptime before          236 s
+  r.reboot("reboot")     returned None
+  the box going down     9 SECONDS
+  back and answering     97 s later
+
+and GREMOTE.PRV carries every line docs/REMOTE.md asks for, in order:
+
+  04:27:01.980 control: REBOOT mode=reboot
+  04:27:02.150 app: Windows asks whether the session may end (a shutdown or
+               restart); yes
+  04:27:08.960 app: Windows is ending the session (a shutdown or restart);
+               signalling every service and leaving this handler WITHOUT
+               joining any of them
+  04:27:09.010 app: the session is ending; abandoning server unjoined
+  04:27:09.010 app: every service is signalled and abandoned; cleaning up
+  04:27:09.070 mem [exiting]: 7064K free of 32284K phys, 803504K free of
+               832096K page, load 73%
+  04:27:09.070 === gremote exiting ===
+  04:27:09.120 app: the session-end handler is returning to Windows after
+               126 ms; this process stays up to drive the shutdown it asked
+               for
+
+**All of them, with a small N, and the machine reaching the reboot** --
+which is exactly what REMOTE.md specifies. And the last clause is the one it
+says to read: `this process stays up to drive the shutdown it asked for`,
+not `nothing below this line is ours`. **The 2026-10-01 stay-alive fix is
+confirmed on the machine it was written for.**
+
+**So the failure above is STATE-DEPENDENT, not a property of REBOOT.** The
+section above should be read as "this is what happens when you ask a box in
+that state to reboot", not as "the reboot does not work". The correction
+matters because the first reading would have sent somebody to rewrite a
+shutdown path that is correct.
+
+
+=== What that state WAS, and it is the evening's best finding ===
+
+The box that refused to reboot had been running 6,741 s and, crucially, had
+**three abandoned ui-lane threads on it**. gremote logged, once per cancelled
+walk:
+
+  thread: the ui lane did not stop within 5000ms
+
+`Thread::join(5000)` giving up (win/core/thread.cpp) and the walk thread
+carrying on -- each one sitting in an unbounded MSAA call into another
+process, because win/automation/msaa.cpp has no timeout and callTimeoutMs
+reaches only the WM_GETTEXT in win/automation/tree.cpp. See
+ui-cancel-p200-20261023.txt.
+
+A live thread wedged in a cross-process call is precisely what stops a 9x
+session end completing. The freshly booted box had none and went down in
+nine seconds; the box with three took the shutdown request, never signalled
+a session end, and then refused every caller because its own recovery paths
+all run on the blocked thread.
+
+That is one root cause with four symptoms, and it reframes two BACKLOG
+entries from "slow" and "cosmetic" to "this is why the machine would not
+reboot":
+
+  26  a cancel that cannot stop a walk
+  39  walking hidden windows opens the Start menu, and the enrichment that
+      does it is unbounded
+  --  the session end that never fired
+  --  the session slot pinned against a peer that was gone
+
+It also argues that BACKLOG 39's option (2) -- skip MSAA enrichment on
+hidden windows -- is worth more than its entry claims, because the entry
+prices it as a correctness-and-latency fix and this says it is also an
+availability fix.
+
+
+=== S2: the reboot fired, and the box came back without gremote ===
+
+Same again with the client running as well:
+
+  both up                GREMOTE.EXE and GASTON.EXE
+  r.reboot("reboot")     the box went DOWN after 6 s
+  came back              Windows fully up: ping 0.55 ms, port 139 open
+  gremote                NOT RUNNING. Port 7401 refused for 9+ minutes
+
+So S2's reboot half passed -- the shutdown path works with the client up --
+and S2's MEASUREMENT is unread, because GREMOTE.PRV and GASTON.PRV cannot be
+fetched without gremote.
+
+Why gremote did not autostart is unknown and needs the screen. RunServices
+runs at boot, before logon, and 139 being open says Windows got all the way
+through networking. The one thing different from the S1 boot that preceded
+it is that the client was running when the machine went down. No SMB share
+is reachable, so the logs cannot be read remotely either.
+
+**S2 and S3 are both unmeasured.** The manual restart that recovered the
+wedged box is not a valid S3: that run was the wedged one, so its PRV
+measures the wedge rather than a somebody-else-asked shutdown. A clean S3 is
+still owed, on a healthy box, and should be taken after S2.
