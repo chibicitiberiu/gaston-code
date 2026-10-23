@@ -1,0 +1,256 @@
+# Stage 5 C1 + W1 + U1: the client installed over the wire, a turn driven end
+# to end, the UI lane timed, and the -ot question answered by the machine it
+# was asked about.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, 800x600x24,
+#           machine name TIBI, at 10.0.0.158 on the LAN. HELLO's own words:
+#           "x86 family 5 model 4, 1 cpu" -- family 5 is Pentium, model 4 is
+#           MMX. Same box as docs/measurements/deflate-p200-20261023.txt.
+#           NIC 00:00:c0:04:81:97, a Western Digital OUI, NE2000-era ISA.
+# Driven  : gremote on port 7401 from 10.0.0.45. No emulation in the path.
+# Date    : 2026-10-23
+#
+# THE BOX IS NOT A CLEAN INSTALL, and that is on purpose. RealPlayer (8
+# threads), a TV tuner's TVWAKEUP and ANNCLIST (5 threads), PowerMenu, MSTASK,
+# TASKMON, SYSTRAY, WMIEXE and IPTEST are all resident beside Explorer. The
+# owner's call, and the right one: "it shows what a real installation would
+# look like, not an ideal one." Every figure below is therefore a figure about
+# a machine somebody actually uses, which is the machine this product has to
+# work on. Where that matters it is said.
+
+
+=== C1  the client, installed over the wire, with no CD and nobody at the box ===
+
+docs/stage5-plan.md had this as its own commit because nothing in the tree put
+GASTON.EXE on a machine: the install path is the ISO and this box has no CD.
+Remote.ship() is what exists for it, and it worked first time.
+
+  mkdir C:\GASTON, C:\WORK
+  ship GASTON.EXE          495,616 bytes in 0.6 s
+  put  gaston.ini              566
+  put  tools_detect.ini      6,067
+  put  view.tpl              5,836
+  put  view.css             11,509
+  put  export.css              466
+  put  spin.gif              4,965
+
+TWO THINGS WORTH WRITING DOWN FOR WHOEVER DOES THIS NEXT.
+
+PUT MOVES RAW BYTES AND DOES NOT FOLD EOL. The single-pass CRLF classification
+this project documents is the SYNC lane; `put` is not it. Files sent as LF
+arrive as LF. That is fine for the INIs -- win/gaston.ini and vm/gaston.ini
+are both LF in the repo and ship verbatim on the CD, so LF is the proven
+configuration -- and it is NOT what the CD does for the templates, which
+tools/gen/mktools-iso.sh folds to CRLF before staging. The three templates
+were re-sent as CRLF to match the only configuration this client has ever
+been run from. Nothing observably depended on it; matching cost one request.
+
+THE CLIENT'S CONFIG IS NOT win/gaston.ini. That file says port 7897 and
+bridge/server.py's DEFAULT_PORT is 7890. The guest config is per-box and now
+lives in a gitignored vm/gaston-*.ini, pointed at the development machine's
+real LAN address -- not 127.0.0.1 and not QEMU's 10.0.2.2.
+
+The handshake, verbatim, which is the box describing itself to the bridge:
+
+  guest identifies as 14477780-ce8b-11f1-bd6a-0000c0048197
+  CPU              : GenuineIntel x86 family 5 model 4, 1 cpu
+  Memory           : 31 MB total, unknown free
+  Display          : 800x600x24
+  Free disk on C:  : 761 MB
+  client rules     : acp=cp1252 oem=cp437 case=fold devices=reserved eol=crlf
+                     maxpath=260 maxdir=248 maxfile=249 maxcomp=255
+                     maxdepth=16 maxfiles=2000 shortnames=8.3 manifest=v2
+                     deflate=stream automation=steps
+  client settings  : 14 protected, 12 dangerous, 5 trusted, 0 own modes
+  machine has      : command.com, cscript, debug
+
+"Memory: unknown free" is the bridge handling dwAvailPhys reading 0 on this
+box, which deflate-p200-20261023.txt covers. The machine id's last six bytes
+are the NIC's MAC: a version-1 UUID, so the id is stable across reinstalls of
+everything except the card.
+
+
+=== C1  a turn, end to end, driven with nobody at the keyboard ===
+
+Typed into the client over gremote's input lane and sent:
+
+  "Run DIR C:\GASTON on this machine and tell me in one short sentence how
+   many files are in that directory."
+
+  focus GastonWnd                    38 ms
+  click the message box              30 ms
+  type                              319 ms   105 keystrokes
+  click Send                        347 ms   window title already reads
+                                             "Gaston Code  -  working..."
+
+and the bridge's side of the same seconds:
+
+  permdesk: mcp__machine__exec under manual: allow (dir only reads)
+  guest_exec: exec x1: DIR C:\GASTON
+  guest_exec: exec x1 finished: status=ok code=0 bytes=947
+  turn: deflate so far: 1191 -> 589 bytes (2.02:1)
+
+The client rendered the listing and then the sentence:
+
+  "There are 11 files in the C:\GASTON directory."
+
+Status bar: done 5s $0.0523, context 12%, model Haiku. FIVE SECONDS for a
+tool-calling turn on a 200 MHz machine, of which the guest's share is one
+DIR and one render.
+
+The rendered listing is also the 8.3 capability working in public --
+`TOOLS_~1 INI` and `tools_detect.ini` both appear, which is what
+shortnames=8.3 in the HELLO above is for -- and it shows the client having
+created CACHE\, gaston.log, gaston.prv, machine.id and view.htm beside itself.
+
+ONE SELECTOR TRAP, since it cost a round: `Edit` is ambiguous here. The
+foreground tree reports exactly one visible Edit at (182,369)-(564,425), and
+the step matcher answers "3 controls match" -- it does not search the same
+set. Clicking {"screen": [x, y]} at the known rect and then typing into the
+focused control is the shape that works. Also: {"type": ...} takes the TEXT
+and `in` takes the selector, which is the opposite of the obvious reading.
+
+A NOTEPAD CRASH DIALOG was sitting over the client for part of this --
+"This program has performed an illegal operation" -- left behind by
+`probe evlat`, which starts and closes Notepads and whose event census is in
+deflate-p200-20261023.txt's sibling run. No NOTEPAD process remained. The
+client kept working underneath it, which is the finding worth keeping.
+
+
+=== W1  the UI lane, timed host-side, medians of 3 ===
+
+  tree scope=desktop    msaa=1    315 ms    53 nodes
+  tree scope=desktop    msaa=0     92 ms    53 nodes
+  tree scope=foreground msaa=1    129 ms    19 nodes
+
+against the Athlon XP 2000+'s 36-37 ms in ui-lane-real-hw-20261004.txt.
+
+**MSAA COSTS 3.4x ON THIS MACHINE** -- 315 ms against 92 ms for the identical
+53 nodes. That is the number this lane did not have. oleacc.dll is doing real
+work per node and a 200 MHz Pentium pays for it in a way an Athlon does not,
+and `msaa=1` is the default in GREMOTE.INI.
+
+It is NOT a recommendation to turn it off. The two walks returning the same
+53 nodes is a property of this desktop at this moment, not a general claim:
+MSAA exists to reach controls the window tree cannot name, and a walk that
+finds the same nodes 3.4x faster has only proven that nothing on screen
+needed it right then. What it does mean is that a caller who knows it wants
+window-tree nodes should ask for msaa=0 and will be paid 220 ms for it, and
+that any future "walk the desktop every N seconds" design has a real number
+to budget against instead of an Athlon's.
+
+The 800x600x24 screen, full frame, over the real NIC:
+
+  shot bpp=24   1,897 ms cold, then 844 and 857 ms   1,440,054 bytes
+  png             654 ms                                11,177 bytes
+
+The first capture pays something the next two do not -- 1,897 against ~850 --
+and the PNG path moves the same desktop in 11 KB. For anything that looks at
+the screen repeatedly, png() is not a convenience, it is two orders of
+magnitude less wire.
+
+
+=== W1  COMMAND.COM /c exit codes (docs/REMOTE.md:1172-1175) ===
+
+gremote/ops.py records the VM's finding and says the P200 only has to confirm
+it. Confirmed, and completely:
+
+  COMMAND.COM /C EXIT 0              -> exit 0     0 bytes out
+  COMMAND.COM /C EXIT 3              -> exit 0     0 bytes out
+  COMMAND.COM /C EXIT 7              -> exit 0     0 bytes out
+  COMMAND.COM /C NOSUCHPROGRAM.EXE   -> exit 0    26 bytes out
+  direct spawn C:\GREMOTE\PROBE.EXE  -> exit 0
+  direct spawn of a missing exe      -> refused, spawn_failed
+
+COMMAND.COM /c exits 0 whatever happens, including for a program that does
+not exist -- there the only evidence is 26 bytes on stdout. A direct spawn
+returns the real code and a missing image is refused rather than reported as
+success. ExecResult carries `via_shell` precisely so a caller can tell which
+of those two it is looking at, and this run says that flag is load-bearing on
+real hardware and not only under emulation.
+
+
+=== U1  does -ot earn its bytes? Two arms, A/B/A, on the machine in question ===
+
+Built from one tree with the HOT_OPT knob, into separate BUILD= directories
+so no object is shared:
+
+                     file size      committed at load
+  gremote  HEAD        262,656          267,177
+  gremote  all-os      257,536          262,057      -5,120
+
+Three self_updates, five puts and five gets of 377,990 bytes each:
+
+  arm             put ms   get ms
+  head               365      673
+  all-os             384      840
+  head (2)           363      673
+
+**THE GET IS THE MEASUREMENT** -- guest to host, so the guest compresses, and
+deflate's search is what -ot buys. 673 -> 840 -> 673 is a **24.8% penalty**
+for all-os, and the closing A reproduced the opening A to the millisecond.
+
+Three machines now agree on this number: 23% on the QEMU guest in
+flags-vm-20261011.txt, 24% in flags-vm-20261015.txt, 24.8% here.
+
+So: **-ot earns its bytes, and the decision stands.** 167 ms on every 378 KB
+the guest compresses, for 5,120 bytes of image on a 32 MB machine. Scaled to
+the payload this design actually sends in bulk -- a 1,440,054-byte screen --
+that is something near 635 ms per full-frame capture, which is the difference
+between a tool that feels slow and one that feels broken.
+
+The puts are 365 / 384 / 363: one spread, no signal, exactly as predicted,
+because the put direction only inflates on the guest and inflating is table
+lookups. Two individual puts came in at 1,106 and 679 ms against medians of
+365 -- a 98 box warming its disk cache, which is the entire reason this
+instrument takes medians of five and measures the first arm twice.
+
+NOTE THE ABSOLUTE TIMES AGAINST THE EMULATOR. The guest got 214 ms on the
+same get where this box takes 673. The P200 is 3.1x slower end to end on a
+payload that fits in RAM -- less than the 6.5x its raw level-1 deflate rate
+would suggest, because the wire is carrying part of the cost on both.
+
+
+=== U1  the two readings that come free with an update ===
+
+TIME_WAIT (docs/REMOTE.md's bind bullet). Three restarts of the listener
+inside four minutes, and gremote.log has no bind-retry line at all:
+
+  listen: on 0.0.0.0:7401
+  server: listening on 0.0.0.0:7401, heartbeat 30s, allow=10.0.0.0/24
+
+The port was free every time. UPDATE is the only instrument that can provoke
+this -- there is no remote QUIT, deliberately, and REBOOT restarts the whole
+stack so it cannot leave a TIME_WAIT -- and it was provoked three times
+without the four-minute BIND_RETRY_MS policy ever being needed. That bullet
+closes as "does not arise on this hardware" rather than as "fixed".
+
+BACKLOG 22's -verify window, from gupdate.log:
+
+  gupdate: ... (wait 60000ms, verify 4000ms, mutex GastonRemoteSingleInstance)
+  gupdate: the old process let go after 252ms
+  gupdate: installed; the previous build is C:\GREMOTE\GREMOTE.OLD
+  gupdate: C:\GREMOTE\GREMOTE.EXE is running as fffb1707; done
+
+252 ms for the old process to release its image, and the new one answering
+inside a 4,000 ms verify window that then simply elapses. Host-side the
+reconnect took 1.07, 1.11 and 1.15 s across the three arms.
+
+So DEFAULT_VERIFY_MS is generous rather than wrong on this box: the risk it
+guards against -- a build that loads and never answers, which gupdate.cpp
+says it cannot distinguish from a healthy one -- did not occur, and the
+window cost about three seconds per install that nobody was waiting on. No
+change recommended; a number now exists if somebody wants to argue for one.
+
+The box was left on HEAD with all-os in GREMOTE.OLD, which is the rollback a
+person at the keyboard has. That is a property of A/B/A worth having when the
+machine is in another room: the run ends on the arm it started from.
+
+
+=== What this run did not do ===
+
+No TEST.BAT, so no steps 1-17 and no comparison against
+p200-run1-20260926.txt. Nothing at the keyboard: no tray icon judgement, no
+standby timer, no Start-menu shutdown, no injection battery. No memprobe --
+deflate-p200-20261023.txt explains why its instrument does not work here. No
+focusprobe, no cancelprobe, no sync or view timings against the stub.
