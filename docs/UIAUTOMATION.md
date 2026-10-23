@@ -384,18 +384,40 @@ alternative is streaming 83 records per event across a link the project
 budgets at 5 KB/s. The compiled selector goes down as a small struct, the
 same shape as the sync layer's existing filters.
 
-## What only the P200 can answer
+## What only the P200 can answer — **four and a half of five, 2026-10-23**
 
-Every millisecond above is from the emulator. The kit in
-`tools/gen/mkw98kit.sh` asks these on hardware:
+Every millisecond above is from the emulator. These were the five questions,
+and the Pentium 200 at 10.0.0.158 answered them over gremote rather than from
+the floppy kit this section anticipated:
 
-- the walk, with and without MSAA, at a real clock
-- WinEvent latency when the CPU is the bottleneck rather than the emulator
-- deflate throughput — `PROGRESS.md` marks gate 0.5c provisional for exactly
-  this reason
-- whether a template scan is tolerable on the guest after all
-- whether the foreground lock and injection behave the same on hardware as
-  under TCG
+- ~~the walk, with and without MSAA, at a real clock~~ **315 ms with MSAA and
+  92 ms without, for the identical 53 nodes** — so MSAA costs **3.4x** on this
+  CPU, against the Athlon's 36-37 ms for the whole walk. And with hidden
+  windows included it is **155 SECONDS** for 125 nodes, which is a different
+  finding and became BACKLOG 39.
+  (`research/measurements/ui-cancel-p200-20261023.txt`)
+- ~~WinEvent latency when the CPU is the bottleneck~~ **22 ms on OBJ_CREATE,
+  2 ms on OBJ_NAMECHANGE, 0 on destroy — and the two clocks AGREE on every
+  line**, where the QEMU guest diverged by 3 ms. So the message pump adds
+  nothing measurable here and those are platform figures, not ours. 20 of 20
+  creates produced an event. (`deflate-p200-20261023.txt`)
+- ~~deflate throughput~~ **gate 0.5c is closed**: L1 1027 KB/s, L6 296 KB/s,
+  inflate 3580 KB/s against the probe's own ~750 KB/s LAN threshold. The wire
+  compresses at level 1, so the shipped choice is vindicated and level 6 would
+  have been a 2.2x pessimisation. (`deflate-p200-20261023.txt`)
+- ~~whether a template scan is tolerable on the guest after all~~ **yes.**
+  Hit 6 ms naive / 0 ms filtered; the MISS — the case a wait pays on every
+  poll — is 111 ms naive / **29 ms filtered**, with the absent template
+  constructed from a histogram so a miss is certain. All 600 rows fit the
+  buffer at 800x600. (`deflate-p200-20261023.txt`)
+- **the foreground lock, yes; injection, NOT YET.**
+  `SetForegroundWindow` works from a background process and the raised window
+  is on top at its own centre; `BringWindowToTop` and
+  `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are ignored across a process
+  boundary exactly as under TCG, so activation is the only route
+  (`focus-p200-20261023.txt`, BACKLOG 9 closed). **Injection is unmeasured**
+  — it is `TEST.BAT` part three, which runs last and alone because those
+  steps have killed Explorer before, and it needs somebody at the machine.
 
 ## The tool surface
 

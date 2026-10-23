@@ -1186,7 +1186,7 @@ matters for anything with a clock in it.
 - Handle inheritance of sockets into children on 98. *Answered on the VM
   (same file): a listening socket is not kept alive by an inheriting child;
   closing it in the parent frees the port. Wine and NT differ.*
-- `bind` after a restart: TIME_WAIT behaviour.
+- ~~`bind` after a restart: TIME_WAIT behaviour.~~ **ANSWERED 2026-10-23: it does not arise on this hardware.** Three `UPDATE`s inside four minutes -- `UPDATE` is the only instrument, since there is no remote `QUIT` and `REBOOT` restarts the stack -- and `GREMOTE.LOG` has no bind-retry line at any of them: `listen: on 0.0.0.0:7401` straight away every time. The four-minute `BIND_RETRY_MS` policy was never needed. Free with the same run: `gupdate`'s old process released its image after **252 ms** and the host reconnected in 1.07-1.15 s, inside a 4,000 ms verify window that simply elapses -- generous rather than wrong, and now a number exists if anybody wants to argue for a smaller one (`research/measurements/wire-p200-20261023.txt`).
 - **The tray icon, end to end**, which Wine cannot answer. Boot with no one
   logged on (`gremote` up from RunServices, `EXPLORER` not running) and check
   `GREMOTE.LOG` says "no notification area yet"; then log on and check the
@@ -1242,7 +1242,7 @@ matters for anything with a clock in it.
   count** -- the Wine suite cannot see that one, because `GuestServer` stops the
   guest by terminating the process and no teardown runs
   (`tests/python/remote/test_sleep.py` says so).
-- `gremote` memory idle and under load, with and without the client running.
+- ~~`gremote` memory idle and under load, with and without the client running.~~ **ANSWERED 2026-10-23** (`research/measurements/memory-p200-20261023.txt`). gremote alone leaves **1,616 KB** of `dwAvailPhys`; launching the client takes it to **8 KB**. Under load and without the client, a full-screen 24bpp capture costs ~260 KB in flight and gives most of it back, a recursive `DIR C:\ /S` costs ~1,020 KB and keeps a third of it (the cache growing, not gremote), and idle costs nothing measurable. **With the client up the field sits at 0-336 KB and the differentials are noise** -- `shot` "costs" nothing and ends 336 KB better off. So this field measures the product's headroom exactly once, when the client starts, and is useless afterwards; BACKLOG 2's warning about `dwAvailPhys` is the reason, and with 8 KB showing the machine still ran a complete tool-calling turn in five seconds without an allocation failing. The no-gremote baseline is still owed: asking gremote how much is free without gremote requires gremote not to be running, so it is a keyboard reading.
 - ~~Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI
   numbers in `SYSINFO`.~~ **ANSWERED 2026-10-14: no, and not for a hardware
   reason.** `SYSINFO` runs inline on gremote's control lane, whose one rule is
@@ -1352,6 +1352,33 @@ matters for anything with a clock in it.
   `GASTON.PRV` (`abandoning desktop` / `connection` / `main window` / `ole`
   `unjoined`). The client had the longer wait of the two, so if a desktop ever
   hung on the way down with `gaston.exe` up, this was why.
+
+  **ALL THREE CASES PASS ON THE P200, 2026-10-23**
+  (`research/measurements/shutdown-p200-20261023.txt`). Four readings, four
+  correct last clauses, N between 122 and 284 ms:
+
+      S1  REBOOT, gremote only       stays up to drive        N = 126 ms
+      S2  REBOOT, gremote + client   gremote: stays up        N = 122 ms
+                                     client:  nothing below   N = 284 ms
+      S3  somebody else's shutdown   nothing below            N = 132 ms
+
+  Both halves of the discrimination above, each in the circumstance that
+  calls for it, with all six lines present every time and the client's four
+  `abandoning` lines in S2. The 2026-10-01 fix is confirmed on the machine it
+  was written for.
+
+  **Two things learned the hard way and worth carrying.** First, a `REBOOT`
+  asked of a box with abandoned `ui` lane threads on it does not happen at
+  all: no session end is signalled, the three-minute watch never arms because
+  it counts from one, the 30 s idle timeout never fires because its reader is
+  the blocked thread, and the box holds its single session slot against a
+  peer that is gone. Every recovery path gremote has runs on the thread that
+  is stuck. Retried on a freshly booted machine the same call went down in
+  nine seconds. Second, **read the file belonging to the run that went down**,
+  which is not always `.PRV`: gremote restarts at boot and rotates, so its
+  dying run becomes `.PRV`, but the client does not restart at boot, so its
+  shutdown is still the tail of `GASTON.LOG` while `.PRV` holds the run
+  before.
 - ~~**Does `gremote` survive a LOGOFF, as `RegisterServiceProcess`
   promises?**~~ **ANSWERED 2026-10-13: no, it did not -- and it does now.**
   `research/measurements/logoff-vm-20261013.txt`. `RSP_SIMPLE_SERVICE` does NOT
