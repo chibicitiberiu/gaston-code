@@ -43,7 +43,7 @@ in stage 1 for that reason.
 | 3c | R7: several guest machines against one bridge — **DONE 2026-10-13** | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs — **DONE 2026-10-14** | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
 | 4b | The "agent is driving" indicator — **DONE 2026-10-15** | somebody at the keyboard can see that the desktop is not theirs, and stop it, while gremote or the client is driving |
-| 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
+| 5 | The P200: measurements, and the optimisation they justify — **DONE 2026-10-23** | the hardware questions are answered from hardware: `-ot` earns its bytes, the client runs on a Pentium 200 MMX, and four defects no emulator could show were found and three fixed |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
 
 ---
@@ -842,12 +842,30 @@ built on a summary:
 ---
 
 
-### Where it got to, 2026-10-23
+### CLOSED 2026-10-23
 
-The box came up on the LAN at 10.0.0.158 and was driven from Linux all
-evening. **Nine of the thirteen commits are done, both questions the stage
-existed to answer are answered, and what is left is two sittings at the
-keyboard.**
+The box came up on the LAN at 10.0.0.158 and was driven from Linux. **Both
+questions the stage existed to answer are answered, every measurement that
+can be taken over the wire has been taken, and the two that cannot were
+waived by the owner.**
+
+**Waived rather than measured, and they are the only gaps:**
+
+- **Prevent-sleep runs 2 and 3.** They need the shortest standby set in
+  Control Panel and then a genuinely idle machine, and the tray toggle
+  cannot be clicked from here at all — `refused_self`, because the
+  automation tier will not send input to its own process. So whether this
+  box asks before it suspends, and whether the veto takes, is still
+  unknown. `research/measurements/tray-p200-20261023.txt` has everything
+  else about the tray, and `research/probes/trayprobe.py` reads the log
+  live for whoever takes these later.
+- **The no-gremote memory baseline.** `PROBE.EXE platform` with gremote
+  stopped — impossible over the wire by construction, since asking gremote
+  how much memory is free without gremote requires gremote not to be
+  running. `memory-p200-20261023.txt` has the other two points on that
+  line: 1,616 KB with gremote alone, 8 KB with the client as well.
+
+Neither blocks stage 6, and neither is load-bearing for anything shipped.
 
 **The verdict, in one paragraph.** `-ot` earns its bytes and the Makefile
 does not change. Gaston Code runs on a Pentium 200 MMX. Gates 0.5c, 0.15c
@@ -872,12 +890,12 @@ first thing to pick up.
 | **E5** | K1, the bring-up | **superseded** -- no floppy and no `TEST.BAT`; the owner had already put the kit on the box from a USB stick, so first contact was over the wire |
 | **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
 | **E7** | W1, the wire session | **COMPLETE.** UI lane, screen capture, exit codes, the cancel question, `focusprobe`, `memprobe` both halves, `wsprobe`, and the stub-based sync and view timings. Three of those needed a code fix before they would run at all, and two of the fixes were only reachable on real hardware |
-| **E8** | K2, the tray sitting | **mostly done over the wire**, which the plan did not expect. Icon judged from a photograph; the menu renders with the live client in its header and the checkmark matching `automation=2`; it dismisses on an outside click; and both taskbar lines came from the autostart reboot -- `no notification area yet` then `the taskbar appeared; adding the icon`. The toggle and Exit are **refused_self**: the automation tier will not send input to its own process, so they are keyboard steps BY DESIGN. Owed: prevent-sleep runs 2 and 3, and the no-gremote baseline (`research/measurements/tray-p200-20261023.txt`) |
+| **E8** | K2, the tray sitting | **done bar two waived readings.** Icon judged; menu renders with the live client in its header and the checkmark matching `automation=2`; dismisses on an outside click; both taskbar lines captured. The toggle and Exit are `refused_self` — the automation tier will not drive its own process — and the standby runs and no-gremote baseline were waived |
 | **E9** | S1-S3, the session ends | **COMPLETE. All three pass.** Four readings, four correct last clauses, N between 122 and 284 ms: S1 and S2's gremote say *stays up to drive the shutdown it asked for*, S2's client and S3's gremote say *nothing below this line is ours*. Both halves of REMOTE.md:1329's discrimination, each in the circumstance that calls for it |
 | **E10** | U1, the two arms | **done**, and it is the headline |
-| E11 | the code the numbers demand | **as closed as the evidence allows.** `-ot` stays, which is the big one and is a decision not to change anything. `focusprobe` gained a log beside the exe, which is what made BACKLOG 9 answerable. `memprobe`'s own caveats were corrected against what the box did. BACKLOG 39's fix is deferred by the owner and 40's wants a diagnosis before a guard change |
-| E12 | X1, the injection battery | the health check is **done and passes** -- foreground, keystroke and write, the baseline X1 compares against. The three injection probes are **blocked by Claude Code's permission classifier** ("Interfere With Workloads"), not by the hardware: `PROBE.EXE inject`, `targeted`, `gditext` |
-| E13 | docs | in progress; waits on E8 and E12 landing before the stage can be written closed |
+| **E11** | the code the numbers demand | **DONE.** `-ot` stays, which is the big one and is a decision not to change anything. BACKLOG 39 fixed — one condition, 155 s to 330 ms, and the Start menu stops opening. BACKLOG 40's guard tightened. The indicator moved to top centre. `focusprobe` gained a log beside the exe, `syncprobe` an inflater, and `memprobe` honest caveats |
+| **E12** | X1, the injection battery | **DONE and the machine survived it.** Injection works and can be aimed; the deny list holds case-insensitively; health ALL PASS after every step. Two findings: `WH_GETMESSAGE` was the only one of four hook types that delivered, and `gditext` is a finding AGAINST D4 — MSHTML imports four text entry points D4 does not patch |
+| **E13** | docs | **DONE.** `PROGRESS.md`'s gates and blocker, `REMOTE.md`'s checklist, `UIAUTOMATION.md`'s five questions, nine BACKLOG entries and this section |
 
 **`-ot` earns its bytes, which is what the stage existed to decide.** Two
 arms from one tree via `HOT_OPT`, A/B/A, on the machine in question: HEAD

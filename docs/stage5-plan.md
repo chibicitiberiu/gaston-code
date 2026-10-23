@@ -257,6 +257,14 @@ gone — a box that answers nothing and cannot be told to.
 | **E12** | **X1**: the injection battery and the health check, reboot after | `inject-p200-<date>.txt`, the `--health` verdict pass or fail |
 | **E13** | docs: stage 5 closes — `ROADMAP.md`; `PROGRESS.md` (0.5c at `:80`, gate 1.9 at `:123`, the "Real hardware access" row at `:63`, the current-goal paragraph); `BACKLOG.md` §1b, §2, §4, §9, §22, §26, §31; `REMOTE.md`'s checklist; `UIAUTOMATION.md:387` | — |
 
+## CLOSED 2026-10-23
+
+Stage 5 is done; `docs/ROADMAP.md` carries the verdict and the per-commit
+table. Two readings were waived by the owner rather than taken — the
+prevent-sleep standby runs and the no-gremote memory baseline — and both are
+named there. Thirteen measurement files in
+`research/measurements/*-p200-20261023.txt`.
+
 ## Status, 2026-10-23 — what this plan met and what it did not
 
 The run-down per commit is in `docs/ROADMAP.md`'s stage 5 section and is not
