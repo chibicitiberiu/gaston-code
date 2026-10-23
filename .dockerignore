@@ -1,0 +1,11 @@
+# The build context is bridge/, gremote/ and requirements.txt. Everything
+# else in this repository is either the guest side (which has nothing to do
+# with this image), generated, or a multi-gigabyte VM disk.
+*
+!bridge/
+!gremote/
+!requirements.txt
+!LICENSE
+!NOTICE
+**/__pycache__/
+**/*.pyc
