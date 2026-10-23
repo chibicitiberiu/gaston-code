@@ -855,7 +855,7 @@ question is answered.**
 | **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
 | **E7** | W1, the wire session | **partly** -- UI lane, screen capture, exit codes and the cancel question done; `focusprobe`, `memprobe`, `wsprobe` and the stub-based sync/view timings not |
 | E8 | K2, the keyboard sitting | not started, needs the keyboard |
-| **E9** | S1-S3, the session ends | **S1 PASSES** -- all six lines, N = 126 ms, the right final clause. S2's reboot fires but its PRVs are unread; S3 still owed |
+| **E9** | S1-S3, the session ends | **S1 and S2 BOTH PASS** -- all six lines each, N = 126 ms and 122 ms, and the two processes log DIFFERENT final clauses, which is what the six exist to discriminate. S3 still owed |
 | **E10** | U1, the two arms | **done**, and it is the headline |
 | E11 | the code the numbers demand | one change so far (`focusprobe`'s `setvbuf`, which did not work) |
 | E12 | X1, the injection battery | not started, needs the keyboard |
@@ -899,13 +899,46 @@ for. 0.15c and 0.16 closed with it.
   correctness one.
   `research/measurements/shutdown-p200-20261023.txt`.
 
-**What is left needs somebody at the machine**: S2's PRVs and a clean S3
-(after S2's reboot the box came back with gremote not started -- Windows up,
-ping 0.55 ms, port 139 open, 7401 refused -- and no SMB share is reachable,
-so it cannot be diagnosed remotely), K2's tray and standby judgements, X1's
-injection battery, and BACKLOG 9's foreground lock, which `focusprobe`
-cannot answer over the wire. The stage does not close until they are
-taken.
+### What is left, and exactly how to take it
+
+All of it needs the box powered on and somebody at its keyboard. In the order
+that wastes the fewest sittings:
+
+1. **BACKLOG 9 -- the foreground lock.** One command from a DOS box:
+   `C:\GREMOTE\FOCUSPRB.EXE`. It starts its own two Notepads and prints to
+   the console. It CANNOT be driven over the wire -- zero bytes at the 120 s
+   cap, twice, redirect or not -- so this is a photograph of a screen. Two
+   minutes, and it closes an entry open since stage 3.
+2. **K2 -- the tray sitting.** The 16x16 icon at `SM_CXSMICON` (a judgement,
+   wants a photo); the menu dismissing on a click outside; `EXPLORER` killed
+   and restarted for `tray: the taskbar appeared; adding the icon`;
+   **prevent-sleep run 2** with `prevent_sleep=0` and the shortest standby,
+   reading for `tray: the machine asks to suspend` -- silence means no veto
+   can ever help; the tray toggle, which arms run 3 and is also the
+   checkmark-and-`[awake]` check, with no restart needed because the menu is
+   deliberately not persisted; **run 3**, where `REFUSED` then `the suspend
+   was abandoned` is the veto working -- and note the log records the first
+   of each kind and then every eighth, so a reading that expects one line per
+   ask will under-count; tray **Exit** for `tray: Prevent sleep OFF`, the
+   line the Wine suite structurally cannot see. Plus a `PROBE.EXE platform`
+   with gremote stopped, which is the no-gremote memory baseline and the one
+   figure that cannot be taken over the wire.
+3. **X1 -- the injection battery.** `TEST.BAT` part three and
+   `AUTOCHK.EXE --health` behind it, then a reboot whatever it says. Last and
+   alone, because those three have killed Explorer once and ended a September
+   session with the machine spinning.
+4. **S3 -- free, if the box is being shut down anyway.** Start > Shut Down
+   with both gremote and the client running. Both PRVs should then end
+   `nothing below this line is ours`; S2 has already shown what the other
+   answer looks like. The logs sit on disk, so they can be read whenever the
+   box next comes up.
+
+And one loose end with no owner: **gremote did not autostart after S2's
+reboot** while it did after S1's, with Windows fully up both times and the
+client running at shutdown the only difference. Anything on screen at the
+next boot is the clue.
+
+The stage does not close until 1-4 are taken.
 
 ## Stage 6 — a clean install, and publish
 
