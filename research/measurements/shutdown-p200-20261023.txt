@@ -320,3 +320,75 @@ Unexplained, and it needs the screen rather than the wire: no SMB share is
 reachable, so nothing on that boot can be read remotely. Whether something
 modal was up, whether ScanDisk ran, or whether RunServices was simply skipped
 is not established, and this file does not guess.
+
+
+=== S3 PASSES, and E9 is complete: three session ends, three correct answers ===
+
+A shutdown from the machine itself, with gremote up. GREMOTE.PRV:
+
+  19:38:01.690 === gremote starting ===
+  19:40:06.320 app: Windows asks whether the session may end (a shutdown or
+               restart); yes
+  19:40:12.470 app: Windows is ending the session (a shutdown or restart);
+               signalling every service and leaving this handler WITHOUT
+               joining any of them
+  19:40:12.470 app: the session is ending; abandoning server unjoined
+  19:40:12.520 app: every service is signalled and abandoned; cleaning up
+  19:40:12.580 === gremote exiting ===
+  19:40:12.580 app: the session-end handler is returning to Windows after
+               132 ms; **nothing below this line is ours**
+
+**That is the OPPOSITE clause from S1 and S2, and it is the correct one.**
+gremote did not ask for this shutdown, so it has nothing to stay up for.
+REMOTE.md:1329 says the last clause is the one to read and names both
+answers; the P200 has now produced each of them in the circumstance that
+calls for it:
+
+  S1   REBOOT, gremote only       this process stays up to drive the
+                                  shutdown it asked for          N = 126 ms
+  S2   REBOOT, gremote + client   gremote: stays up to drive     N = 122 ms
+                                  client:  nothing below ...     N = 284 ms
+  S3   somebody else's shutdown   nothing below this line is ours N = 132 ms
+
+Four readings, four correct last clauses, N between 122 and 284 ms. The
+2026-10-01 stay-alive fix is confirmed, and so is its converse -- a process
+that did NOT ask does not claim the shutdown.
+
+It was a real OS shutdown rather than a power cut, and the log proves it:
+`Windows asks whether the session may end` arrived at 19:40:06 and
+`WM_ENDSESSION` 6.2 s later. A machine switched off at the button sends
+neither.
+
+The client's half of the same discrimination is in GASTON.LOG from the
+session before, at 05:07:32 -- all four `abandoning` lines (desktop,
+connection, main window, ole) and `nothing below this line is ours`,
+N = 290 ms.
+
+**E9 is complete.** Every line docs/REMOTE.md asks for, in every one of the
+three cases it distinguishes, on the machine the fix was written for.
+
+
+=== And the autostart loose end is closed as a false alarm ===
+
+This file and docs/ROADMAP.md both recorded that gremote "did not autostart
+after S2's reboot" and wondered whether RunServices was at fault. A later
+boot appeared to repeat it, which made it look persistent and pointed at the
+registry.
+
+It was not. The second case was a DHCP failure -- the box came up without a
+lease, so nothing answered at 10.0.0.158 at all. The two failures look
+identical from a poller and are not: after S2 the host answered and REFUSED
+port 7401 (gremote genuinely absent), while the later boot TIMED OUT (no host
+at that address). gremote binds 0.0.0.0 and would have started perfectly well
+with no IP.
+
+On the boot after the DHCP fix it autostarted normally:
+
+  19:42:35.380 === gremote starting ===
+  19:42:36.040 server: listening on 0.0.0.0:7401, heartbeat 30s,
+               allow=10.0.0.0/24
+
+So RunServices works, and the single genuine non-start after S2 remains
+unexplained but is now a one-off rather than a pattern. Worth keeping: a
+refused connection and a timed-out connection are different diagnoses, and
+treating them as one cost a wrong theory here.
