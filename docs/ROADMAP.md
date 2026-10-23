@@ -855,7 +855,7 @@ question is answered.**
 | **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
 | **E7** | W1, the wire session | **partly** -- UI lane, screen capture, exit codes and the cancel question done; `focusprobe`, `memprobe`, `wsprobe` and the stub-based sync/view timings not |
 | E8 | K2, the keyboard sitting | not started, needs the keyboard |
-| **E9** | S1-S3, the session ends | **S1 and S2 BOTH PASS** -- all six lines each, N = 126 ms and 122 ms, and the two processes log DIFFERENT final clauses, which is what the six exist to discriminate. S3 still owed |
+| **E9** | S1-S3, the session ends | **COMPLETE. All three pass.** Four readings, four correct last clauses, N between 122 and 284 ms: S1 and S2's gremote say *stays up to drive the shutdown it asked for*, S2's client and S3's gremote say *nothing below this line is ours*. Both halves of REMOTE.md:1329's discrimination, each in the circumstance that calls for it |
 | **E10** | U1, the two arms | **done**, and it is the headline |
 | E11 | the code the numbers demand | one change so far (`focusprobe`'s `setvbuf`, which did not work) |
 | E12 | X1, the injection battery | not started, needs the keyboard |
@@ -927,18 +927,16 @@ that wastes the fewest sittings:
    `AUTOCHK.EXE --health` behind it, then a reboot whatever it says. Last and
    alone, because those three have killed Explorer once and ended a September
    session with the machine spinning.
-4. **S3 -- free, if the box is being shut down anyway.** Start > Shut Down
-   with both gremote and the client running. Both PRVs should then end
-   `nothing below this line is ours`; S2 has already shown what the other
-   answer looks like. The logs sit on disk, so they can be read whenever the
-   box next comes up.
+**S3 is done** -- taken for free from an ordinary shutdown, and it produced
+the other half of the discrimination.
 
-And one loose end with no owner: **gremote did not autostart after S2's
-reboot** while it did after S1's, with Windows fully up both times and the
-client running at shutdown the only difference. Anything on screen at the
-next boot is the clue.
+And the autostart loose end closed as a false alarm: the boot that seemed to
+repeat it had no DHCP lease, so nothing answered at that address at all. A
+refused connection and a timed-out one are different diagnoses and treating
+them as one cost a wrong theory about the registry. The single genuine
+non-start after S2 stays unexplained but is a one-off, not a pattern.
 
-The stage does not close until 1-4 are taken.
+The stage does not close until 1-3 are taken.
 
 ## Stage 6 — a clean install, and publish
 
