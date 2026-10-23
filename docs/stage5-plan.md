@@ -358,9 +358,11 @@ closes that caveat at 800x600.
 
 ## Recorded, not fixed
 
-- **`tools/gen/w98kit2/` and `w98kit3/` are referenced by nothing** — `mkw98kit.sh:15` reads
-  `w98kit` only. The September round-two and second-machine kits, superseded by the box having a
-  network. Left as history, noted so nobody edits one expecting it to ship.
+- ~~**`tools/gen/w98kit2/` and `w98kit3/` are referenced by nothing**~~ **DELETED 2026-10-24**,
+  in the cleanup before this repository went public. Four files and no reader; the note below
+  is why they were kept, and on a second reading it is also why they went. `mkw98kit.sh:15`
+  reads `w98kit` only. The September round-two and second-machine kits, superseded by the box
+  having a network. They are in the history if anybody wants them back.
 - **9x offers no per-process memory this codebase trusts.** Every figure is a differential, which
   attributes a delta to a program by construction rather than by measurement.
 - **The corpus choice is a judgement.** 2.16:1 prose and code represents the sync lane, not a 24bpp

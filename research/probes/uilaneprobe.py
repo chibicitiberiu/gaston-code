@@ -12,15 +12,21 @@ ambiguous, which is the engine being right and the fixture being wrong. Not
 for a machine somebody is using.
 """
 import contextlib
+import os
 import sys
 import threading
 import time
 
-sys.path.insert(0, "/home/tibi/Dev/RetroAI")
-import argparse
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
+import toolkit
 
-from gremote import Remote
-from gremote.errors import Cancelled, Refused, RemoteError
+toolkit.on_path()
+
+import argparse  # noqa: E402
+
+from gremote import Remote  # noqa: E402
+from gremote.errors import Cancelled, Refused, RemoteError  # noqa: E402
 
 ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 ap.add_argument("--remote", default="127.0.0.1:vm-secret",
