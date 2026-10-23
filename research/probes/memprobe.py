@@ -18,6 +18,15 @@ taken over the wire: asking gremote how much memory is free without gremote
 requires gremote not to be running. That one is a reading at the keyboard
 (`PROBE.EXE platform`), and `--baseline` folds it in here.
 
+WHAT THIS MEASURES ON A 32MB BOX, measured 2026-10-23 on the Pentium 200
+(`research/measurements/memory-p200-20261023.txt`): gremote alone leaves
+1,616 KB of dwAvailPhys and launching the client takes it to 8. So the
+differentials below are readable WITHOUT the client and are noise WITH it --
+`shot` "costs" nothing and ends 336 KB up, `idle` reads 24, 20, 0. The tool
+still reports honestly either way, because it always takes a before/after
+pair and prints the sample count; what it cannot do is invent headroom that
+is not there. Read the before-column first and stop if it is near zero.
+
 WHAT mem_free_kb ACTUALLY IS. `dwAvailPhys`. `BACKLOG.md` §2 records this
 project being misled by that field before: it EXCLUDES the disk cache Win98
 shrinks under pressure, so a small figure is not by itself evidence that
@@ -195,7 +204,10 @@ def main() -> int:
         print()
         print("NOTE: a load with n<=1 finished inside one sample interval, so")
         print("its 'min' is the before-reading and says nothing about a peak.")
-        print("That is expected on a fast host and should not happen on a P200.")
+        print("That is expected on a fast host, and it DOES happen on a P200:")
+        print("measured 2026-10-23, a 28-node desktop walk on a quiet machine")
+        print("finished inside one 0.2s interval. Read it as 'too quick to")
+        print("sample', not as 'this box is fast'.")
     if a.baseline:
         print()
         idle_rows = [r_ for r_ in rows if r_[0] == "idle"]
