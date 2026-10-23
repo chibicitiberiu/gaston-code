@@ -902,8 +902,28 @@ for. 0.15c and 0.16 closed with it.
 
 ### What is left, and exactly how to take it
 
-All of it needs the box powered on and somebody at its keyboard. In the order
-that wastes the fewest sittings:
+**FIRST, THE BOX NEEDS A KEYSTROKE.** The session of 2026-10-23 ended with
+the P200 powered on and reachable at 10.0.0.158 -- ping answers, port 139 is
+open, its MAC is still `00:00:c0:04:81:97` -- but **gremote is not running**,
+so 7401 refuses. It stopped when `EXPLORER.EXE` was killed over the wire with
+`force=True`, which took gremote down with it; `BACKLOG 40` is that finding
+and `win/exec/process.cpp` is the guard that said not to. `RunServices` runs
+at boot and there is no remote `QUIT` by design, so nothing short of someone
+at the machine starts a new copy:
+
+    C:\GREMOTE\GREMOTE.EXE          (Start > Run), or just reboot
+
+**Then drive the sitting with `research/probes/trayprobe.py`**, which prints
+the running order below and tails every `tray:` line as it appears, so the
+person at the keyboard does the physical acts and nothing else:
+
+    .venv/bin/python research/probes/trayprobe.py \
+        --remote 10.0.0.158:7401:<secret> --minutes 45
+
+The secret is in `vm/gremote.ini`, which is gitignored.
+
+All of what follows needs the box powered on and somebody at its keyboard. In
+the order that wastes the fewest sittings:
 
 1. ~~**BACKLOG 9 -- the foreground lock.**~~ **CLOSED**
    (`research/measurements/focus-p200-20261023.txt`). It turned out to be
