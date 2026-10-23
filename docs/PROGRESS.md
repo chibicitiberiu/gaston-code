@@ -42,9 +42,17 @@ for the stage: an install can work for weeks while a piece of it has never
 once run, and the only thing that catches it is a cold boot with nobody at
 the keyboard. The P200 is the wrong machine to prove it on -- it is in a
 hand-fixed layout with a tuner card and a TV scheduler resident -- so stage
-6 wants a guest reinstalled from nothing. And there is still **no release
-build of any kind**: no CI, no packaging, nothing that turns a checkout into
-two zips a stranger can download.
+6 wants a guest reinstalled from nothing.
+
+**The release build landed 2026-10-24**, and it is five artefacts rather
+than the two zips it was scoped as: the two Win98 zips, a Linux AppImage, a
+Windows zip and a container image, from `.github/workflows/release.yml` on a
+`v*` tag. It also forced two things the repository had been doing without --
+a dependency declaration, and an installable bridge. The surprise in it was
+that `claude-agent-sdk` ships the Claude Code CLI inside each of its
+per-platform wheels, which this session had written down backwards in four
+files and acted on three times before building a package and reading what
+was actually in it.
 
 Phase 5 (Attach) shipped; 5.1 is below, and 5.2/5.3 went in without a
 write-up of their own. Phase 6 is part-built: `ui`, `input`, `shot`,

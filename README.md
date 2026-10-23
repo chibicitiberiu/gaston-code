@@ -62,6 +62,26 @@ either ships. The split is deliberate: `win/checks/` used to hold both the
 Wine test binaries and the probes that measure a real 1998 machine, under
 one directory name that said neither.
 
+## Download
+
+Released builds are on the
+[releases page](https://github.com/chibicitiberiu/gaston-code/releases).
+You need two things: the client for the Windows 98 machine, and the bridge
+for a modern one.
+
+| | |
+|---|---|
+| `gaston-<ver>-win98.zip` | the GUI client, for the Windows 98 machine |
+| `gremote-<ver>-win98.zip` | optional: lets another machine drive that one. A separate download because it opens a port |
+| `gaston-bridge-<ver>-x86_64.AppImage` | the bridge, Linux, one file |
+| `gaston-bridge-<ver>-windows-x64.zip` | the bridge, Windows, carries its own Python |
+| `docker pull chibicitiberiu/gaston-bridge` | the bridge, container, amd64 and arm64 |
+
+Claude Code itself is inside all three bridge artefacts — the agent SDK's
+platform wheels carry it — so there is nothing extra to install. You do
+have to supply credentials: `ANTHROPIC_API_KEY`, or an authenticated
+`~/.claude`. Each zip has a README with the install steps.
+
 ## Status
 
 Phases 0 through 5 are built and demonstrated on real hardware; phase 6 is
@@ -80,6 +100,17 @@ make wine-smoke   # run under Wine (code sanity only, NOT a Win98 proof)
 ```
 
 Requires Open Watcom 2.0 at `/usr/bin/watcom` (override with `WATCOM=`).
+`.github/workflows/release.yml` pins a dated build and installs it from
+`ow-snapshot.tar.xz`, which is the easiest way to get one.
+
+To build the release artefacts locally — the same scripts CI calls:
+
+```sh
+./tools/gen/mkrelease.sh    # the two Windows 98 zips
+./tools/gen/mkappimage.sh   # the bridge, Linux AppImage
+./tools/gen/mkwinzip.sh     # the bridge, Windows zip (builds on Linux)
+docker build -f docker/Dockerfile -t gaston-bridge .
+```
 
 ## Licence
 

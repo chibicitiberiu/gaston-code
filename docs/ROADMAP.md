@@ -1073,13 +1073,38 @@ than asserted in prose.
 
 ### What is left to write
 
-- **A release build.** There is none: no CI, no packaging script, nothing
-  that turns a checkout into something a stranger can download. The shape
-  asked for is a single build that produces **two zips** -- the guest side
-  and the host side -- and it can be a GitHub Action or a shell script; the
-  mechanism is not the point, having one is. `mkw98kit.sh` already builds,
-  audits and zips the guest kit, so most of the first zip exists and wants
-  wrapping rather than writing.
+- ~~**A release build.**~~ **BUILT 2026-10-24**, and it turned out to be
+  five artefacts rather than two zips. `.github/workflows/release.yml` on a
+  `v*` tag, with every piece of packaging in a script that runs locally:
+
+  | | from |
+  |---|---|
+  | `gaston-<ver>-win98.zip` | `tools/gen/mkrelease.sh` |
+  | `gremote-<ver>-win98.zip` | the same, and separate because it opens a port |
+  | `gaston-bridge-<ver>-x86_64.AppImage` | `tools/gen/mkappimage.sh` |
+  | `gaston-bridge-<ver>-windows-x64.zip` | `tools/gen/mkwinzip.sh` |
+  | `chibicitiberiu/gaston-bridge:<ver>` | `docker/Dockerfile`, amd64 and arm64 |
+
+  All of it builds on Ubuntu, the Windows zip included: the bridge is pure
+  Python plus wheels, so pip fetches the `win_amd64` ones from Linux and
+  there is no Windows runner that can fail for reasons nobody here can
+  reproduce. Open Watcom is pinned to a dated build and **verified to give
+  byte-identical images** to the development toolchain, which was the one
+  real risk -- the six caps are measured numbers and gaston has under 1% of
+  slack.
+
+  The repository had **no dependency declaration at all** before this, and
+  the bridge was not installable; both are now (`requirements.in`,
+  `requirements.txt` compiled with uv, and a `[project]` section).
+
+  **What the packaging taught, which no amount of reading would have.**
+  `claude-agent-sdk` ships one wheel per platform, 86-98 MB each, and every
+  one carries the Claude Code CLI as package data -- 228 MB unpacked, used
+  in preference to anything on PATH. This was written down backwards in four
+  files and acted on three times: the container image carried two copies and
+  was 279 MB larger than it needed to be, and the AppImage and Windows
+  launchers each refused to start over a CLI they already contained. Every
+  build now asserts the bundled binary rather than assuming either answer.
 - **The security posture stated rather than inherited.** A plaintext shared
   secret on a trusted LAN segment, the listener bound to one interface, and
   what the secret grants when presented: approving permission prompts and
@@ -1089,7 +1114,8 @@ than asserted in prose.
   to drive.
 - **The README is written and now wants correcting, not authoring.**
   Brought up to date 2026-10-24 (the language, the status, the layout, the
-  build block); what is left is whatever a stranger finds wrong by using it.
+  build block, and a Download section once the artefacts existed); what is
+  left is whatever a stranger finds wrong by using it.
 - ~~`LICENSE` as a file.~~ **Done** -- MIT at the repo root, in `NOTICE`, in
   `README.md` and in the VERSIONINFO block.
 - Whatever stage 1's sweep did not reach, and the Phase 6 write-up that
