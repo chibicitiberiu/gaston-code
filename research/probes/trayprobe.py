@@ -68,13 +68,35 @@ LOG = "C:\\GREMOTE\\gremote.log"
 #: a line appears while the person who caused it is still looking.
 POLL_S = 3.0
 
+#: HOW LONG A POLL MAY BLOCK, and it has to be set rather than defaulted.
+#: `Remote.get` defaults to 120 s, which is right for fetching a file and
+#: badly wrong for a liveness poll: a peer that vanishes WITHOUT sending a
+#: RST -- a VM destroyed, a machine switched off at the wall, exactly what
+#: step 8's tray Exit looks like from here -- leaves the read blocked for the
+#: full two minutes, so the tool goes silent for two minutes at the moment it
+#: is supposed to say "gremote is gone".
+#:
+#: Measured, not guessed: rehearsed against the QEMU guest by destroying the
+#: domain mid-run, and at the default the disconnect line had still not
+#: appeared after 110 seconds. GREMOTE.LOG is a few KB, so fifteen seconds is
+#: generous even on a 200 MHz machine off a 1998 platter.
+GET_S = 15.0
+
 
 def tray_lines(r: Remote) -> list[str]:
-    try:
-        d = r.get(LOG).data.decode("latin-1")
-    except Exception:
-        return []
-    return [ln for ln in d.splitlines() if "tray:" in ln]
+    """The `tray:` lines in GREMOTE.LOG.
+
+    LETS THE EXCEPTION OUT, and that is the whole point. This swallowed it
+    and returned [] in the first version, which made the tool silently
+    useless in the one case it was written for: gremote going away. The
+    reader would then see `[][len(seen):]`, which is [], decide nothing had
+    changed, and spin -- never printing the "gone" line, never reconnecting,
+    and never saying a word for the rest of the sitting. Caught by rehearsing
+    it against the QEMU guest and pulling the port forward out from under it,
+    which is the only reason it did not happen on the real box.
+    """
+    return [ln for ln in r.get(LOG, timeout=GET_S).data.decode("latin-1")
+            .splitlines() if "tray:" in ln]
 
 
 def save_tray_crop(r: Remote, out: str, tag: str) -> str | None:
@@ -133,6 +155,9 @@ def main() -> int:
                     if p:
                         print(f"  notification area -> {p}")
                 while time.monotonic() < deadline:
+                    # Any failure here leaves the `with`, so the outer loop
+                    # reconnects. That is the recovery path for steps 1 and
+                    # 8, which both take gremote away on purpose.
                     now = tray_lines(r)
                     fresh = now[len(seen):]
                     if fresh:
@@ -152,6 +177,7 @@ def main() -> int:
                       "expected after a tray Exit or a restart", flush=True)
                 connected = False
             time.sleep(POLL_S)
+            continue
 
     print("=" * 68)
     print(f"{len(seen)} tray lines in the log at the end. The ones K2 wants:")
