@@ -1,0 +1,83 @@
+# BACKLOG 2 and BACKLOG 4 on the Pentium 200: what a no-change sync scan
+# costs when the guest re-reads its whole tree.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, at
+#           10.0.0.158. Same box as the other *-p200-20261023.txt files.
+# Driven  : research/probes/syncprobe.py --scans 5, which is a BRIDGE STUB --
+#           the client dials into it, so the client is cycled and gremote is
+#           never touched.
+# Tree    : C:\WORK\SYNCTEST, 549 files copied from C:\WINDOWS\INF with
+#           XCOPY, plus the work root's own entries -- 551 as the scan counts
+#           them. A real directory of real files rather than a synthetic one,
+#           and removed afterwards.
+# Date    : 2026-10-23
+
+  pass 1: 8.431s, 551 entries
+  pass 2: 8.189s, 551 entries
+  pass 3: 7.673s, 551 entries
+  pass 4: 7.798s, 551 entries
+  pass 5: 8.866s, 551 entries
+  median 8.189s, range 7.673-8.866s
+
+
+=== The answer: it costs real seconds, and repetition does not help ===
+
+**8.2 seconds to notice that nothing changed**, about 15 ms an entry.
+
+And the five passes show **no downward trend** -- 8.4, 8.2, 7.7, 7.8, 8.9.
+The last is the slowest. So the disk cache is not quietly making the re-read
+cheap after the first pass, which is the thing somebody would reasonably hope
+and which the probe was written to check by repeating rather than timing
+once.
+
+BACKLOG 4 says the guest "re-reads its whole tree on every pass" and tells
+whoever reads it to "measure the real cost on the box before building
+anything", because the cache it would justify costs memory a 32 MB machine
+does not have. docs/stage5-plan.md pre-committed both ways:
+
+  * *the sync re-read costs real seconds* -> §4's cache becomes buildable
+    with its memory argument intact: bounded, capped, measured hit rate, and
+    NOT a path hash, which the entry rules out because a collision returns a
+    confident wrong checksum.
+  * *it does not* -> strike the clause and close the bullet as not worth
+    building.
+
+**It costs real seconds.** Eight of them, on every pass, for a tree of 551
+small files -- and a working tree with a few hundred source files is exactly
+that size. The cache is now justified on measurement rather than on a guess,
+and the memory constraint it has to satisfy is unchanged.
+
+What this does NOT say is how much a cache would save, because that depends
+on the hit rate on a tree somebody is actually editing, and nothing here
+edits anything. "Measured hit rate" stays a requirement of the design.
+
+
+=== The bug this found, and why it had hidden ===
+
+`syncprobe --scans` was written in stage 5's E4, linted, and never run
+against a live client. On the first real attempt it died:
+
+    ValueError: subsection not found        (syncprobe.py, scan())
+
+at `p[6].index(b" ")`, naming no row. Made to report what it could not read,
+it turned out to be high-entropy bytes where a length-prefixed filename
+should be: **the guest was compressing and the stub had never inflated.**
+
+`win/net/frameproto.cpp` compresses `SYNCENT`, `FSENT`, `UIDAT` and `UIENT`
+when `Codec::shouldCompress` agrees, flagging the frame `enc=deflate`. The
+real bridge inflates in `bridge/wire/link.py`; this stub read the body raw.
+The fix is one persistent `StreamDecompressor` per connection -- persistent
+because the guest's is one stream across frames, so a per-frame object would
+fail on the second one with the dictionary lost.
+
+**WHY IT NEVER SHOWED UP BEFORE is the interesting part.** frameproto.cpp
+says `shouldCompress` "declines when the link is faster than half what
+deflate manages -- so on a LAN this changes nothing and on a slow link it is
+the difference the file was written about." Every previous run of this probe
+was against the QEMU guest over loopback, which is far too fast to be worth
+compressing, so nothing ever compressed and the missing inflater was
+invisible. **The first real NIC turned the feature on and the probe broke.**
+
+Which is a cleaner statement of the project's own rule than the rule gives
+itself: rehearsing on the emulator does not exercise the paths the emulator
+is too fast to take.

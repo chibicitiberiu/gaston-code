@@ -37,6 +37,10 @@ import toolkit
 toolkit.on_path()
 
 from bridge.files import paths as P  # noqa: E402
+from bridge.wire.compress import (  # noqa: E402
+    ENC_DEFLATE,
+    StreamDecompressor,
+)
 from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
 
 CHUNK = 8192
@@ -50,6 +54,10 @@ class Guest:
         self.r = FrameReader()
         self.q: list[Frame] = []
         self.seq = 0
+        #: ONE decompressor for the connection, because the guest's is one
+        #: persistent stream. See the next comment; a per-frame object would
+        #: fail on the second compressed frame with the dictionary lost.
+        self.inflate = StreamDecompressor()
 
     def send(self, f: Frame) -> None:
         self.c.sendall(f.encode())
@@ -64,7 +72,25 @@ class Guest:
             data = self.c.recv(65536)
             if not data:
                 raise RuntimeError(f"guest closed while waiting for {want}")
-            self.q.extend(self.r.feed(data))
+            for f in self.r.feed(data):
+                # THE GUEST COMPRESSES AND THIS STUB HAD NEVER INFLATED.
+                #
+                # win/net/frameproto.cpp compresses SYNCENT, FSENT, UIDAT and
+                # UIENT when Codec::shouldCompress agrees, flagging the frame
+                # `enc=deflate`; the real bridge inflates in
+                # bridge/wire/link.py and this stub read the body raw. On a
+                # 549-file tree that is high-entropy bytes where a
+                # length-prefixed name should be, and the scan parser died
+                # with "subsection not found" naming nothing.
+                #
+                # It never showed up before because shouldCompress "declines
+                # when the link is faster than half what deflate manages"
+                # (frameproto.cpp) -- so on the QEMU guest over loopback
+                # nothing compressed, and the first real NIC turned it on.
+                if f.headers.get("enc") == ENC_DEFLATE:
+                    f = Frame(f.type, dict(f.headers, enc="raw"),
+                              self.inflate.decompress(f.body))
+                self.q.append(f)
 
     def sid(self) -> str:
         self.seq += 1
@@ -89,7 +115,15 @@ class Guest:
                 p = line.split(b" ", 6)
                 if len(p) < 7:
                     continue
-                sp = p[6].index(b" ")
+                sp = p[6].find(b" ")
+                if sp < 0:
+                    # Was `index()`, which raised "subsection not found" and
+                    # took the whole run with it -- naming no row, so there
+                    # was nothing to look at. Measured on the P200 against a
+                    # 549-file tree, 2026-10-23.
+                    raise ValueError(
+                        f"SYNCENT row has no length-prefixed name in its 7th "
+                        f"field: {line[:200]!r} (fields: {[x[:40] for x in p]})")
                 name = P.wire_decode(p[6][sp + 1:sp + 1 + int(p[6][:sp])])
                 rows[name] = {"type": p[0].decode(), "cls": p[1].decode(),
                               "size": int(p[2]),
