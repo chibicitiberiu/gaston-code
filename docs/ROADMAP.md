@@ -845,21 +845,22 @@ built on a summary:
 ### Where it got to, 2026-10-23
 
 The box came up on the LAN at 10.0.0.158 and was driven from Linux all
-evening. **Six of the thirteen commits are done and the stage's central
-question is answered.**
+evening. **Eight of the thirteen commits are done, both questions the stage
+existed to answer are answered, and what is left is two sittings at the
+keyboard.**
 
 | | | |
 |---|---|---|
 | E0-E4 | the apparatus, built and rehearsed on the guest | done |
 | **E5** | K1, the bring-up | **superseded** -- no floppy and no `TEST.BAT`; the owner had already put the kit on the box from a USB stick, so first contact was over the wire |
 | **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
-| **E7** | W1, the wire session | **partly** -- UI lane, screen capture, exit codes and the cancel question done; `focusprobe`, `memprobe`, `wsprobe` and the stub-based sync/view timings not |
-| E8 | K2, the keyboard sitting | not started, needs the keyboard |
+| **E7** | W1, the wire session | **mostly** -- UI lane, screen capture, exit codes, the cancel question, `focusprobe` (which needed a code change first) and `memprobe` BOTH halves. Outstanding: `wsprobe` and the stub-based sync and view timings |
+| E8 | K2, the keyboard sitting | not started. The icon judgement is answered from a photograph -- ours is a bare `IDI_APPLICATION` and the only one of six tray icons that does not say what it is -- but the standby runs, the Explorer restart, tray Exit and the no-gremote memory baseline all need somebody there. `research/probes/trayprobe.py` reads the log live so the sitting is the physical acts and nothing else |
 | **E9** | S1-S3, the session ends | **COMPLETE. All three pass.** Four readings, four correct last clauses, N between 122 and 284 ms: S1 and S2's gremote say *stays up to drive the shutdown it asked for*, S2's client and S3's gremote say *nothing below this line is ours*. Both halves of REMOTE.md:1329's discrimination, each in the circumstance that calls for it |
 | **E10** | U1, the two arms | **done**, and it is the headline |
-| E11 | the code the numbers demand | one change so far (`focusprobe`'s `setvbuf`, which did not work) |
+| E11 | the code the numbers demand | **as closed as the evidence allows.** `-ot` stays, which is the big one and is a decision not to change anything. `focusprobe` gained a log beside the exe, which is what made BACKLOG 9 answerable. `memprobe`'s own caveats were corrected against what the box did. BACKLOG 39's fix is deferred by the owner and 40's wants a diagnosis before a guard change |
 | E12 | X1, the injection battery | not started, needs the keyboard |
-| E13 | docs | in progress |
+| E13 | docs | in progress; waits on E8 and E12 landing before the stage can be written closed |
 
 **`-ot` earns its bytes, which is what the stage existed to decide.** Two
 arms from one tree via `HOT_OPT`, A/B/A, on the machine in question: HEAD
@@ -904,11 +905,21 @@ for. 0.15c and 0.16 closed with it.
 All of it needs the box powered on and somebody at its keyboard. In the order
 that wastes the fewest sittings:
 
-1. **BACKLOG 9 -- the foreground lock.** One command from a DOS box:
-   `C:\GREMOTE\FOCUSPRB.EXE`. It starts its own two Notepads and prints to
-   the console. It CANNOT be driven over the wire -- zero bytes at the 120 s
-   cap, twice, redirect or not -- so this is a photograph of a screen. Two
-   minutes, and it closes an entry open since stage 3.
+1. ~~**BACKLOG 9 -- the foreground lock.**~~ **CLOSED**
+   (`research/measurements/focus-p200-20261023.txt`). It turned out to be
+   drivable after all, once `focusprobe` was given a log beside the exe the
+   way `probe.c` has had one since phase 0. `SetForegroundWindow` works from
+   a background process on Windows 98, the raised window is genuinely on top
+   at its own centre, and `Input::clickWindow` on a covered window returns 0.
+   The emulator's surprising result reproduces on silicon: `BringWindowToTop`
+   and `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are ignored across a process
+   boundary, so activation is the only route. The `AttachThreadInput`
+   fallback in `focus()` stays the untaken path.
+
+   Worth keeping: the two earlier attempts that returned zero bytes were on
+   the box with three abandoned `ui` lane threads. A program whose whole job
+   is foreground manipulation could not emit one line on that desktop --
+   the fourth symptom of the one defect below.
 2. **K2 -- the tray sitting.** The 16x16 icon at `SM_CXSMICON` (a judgement,
    wants a photo); the menu dismissing on a click outside; `EXPLORER` killed
    and restarted for `tray: the taskbar appeared; adding the icon`;
