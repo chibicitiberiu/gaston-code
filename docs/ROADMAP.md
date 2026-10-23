@@ -855,7 +855,7 @@ question is answered.**
 | **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
 | **E7** | W1, the wire session | **partly** -- UI lane, screen capture, exit codes and the cancel question done; `focusprobe`, `memprobe`, `wsprobe` and the stub-based sync/view timings not |
 | E8 | K2, the keyboard sitting | not started, needs the keyboard |
-| **E9** | S1-S3, the session ends | **S1 FAILED AND IS A FINDING** -- see below |
+| **E9** | S1-S3, the session ends | **S1 PASSES** -- all six lines, N = 126 ms, the right final clause. S2's reboot fires but its PRVs are unread; S3 still owed |
 | **E10** | U1, the two arms | **done**, and it is the headline |
 | E11 | the code the numbers demand | one change so far (`focusprobe`'s `setvbuf`, which did not work) |
 | E12 | X1, the injection battery | not started, needs the keyboard |
@@ -884,19 +884,28 @@ for. 0.15c and 0.16 closed with it.
   keyboard. `win/checks/probe.c` has known this since phase 0 and refuses to
   do it; gremote's `TREE` offers `hidden=1` with `msaa=1` defaulted on and
   says nothing. BACKLOG 39.
-- **S1 did not reboot the box, and left it refusing every caller.**
-  `reboot("reboot")` returned cleanly, the machine never went down, and
-  gremote has held its single session slot against a peer that is gone ever
-  since. Windows is fine throughout -- ping 0.7 ms, NetBIOS open. Every
-  recovery path gremote has for this runs on the thread that is stuck: the
-  three-minute watch never armed because no session end was signalled, and
-  the 30 s heartbeat never fired because its reader is the blocked one.
-  `research/measurements/shutdown-p200-20261023.txt`. **The box needs a
-  restart by hand**, which is S3, so that measurement is not lost.
+- **One root cause with four symptoms, which is the evening's best
+  finding.** S1 first refused to reboot the box and then left it rejecting
+  every caller for half an hour; retried on a freshly booted machine it went
+  down in **nine seconds** and logged all six of `REMOTE.md`'s lines with
+  N = 126 ms, confirming the 2026-10-01 stay-alive fix. So the failure was
+  the box's STATE, and that state was three abandoned `ui` lane threads --
+  `thread: the ui lane did not stop within 5000ms`, once per cancelled walk,
+  each one still inside an unbounded MSAA call. A live thread wedged in a
+  cross-process call is what stops a 9x session end completing. The slow
+  walk, the useless cancel, the session end that never fired and the slot
+  pinned against a vanished peer are the same defect seen four ways, which
+  makes BACKLOG 39's option (2) an availability fix and not only a
+  correctness one.
+  `research/measurements/shutdown-p200-20261023.txt`.
 
-**What is left needs somebody at the machine**: S1 retried and S2, S3's
-PRVs, K2's tray and standby judgements, and X1's injection battery. The
-stage does not close until they are taken.
+**What is left needs somebody at the machine**: S2's PRVs and a clean S3
+(after S2's reboot the box came back with gremote not started -- Windows up,
+ping 0.55 ms, port 139 open, 7401 refused -- and no SMB share is reachable,
+so it cannot be diagnosed remotely), K2's tray and standby judgements, X1's
+injection battery, and BACKLOG 9's foreground lock, which `focusprobe`
+cannot answer over the wire. The stage does not close until they are
+taken.
 
 ## Stage 6 — a clean install, and publish
 
