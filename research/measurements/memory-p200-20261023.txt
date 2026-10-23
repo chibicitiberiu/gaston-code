@@ -1,0 +1,70 @@
+# What gremote costs this machine under load. The other half of
+# docs/REMOTE.md's "gremote memory idle and under load".
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, at
+#           10.0.0.158. Freshly booted -- uptime 1,955 s, nothing of ours
+#           running but GREMOTE.EXE, no client. That matters: see below.
+# Driven  : research/probes/memprobe.py over gremote, sampling SYSINFO from a
+#           second thread on the same connection while the load runs on the
+#           main one.
+# Date    : 2026-10-23
+
+  load     before     min  median   after   n  what ran
+  idle       2104    2096    2096    2096  15  3s of nothing
+  tree       2096    2096    2096    2080   1  desktop walk, 28 nodes
+  shot       2080    1816    1824    1956   5  full-screen 24bpp capture,
+                                               1,440,054 bytes
+  exec       1956     932     932    1180  42  COMMAND.COM /C DIR C:\ /S,
+                                               363,515 bytes of output
+
+Read as differentials between two states of one machine, which is all
+dwAvailPhys is good for:
+
+  * **a full-screen 24bpp capture costs about 260 KB** while it is in flight
+    and gives most of it back -- 2,080 down to 1,816, back to 1,956. On a
+    32 MB box with 2 MB showing free that is an eighth of the apparent
+    headroom for one screenshot.
+  * **a recursive DIR costs about 1,020 KB** and keeps a third of it: 1,956
+    down to 932, back to only 1,180. That is the disk cache growing, not
+    gremote, and it is the clearest demonstration in this file of why
+    BACKLOG 2 says this field is not headroom.
+  * **idle costs nothing measurable**: 2,104 to 2,096 across fifteen samples
+    over three seconds is noise.
+
+
+=== A correction to deflate-p200-20261023.txt, which overclaimed ===
+
+That file says this instrument "measures the disk cache here" and that the
+bullet has no usable instrument on this machine, on the strength of
+`PROBE.EXE platform` reporting **0 KB free** earlier the same evening. That
+was a real reading and the caution behind it is sound -- dwAvailPhys excludes
+the cache Win98 shrinks under pressure, so it is not headroom.
+
+But "the instrument does not work here" was too strong, and this run is the
+refutation. The zero was a *moment*, on a box that had been up 101 minutes
+with the client running, three self_updates, a 155-second walk and a crash
+dialog behind it. On a freshly booted machine the field is 2,112 and moves
+coherently with the load: a screenshot and a recursive directory walk
+produce different, repeatable, explicable deltas.
+
+So the honest statement is narrower than either: **the field is usable when
+it is not already floored, and it tells you nothing when it is.** A figure
+from it needs the before-reading quoted beside it, which is why this tool
+always takes one.
+
+The `n` column earns its place here too. `tree` got a single sample -- the
+walk was 28 nodes and finished inside one 0.2 s interval -- so its "min" is
+just the before-reading. memprobe prints the warning for exactly that case,
+and the warning's text ("should not happen on a P200") is now wrong: it does
+happen, when the desktop is quiet and the client is not running.
+
+
+=== What is still not measured ===
+
+The **no-gremote baseline** cannot be taken over the wire by construction:
+asking gremote how much memory is free without gremote requires gremote not
+to be running. That is `PROBE.EXE platform` at the keyboard, and
+`--baseline KB` folds it in when somebody has it.
+
+And every figure above is **with no client**. REMOTE.md asks for the
+with-and-without-client pair; this is the without half.
