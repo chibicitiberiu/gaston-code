@@ -1,0 +1,262 @@
+# The release build: five artefacts, one tag.
+#
+# WHAT THIS FILE IS AND IS NOT. Every piece of packaging logic lives in a
+# script that runs on a developer's machine -- tools/gen/mkrelease.sh,
+# mkappimage.sh, mkwinzip.sh and docker/Dockerfile. This file installs the
+# toolchains, calls them, and publishes what they produced. When a release
+# is wrong it is wrong in one of those scripts, where it can be run again in
+# four seconds instead of pushed and watched.
+#
+# THE FIVE:
+#   gaston-<ver>-win98.zip               the Windows 98 GUI client
+#   gremote-<ver>-win98.zip              the Windows 98 remote-control server
+#   gaston-bridge-<ver>-x86_64.AppImage  the host half, Linux
+#   gaston-bridge-<ver>-windows-x64.zip  the host half, Windows
+#   <dockerhub>/gaston-bridge:<ver>      the host half, container
+#
+# EVERYTHING IS BUILT ON UBUNTU, including the Windows zip. The bridge is
+# pure Python plus wheels, so `pip install --platform win_amd64
+# --only-binary :all:` fetches the Windows wheels perfectly well from Linux
+# -- see the header of mkwinzip.sh. No Windows runner means no build that
+# can fail for reasons nobody here can reproduce.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  # So the whole thing can be exercised without cutting a release. Artefacts
+  # are uploaded, nothing is published, and no image is pushed.
+  workflow_dispatch:
+
+permissions:
+  contents: write          # the release job creates a GitHub release
+
+env:
+  # Open Watcom publishes a dated build monthly. Pinned, because the six
+  # image budgets in win/Makefile are measured numbers and the compiler is
+  # what produces them. Verified 2026-10-24: this build gives byte-identical
+  # images to the development toolchain (a 2026-09-14 CI build) -- gaston
+  # 495,616, gremote 262,656, gupdate 48,128, and all six committed-at-load
+  # figures unchanged.
+  OW_TAG: 2026-10-01-Build
+  WATCOM: /opt/watcom
+
+jobs:
+  # ------------------------------------------------------------------------
+  # The guest side, plus the gates. One job, because `make test-fast` needs
+  # the client built and so needs the same toolchain.
+  guest:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # ~150 MB, so cached on the pinned tag rather than fetched per run.
+      - name: Cache Open Watcom
+        id: ow-cache
+        uses: actions/cache@v6
+        with:
+          path: /opt/watcom
+          key: openwatcom-${{ env.OW_TAG }}
+
+      - name: Install Open Watcom
+        if: steps.ow-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # ow-snapshot.tar.xz unpacks straight to a WATCOM root -- binl64,
+          # h, lib386 and the rest at the top level -- so there is no
+          # installer to drive and nothing to answer.
+          curl -fsSL -o /tmp/ow.tar.xz \
+            "https://github.com/open-watcom/open-watcom-v2/releases/download/${OW_TAG}/ow-snapshot.tar.xz"
+          sudo mkdir -p "$WATCOM"
+          sudo tar -xf /tmp/ow.tar.xz -C "$WATCOM"
+          "$WATCOM/binl64/wcc386" 2>&1 | sed -n '2p'
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install the gates' dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Ruff, mypy, the RichEdit grep, and the Python suite except the Wine
+      # runs. wine-smoke is deliberately not here: it is eight minutes and a
+      # Wine prefix, and what it proves -- that the C agrees with the Python
+      # about the codec, the INI round-trip and the caps enums -- is not a
+      # question a tag can change. It belongs in a CI workflow on push.
+      - run: make lint
+      - run: make test-fast
+
+      - name: Version from the tag, or from the source on a manual run
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V=$(sed -n 's/^#define RC_VER_STR  *"\([^"]*\)".*/\1/p' win/app/resource.h)
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "building $V"
+          # The HOST version lives in pyproject.toml and the GUEST version in
+          # win/app/resource.h. mkrelease.sh refuses a mismatch against the
+          # guest's; this is the other half, so a tag cannot name a version
+          # only one of the two halves reports.
+          PY=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' pyproject.toml | head -1)
+          if [ "$PY" != "$V" ]; then
+            echo "::error::pyproject.toml says $PY but this release is $V" >&2
+            exit 1
+          fi
+
+      # Builds gaston, gremote and gupdate, runs `make check` -- the six
+      # image caps and the NT-only import audit -- and writes the two zips.
+      - run: ./tools/gen/mkrelease.sh --version "${{ steps.ver.outputs.version }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: guest
+          path: build/release/*.zip
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------------
+  # The host side's two file artefacts. Both built here; see the note about
+  # the Windows zip at the top of this file.
+  bridge-files:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      # python-appimage pulls and extracts the manylinux2014 image to get its
+      # Python, so a container runtime has to be there. ubuntu-latest has
+      # docker; this fails loudly rather than mysteriously if that changes.
+      - name: Check for a container runtime
+        run: docker version --format '{{.Server.Version}}'
+
+      - name: squashfs tools
+        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+
+      # Each script asserts that the SDK's bundled Claude Code is really in
+      # what it produced -- the AppImage by reading its squashfs, the zip by
+      # stating the file. Both artefacts' documentation promises the user
+      # there is nothing to install, so neither may ship without it.
+      - run: ./tools/gen/mkappimage.sh
+      - run: ./tools/gen/mkwinzip.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bridge-files
+          path: |
+            build/release/*.AppImage
+            build/release/*.zip
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------------
+  # The container image. Pushed only for a real tag, and only when the
+  # Docker Hub credentials exist -- a fork without them builds the image,
+  # proves it builds, and stops there.
+  bridge-image:
+    runs-on: ubuntu-latest
+    needs: guest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Through `env` and not `${{ }}` inside the script: an expression is
+      # substituted into the shell script file the runner writes to disk, so
+      # interpolating a secret there puts it in a file. As an environment
+      # variable it is only ever a variable the script tests.
+      - name: Do we have somewhere to push?
+        id: have
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no DOCKERHUB_TOKEN, so the image is built and not pushed"
+          fi
+
+      - uses: docker/login-action@v4
+        if: steps.have.outputs.push == 'true' && github.ref_type == 'tag'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # DOCKERHUB_IMAGE as a repository variable, so a fork pushes to its
+      # own namespace without editing this file.
+      - name: Image name
+        id: img
+        run: |
+          IMG="${{ vars.DOCKERHUB_IMAGE }}"
+          [ -n "$IMG" ] || IMG="chibicitiberiu/gaston-bridge"
+          echo "name=$IMG" >> "$GITHUB_OUTPUT"
+
+      # linux/arm64 as well as amd64 -- the bridge is pure Python and
+      # claude-agent-sdk publishes a manylinux aarch64 wheel with its own
+      # bundled CLI, so an arm64 image is a real one rather than emulation.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.have.outputs.push == 'true' && github.ref_type == 'tag' }}
+          tags: |
+            ${{ steps.img.outputs.name }}:${{ needs.guest.outputs.version }}
+            ${{ steps.img.outputs.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ------------------------------------------------------------------------
+  # One release, five artefacts, one checksum file. Tags only: a manual run
+  # has already uploaded everything as workflow artefacts, which is the
+  # point of being able to run it manually.
+  release:
+    runs-on: ubuntu-latest
+    needs: [guest, bridge-files, bridge-image]
+    if: github.ref_type == 'tag'
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: One SHA256SUMS over everything, generated here
+        run: |
+          set -euo pipefail
+          cd dist
+          # Each build script writes its own SHA256SUMS for local use; they
+          # would collide on merge and each would cover only its own share.
+          rm -f SHA256SUMS
+          sha256sum ./* | sed 's|\./||' | tee SHA256SUMS
+          ls -la
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Downloads
+
+            **On the Windows 98 machine**
+            - `gaston-${{ needs.guest.outputs.version }}-win98.zip` — the GUI client. This is the one you want.
+            - `gremote-${{ needs.guest.outputs.version }}-win98.zip` — optional, and a separate decision: it opens a port that lets another machine drive this one.
+
+            **On the modern machine** — one of these three, and you need one:
+            - `gaston-bridge-${{ needs.guest.outputs.version }}-x86_64.AppImage` — Linux, one file.
+            - `gaston-bridge-${{ needs.guest.outputs.version }}-windows-x64.zip` — Windows, carries its own Python.
+            - `docker pull ${{ vars.DOCKERHUB_IMAGE || 'chibicitiberiu/gaston-bridge' }}:${{ needs.guest.outputs.version }}`
+
+            Claude Code is already inside all three bridge artefacts — the
+            agent SDK's platform wheels carry it. You still have to provide
+            credentials: `ANTHROPIC_API_KEY`, or an authenticated
+            `~/.claude`.
+
+            Each zip has a README with the install steps. Checksums are in
+            `SHA256SUMS`.
