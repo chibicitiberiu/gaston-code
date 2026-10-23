@@ -1,0 +1,112 @@
+# Why gremote never autostarted on the Pentium 200, and the fix.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, at 10.0.0.158.
+# Date    : 2026-10-23
+#
+# Asked for directly -- "first issue is it doesn't autostart, for some
+# reason. Find out why" -- after a session in which the box had to be
+# restarted by hand three times.
+
+
+=== The cause, in three lines ===
+
+  RunServices  "GastonRemote"="C:\GASTON\GREMOTE.EXE"
+  C:\GASTON\GREMOTE.EXE        missing
+  C:\GREMOTE\GREMOTE.EXE       EXISTS, 262,656 bytes
+
+The autostart named a path with nothing in it. **gremote has never
+autostarted on this machine.** Every time it came up after a boot, somebody
+started it at the keyboard.
+
+The whole RunServices key, exported with `REGEDIT /E`:
+
+  "TVWakeup"="C:\Progra~1\TVView~1\tvwakeup.exe"
+  "SchedulingAgent"="C:\WINDOWS\SYSTEM\mstask.exe"
+  "LoadPowerProfile"="Rundll32.exe powrprof.dll,LoadCurrentPwrScheme"
+  "VidSvr"=" "
+  "Announcements"="C:\Program Files\TV Viewer\annclist.exe"
+  "GastonRemote"="C:\GASTON\GREMOTE.EXE"
+
+Note REGEDIT is a GUI program on 9x and returns immediately, so the export
+has to be launched and the file waited for; running it through
+`COMMAND.COM /C` and reading straight away finds nothing, which is what
+happened on the first attempt here.
+
+
+=== Which side is wrong, and it is not the one this project assumed ===
+
+`docs/REMOTE.md:745` settled this on **2026-10-15, before stage 5 began**:
+
+> **`C:\GREMOTE\` was the plan and never the practice**, corrected 2026-10-15
+> when stage 5 went looking for the install path and found two answers. Every
+> generator puts the server in `C:\GASTON`... and writes the `RunServices`
+> value as `C:\GASTON\GREMOTE.EXE`. The deployed guest matches.
+
+with a reason: `win/remote/control.cpp` refuses `UPDATE` unless `gupdate.exe`
+sits beside the running image, so the server's directory is a two-file
+directory already and a third place for one program buys nothing.
+
+**So the generator is right and this box is what diverges.** It has gremote
+in a directory no current document endorses, and the correct `.REG` therefore
+points at empty space.
+
+THE PROJECT TOLD ITSELF THE OPPOSITE. `docs/stage5-plan.md`'s review table
+asserted "REMOTE.md:731-733 is internally consistent -- client in C:\GASTON,
+server in C:\GREMOTE", which is a misreading of `:731` by somebody who did
+not read `:745` fourteen lines later. `deflate-p200-20261023.txt` then
+"confirmed" it from this machine -- "the machine follows REMOTE.md, the
+generator is the file that should move" -- because this machine is set up the
+old way. A wrong claim checked against the one box that agrees with it.
+Both are corrected.
+
+
+=== The fix applied, and why this one and not the tidy one ===
+
+The spec-compliant fix is to move the server into `C:\GASTON` beside the
+client and leave the shipped `.REG` alone. **That is not what was done**, and
+the reason is the rule this session had just learned the hard way: the box is
+in another room, its recovery costs somebody a walk, and the question to ask
+before any action is "if this goes wrong, can I still reach it?"
+
+Moving a RUNNING gremote, then depending on the copy for the next boot, fails
+that test. So the minimal change was made instead -- repoint the registry
+value at where the program actually is:
+
+  "GastonRemote"="C:\GREMOTE\GREMOTE.EXE"
+
+written to `C:\GREMOTE\GREMOTE.REG` and applied with `REGEDIT /S`, then read
+back to confirm. If it had not worked the box would have been exactly where
+it already was: needing a manual start. Bounded failure.
+
+**Verified by rebooting with nobody at the keyboard:**
+
+  down after 9 s, 7401 answering 59 s later, uptime 34 s
+
+  20:43:50.940 === gremote starting ===
+  20:43:51.990 gremote: registered as a service process; the logoff broadcast
+               still arrives and WM_ENDSESSION is declined
+  20:43:51.990 tray: no notification area yet (no shell is running); the icon
+               will appear when the taskbar does
+  20:43:52.970 listen: on 0.0.0.0:7401
+
+Tidying the box to the documented layout -- copy GREMOTE.EXE, GUPDATE.EXE and
+gremote.ini into `C:\GASTON`, restore the shipped `.REG`, reboot to confirm,
+with the old directory left in place as the fallback -- is now a SAFE
+operation precisely because autostart works. It is worth doing so that this
+machine stops being the exception that misled a review, and it is not urgent.
+
+
+=== What this bought beyond the fix ===
+
+**K1 step 3, free.** docs/stage5-plan.md asks: "Before anybody logs on,
+GREMOTE.LOG must say `tray: no notification area yet (no shell is running)`
+AND Linux must already reach `sysinfo()`. One reboot, two answers." Both are
+above. `RunServices` genuinely runs before the shell on this hardware, which
+is what REMOTE.md:1350-1354 claims and nothing had confirmed.
+
+**And a lockout becomes recoverable.** Three times this session the box went
+unreachable -- twice by this session's own doing -- and each time recovery
+needed a person. With autostart working, a reboot brings gremote back, which
+turns "somebody must walk over and type a path" into "somebody must press
+reset". That is the difference between a box that can be driven remotely and
+one that can only be driven remotely while nothing goes wrong.

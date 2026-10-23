@@ -157,11 +157,30 @@ a 510,217-byte client on it.
    C: (WIN98, 1,245,416 KB with 784,132 free), so disk space was never the
    constraint either.
 
-2. **gremote lives in C:\GREMOTE on this box**, which settles a divergence
-   the stage plan left open. docs/REMOTE.md:731-733 specifies client in
-   C:\GASTON and server in C:\GREMOTE; tools/gen/mktools-iso.sh:208 sweeps
-   D:\*.EXE into C:\GASTON and contradicts it. The machine follows
-   REMOTE.md. The generator is the file that should move.
+2. **gremote lives in C:\GREMOTE on this box.** This file originally said
+   that settled a divergence in the machine's favour, with "the generator is
+   the file that should move".
+
+   **THAT WAS WRONG, and it was already wrong when written.**
+   docs/REMOTE.md:745 settled it the other way on 2026-10-15, before stage 5
+   began: *"`C:\GREMOTE\` was the plan and never the practice... Every
+   generator puts the server in `C:\GASTON`... The deployed guest matches."*
+   With a reason -- `win/remote/control.cpp` refuses UPDATE unless
+   `gupdate.exe` sits beside the running image, so the server's directory is
+   already a two-file directory and a third place for one program buys
+   nothing.
+
+   So the generators are correct and **this box is what diverges**, with
+   gremote in a directory no current document endorses. The error entered
+   through docs/stage5-plan.md's review table, which read `:731` and not
+   `:745`, and this file then "confirmed" it from a machine that happens to
+   be set up the old way.
+
+   **IT COST THE AUTOSTART, silently, for the life of the install.**
+   `GREMOTE.REG` correctly names `C:\GASTON\GREMOTE.EXE`; nothing is there;
+   so `RunServices` started nothing at every boot and every apparent
+   autostart was somebody at the keyboard. Diagnosed and fixed 2026-10-23 --
+   see research/measurements/autostart-p200-20261023.txt.
 
    There is no C:\GASTON at all -- LS refuses it with `missing`. The client
    is not installed, which is C1's job and not done.
