@@ -1,0 +1,145 @@
+# BACKLOG 26 on the machine it was written about, and two things found while
+# answering it.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, 800x600x24,
+#           machine TIBI, at 10.0.0.158. Same box and same evening as
+#           deflate-p200-20261023.txt and wire-p200-20261023.txt.
+#           A real install, not a clean one: RealPlayer, a TV tuner's
+#           TVWAKEUP and ANNCLIST, PowerMenu, MSTASK, TASKMON, SYSTRAY,
+#           WMIEXE and IPTEST resident beside Explorer. That matters here
+#           more than anywhere else, because what this entry measures scales
+#           with how many windows exist.
+# Driven  : gremote on port 7401. GREMOTE's desktop worker, NOT the client's
+#           -- same mechanism, same hardware, different process, which
+#           cancelprobe.py's own docstring says is the honest description.
+# Date    : 2026-10-23
+
+
+=== 26  the entry's own prediction, and it was right ===
+
+BACKLOG 26 guessed, in 2026-10-01: "on the Athlon box a desktop tree is tens
+of milliseconds and on the Pentium 200 it is not." The Athlon measured 36-37 ms
+for a full MSAA walk with hidden windows included
+(ui-lane-real-hw-20261004.txt).
+
+  tree scope=desktop msaa=1 hidden=0        315 ms       53 nodes
+  tree scope=desktop msaa=0 hidden=0         92 ms       53 nodes
+  tree scope=foreground msaa=1              129 ms       19 nodes
+  tree scope=desktop msaa=1 hidden=1    155,410 ms      125 nodes
+
+**Tens of milliseconds on the Athlon; 155 SECONDS here.** Not a factor of 20
+for the CPU -- a factor of four thousand, because the Athlon's measurement was
+of a freshly booted desktop with sixteen windows and this is a desktop
+somebody uses.
+
+MSAA alone costs 3.4x on this CPU: 315 ms against 92 ms for the identical 53
+nodes. That is the figure the lane never had, and msaa=1 is the default in
+GREMOTE.INI.
+
+
+=== 26  so is the cancel worth having? Yes, and it does not work ===
+
+The entry says it "can be closed when the P200 says so, and not before". The
+P200 says: **the cost is real, the mechanism is built, and the mechanism is
+too coarse to help.**
+
+  stop() accepted                             2 ms
+  the walk then ended                      88.1 s      Refused: cancelled
+  an earlier attempt, cancelled at 1 s     >300 s      no answer at all
+  every TREE in between                               Refused: busy
+  the control lane throughout                 2 ms    sysinfo answers fine
+
+The reply is LATE, not dropped -- an important correction to the first reading
+of this, which looked like a dropped frame. `Refused: cancelled` does arrive.
+`win/ui/uirpc.cpp`'s bookkeeping is sound and `TreeSink::onNode` does read the
+flag. The guest even logs its own failure:
+
+  thread: the ui lane did not stop within 5000ms
+
+three times, once per cancel -- `Thread::join(5000)` in win/core/thread.cpp
+giving up.
+
+THE GRAIN IS THE BUG, and the code says so in a comment that is correct about
+its own intent and wrong about this machine. `win/ui/uiengine.cpp`, directly
+above the flag check:
+
+> Stopped between nodes. The walker already had WALK_STOPPED for a sink that
+> says no, and a node is the right grain: one more WM_GETTEXT at a bounded
+> timeout, not a whole walk.
+
+One more WM_GETTEXT at a bounded timeout is a few hundred milliseconds. One
+more NODE, when the MSAA enrichment immediately below that check is reached,
+is 2.1 seconds -- and several of them in a row outlast a 5-second join.
+
+
+=== And call_timeout_ms is NOT why, which was worth the four runs ===
+
+2.1 s a node sits suspiciously close to GREMOTE.INI's call_timeout_ms=2000,
+against the 200 that win/automation/tree.cpp defaults to and tree.h:80 calls
+"per WM_GETTEXT; SMALL". So it was measured rather than asserted. Setting
+changed on the box, gremote restarted between arms:
+
+  call_timeout_ms=200      386.5 s (142 nodes)    398.5 s (125 nodes)
+  call_timeout_ms=2000     373.6 s (125 nodes)    397.5 s (125 nodes)
+
+**A tenfold change in the budget moves nothing.** callTimeoutMs reaches
+exactly one call -- the SendMessageTimeoutA(WM_GETTEXT, ..., SMTO_ABORTIFHUNG)
+in win/automation/tree.cpp. win/automation/msaa.cpp has no timeout of any
+kind. The MSAA enrichment is **unbounded**, and the knob that looks like it
+governs per-node cost does not govern this one.
+
+NOTE THE DRIFT IN THOSE FOUR FIGURES. They are 370-400 s where the first
+measurement the same evening, same box, nothing restarted but gremote, was
+155 s. Node count moved 125 to 142; the time more than doubled. The desktop
+accumulated hidden windows across the session -- probes that start and close
+Notepads, a crash dialog, the client shipped and relaunched three times. So
+per-node cost varies with the machine's state, and any single figure here is
+about a desktop at a moment.
+
+
+=== The third thing, which is a correctness problem and now BACKLOG 39 ===
+
+Every hidden walk above opened the Start menu on the box. Reported from the
+keyboard while this was running.
+
+win/checks/probe.c has known this since phase 0 and refuses to do it:
+
+> Walking hidden windows MOVED the desktop: `probe msaa` left the Start menu
+> open every run while `probe screen`, same driving, never did. A closed
+> Start menu is a window that still exists and is merely hidden, and asking
+> oleacc for its accessible object appears to realise it.
+
+probe learned it; gremote's TREE offers hidden=1 with msaa=1 defaulted on and
+nothing at the call site saying so. The lane whose job is to observe without
+disturbing has an option that disturbs. BACKLOG 39.
+
+It is the same code in the same place as the other two problems: skipping MSAA
+enrichment for hidden windows would stop the desktop moving, remove the
+unbounded call, and bring the grain back to what the cancel comment assumes.
+One condition in TreeSink::onNode.
+
+
+=== BACKLOG 9 is NOT answered, and why ===
+
+focusprobe was to be run here with exec and a get. It cannot be. Two attempts,
+both exit 1 at gremote's 120 s max_timeout_ms with zero bytes: once redirected
+through COMMAND.COM (no output file appeared) and once with gremote capturing
+stdout directly. Block buffering was the obvious cause -- the header comment
+says the transport is a screenshot, so stdout is line-buffered to a console
+and block-buffered to a pipe, with the only fflush after the last test -- and
+setvbuf(_IONBF) did not change the result. The image is not reaching its first
+printf when gremote starts it, while PROBE.EXE's stdout comes back over the
+same lane in the same session.
+
+So SPI_SETFOREGROUNDLOCKTIMEOUT on real hardware remains unmeasured, and
+focusprobe remains what its header always called it: a keyboard instrument.
+Run it from a DOS box on the machine.
+
+
+=== What 26 should now say ===
+
+Close it as **the cost is real and the mechanism needs the grain fixed** --
+not as "the problem does not arise", which is what the Athlon earned, and not
+as "built and proved", which is what the VM earned. The three numbers the
+entry was waiting for are above. The work it implies is BACKLOG 39's option
+(2), and the two entries should be read together.

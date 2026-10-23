@@ -3144,6 +3144,54 @@ this one with a working desktop rather than sixteen windows on a fresh boot.
 **This entry can be closed when the P200 says so, and not before.** It is the
 machine the entry was written about.
 
+**The P200's answer, 2026-10-23**
+(`research/measurements/ui-cancel-p200-20261023.txt`). This entry guessed in
+its first paragraph that "on the Athlon box a desktop tree is tens of
+milliseconds and on the Pentium 200 it is not." It was right, by more than it
+can have meant:
+
+    tree scope=desktop msaa=1 hidden=0        315 ms       53 nodes
+    tree scope=desktop msaa=0 hidden=0         92 ms       53 nodes
+    tree scope=desktop msaa=1 hidden=1    155,410 ms      125 nodes
+
+Tens of milliseconds on the Athlon against **155 seconds** here -- and that is
+not a factor of twenty for the CPU, because the Athlon's figure was a freshly
+booted desktop of sixteen windows and this is a desktop somebody uses. MSAA
+alone costs 3.4x on this processor, 315 ms against 92 ms for the identical 53
+nodes, and `msaa=1` is the default in `GREMOTE.INI`.
+
+**So the cost is real, the mechanism is built, and the mechanism is too
+coarse to help.**
+
+    stop() accepted                             2 ms
+    the walk then ended                      88.1 s   Refused: cancelled
+    an earlier attempt, cancelled at 1 s     >300 s   no answer at all
+    every TREE in between                             Refused: busy
+    the control lane throughout                 2 ms  sysinfo answers fine
+
+The reply is **late, not dropped** -- `Refused: cancelled` does arrive, so the
+bookkeeping this entry describes is sound. The guest logs its own failure
+three times, once per cancel: `thread: the ui lane did not stop within
+5000ms`, which is `Thread::join(5000)` giving up.
+
+The grain is the defect, and `win/ui/uiengine.cpp`'s comment above the flag
+check is correct about its intent and wrong about this machine: "a node is
+the right grain: one more WM_GETTEXT at a bounded timeout, not a whole walk."
+One more WM_GETTEXT is a few hundred milliseconds. One more NODE, once the
+MSAA enrichment below that check is reached, is 2.1 seconds, and several in a
+row outlast a five-second join.
+
+It is **not** `call_timeout_ms` -- measured, four runs, see 39. And every
+hidden walk taken for this measurement opened the Start menu on the box,
+which is 39 as well.
+
+**Closing verdict: the cost is real and the grain needs fixing.** Not "the
+problem does not arise", which is what the Athlon earned; not "built and
+proved", which is what the VM earned. The work this implies is 39's option
+(2) -- skip MSAA enrichment on hidden windows -- which would fix the grain,
+the unbounded call and the moving desktop in one condition. Read 26 and 39
+together; neither should be actioned alone.
+
 ## 27. Prevent sleep works in practice, and three of its four mechanisms are untested
 
 **Status, 2026-10-02:** accepted by the user as working -- "from my pov, it
