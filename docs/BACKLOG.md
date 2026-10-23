@@ -4170,12 +4170,46 @@ Measured the same evening, same machine
     tree scope=desktop msaa=0 hidden=0       92 ms      53 nodes
     tree scope=desktop msaa=1 hidden=1  155,410 ms     125 nodes
 
-Seventy-two extra nodes cost 155 seconds -- about 2.1 s each, which is roughly
-`call_timeout_ms` (2000 in `GREMOTE.INI`, against the 200 that
-`win/automation/tree.cpp` defaults to and `tree.h` calls "SMALL"). So the
-hidden half of the walk is both the part that moves the desktop and the part
-that takes four hundred times longer than the rest of it. Skipping enrichment
-for hidden windows would address both at once.
+Seventy-two extra nodes cost 155 seconds -- about 2.1 s each. So the hidden
+half of the walk is both the part that moves the desktop and the part that
+takes four hundred times longer than the rest of it. Skipping enrichment for
+hidden windows would address both at once.
+
+**AND IT IS NOT `call_timeout_ms`, WHICH WAS THE OBVIOUS GUESS AND IS WRONG.**
+2.1 s a node is suspiciously close to the 2000 in `GREMOTE.INI` -- against the
+200 that `win/automation/tree.cpp` defaults to and `tree.h:80` calls "per
+WM_GETTEXT; SMALL" -- so that was measured before it was believed. Same
+machine, same walk, the setting changed on the box and gremote restarted
+between arms:
+
+    call_timeout_ms=200     386.5 s (142 nodes), 398.5 s (125 nodes)
+    call_timeout_ms=2000    373.6 s (125 nodes), 397.5 s (125 nodes)
+
+**A tenfold change in the budget moves nothing.** The reason is visible in the
+code once you look for it rather than at it: `callTimeoutMs` reaches exactly
+one call, the `SendMessageTimeoutA(WM_GETTEXT, ..., SMTO_ABORTIFHUNG)` in
+`win/automation/tree.cpp`. `win/automation/msaa.cpp` has no timeout of any
+kind. So the enrichment -- `AccessibleObjectFromWindow` and the child
+enumeration, which `probe.c` names as the thing that realises a hidden window
+-- is **unbounded**, and the one knob that looks like it governs per-node cost
+does not govern this.
+
+That makes the entry stronger, not weaker. Option (1) and option (3) leave an
+unbounded cross-process call on the lane that is supposed to observe without
+disturbing; only (2) removes it. It also means there is a fourth option worth
+naming -- give the MSAA path a deadline of its own -- but that is a timeout on
+a COM call into another process, which is not a thing `SMTO_ABORTIFHUNG` can
+be talked into doing, so it would mean a worker thread and a join. (2) is one
+condition.
+
+**One caution for whoever re-measures.** The four runs above are 370-400 s
+where the first measurement the same evening was 155 s, on the same box with
+nothing restarted but gremote. The desktop accumulated hidden windows over the
+session -- probes that start and close Notepads, a crash dialog, the client
+shipped and relaunched three times. So the cost scales with what is on the
+machine, not only with the machine, and a figure from this walk is a figure
+about a desktop at a moment. Node count barely moved (125 to 142) while the
+time more than doubled, which says the per-node cost is what varies.
 
 **And it is what makes a cancel useless.** See 26: `TreeSink::onNode` reads the
 stop flag between nodes, which its comment calls "the right grain: one more
