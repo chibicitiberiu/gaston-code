@@ -1,0 +1,69 @@
+# BACKLOG 31 on the Pentium 200: does a live re-render get dearer as the
+# transcript grows?
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, 800x600x24,
+#           at 10.0.0.158. Same box as the other *-p200-20261023.txt files.
+# Driven  : research/probes/viewprobe.py --replay-fence 60 with --prefill 0
+#           and --prefill 150, which is a BRIDGE STUB -- the client dials in,
+#           so only the client is cycled and gremote is never touched.
+#           No agent, no API key, no paid round trip.
+# Date    : 2026-10-23
+
+Both arms stream the IDENTICAL corpus: a 61,478 byte fenced code block in
+1,064 lines at the coalescer's own 0.10 s cadence, arriving the way a real
+answer does -- LIVE updates each carrying the whole open block, then one
+APPEND that seals it. The only difference is what is already on the page.
+
+                        wall clock      over the cadence floor
+  empty page              107.2 s            0.8 s
+  150 KB underneath       119.1 s           12.7 s
+
+**The floor is the number to measure against.** 1,064 lines at 0.10 s is
+106.4 s of pacing whatever the view does, so an arm that finishes at 107.2 s
+is keeping up and one that finishes at 119.1 s is not. On an empty page the
+P200 keeps up with the coalescer. With 150 KB of sealed paragraphs under the
+live block it falls about **12% behind**.
+
+So the answer to BACKLOG 31 is **yes, and mildly**: the cost grows with the
+page, it is already visible at 150 KB, and it is not a cliff.
+
+
+=== Read the guest's own counters with care, because they mix two things ===
+
+  prefill 0    live: n=1054 bytes=4527333 dom_us=10387243 dom_max=57073
+                     render_us=1411443 render_max=5129
+  prefill 150  live: n=3326 bytes=4691070 dom_us=14275961 dom_max=16404
+                     render_us=1531014 render_max=5374
+
+A naive mean makes the big page look FASTER -- 9,855 us an update against
+4,292 -- and that is an artefact. The second arm's `n` includes the
+prefill's 2,260 unpaced updates, which are small and cheap, so they drag the
+average down. The totals cover prefill and fence together and the two cannot
+be separated from this line.
+
+`dom_max` moves the same way and for the same reason: 57 ms on the empty page
+against 16 ms on the full one. One sample each, from different mixes of work,
+and nothing should be concluded from it.
+
+**The wall clock is the honest comparison** because the corpus, the cadence
+and the line count are identical between the arms and only the page differs.
+
+Worth recording separately: `render_us` is NOT zero. The probe's closing note
+says "render_us is 0 until the renderer lands (stage 3 C2), which is the
+before number". It has landed, and on this hardware it is about 1.4 s of the
+total against 10.4 s of DOM work -- so **the DOM is roughly seven times the
+renderer**, and anything trying to make the view cheaper should look there
+first.
+
+
+=== What this is not ===
+
+Two runs, one per arm, on a machine whose disk cache was warm from an
+8-second sync scan minutes earlier. The 12% is a difference between two
+measurements and not a curve: nothing here establishes how the cost grows
+between 0 and 150 KB, or beyond it. A third and fourth prefill size would
+turn this into a shape, and that is cheap now that the probe works.
+
+And the page is one kind of content -- sealed paragraphs under an open fenced
+code block. A transcript full of tables or images is a different document
+for MSHTML to re-lay-out.
