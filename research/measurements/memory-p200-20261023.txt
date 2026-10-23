@@ -68,3 +68,68 @@ to be running. That is `PROBE.EXE platform` at the keyboard, and
 
 And every figure above is **with no client**. REMOTE.md asks for the
 with-and-without-client pair; this is the without half.
+
+
+=== The with-client half, and it explains the zero ===
+
+Same box, same session, client launched and left to settle:
+
+  free with gremote only          1,616 KB
+  free with the client as well        8 KB
+
+and the loads re-run with both up:
+
+  load     before     min  median   after   n  what ran
+  idle         24       0      20       0  14  3s of nothing
+  shot          0       0      44     336   6  full-screen 24bpp capture
+  exec        336       0      12     244  42  COMMAND.COM /C DIR C:\ /S
+
+**The client costs about 1.6 MB of dwAvailPhys and takes the field to
+essentially nothing.** That is the answer to REMOTE.md's with-and-without
+pair, and it is also the explanation for the 0 KB that
+deflate-p200-20261023.txt recorded from `PROBE.EXE platform` earlier in the
+evening: the client was running then. It was never a transient and never a
+mystery -- it was this.
+
+
+=== So correct the correction, which was also too broad ===
+
+The section above says "the field is usable when it is not already floored",
+and that is right, but it implies the flooring is incidental. It is not. On
+this machine the floored state is the NORMAL state once the client is up,
+which is the state the product actually runs in. So:
+
+  * **without the client**, memprobe produces coherent, explicable deltas --
+    a screenshot costs ~260 KB, a recursive DIR ~1,020 KB.
+  * **with the client**, the field sits at 0-336 KB and the deltas are noise.
+    `shot` "costs" nothing and ends 336 KB better off than it started; `idle`
+    reads 24, 20, 0. These are not measurements of anything.
+
+Which means the original caution in deflate-p200-20261023.txt was closer to
+right than the correction that followed it, for the case that matters. The
+instrument answers "what does the client cost" very clearly -- 1.6 MB -- and
+cannot answer "what does a screenshot cost while the client is up", because
+there is no room left for the answer to move in.
+
+Three statements in three hours, each narrower than the last. The final one:
+**dwAvailPhys measures this product's headroom exactly once, when the client
+starts, and is useless afterwards.**
+
+
+=== And none of it is a problem, which is the point of BACKLOG 2 ===
+
+With 8 KB of dwAvailPhys showing, this machine ran a complete tool-calling
+turn in five seconds (wire-p200-20261023.txt), took three full-screen
+captures, and walked its desktop. Nothing failed to allocate. BACKLOG 2
+records the project being frightened by this field once before -- the "28 KB
+free after a turn" scare -- and concluding that allocations were never
+actually failing. This is the same number arriving again, on real hardware,
+with the same meaning: Win98 gives the disk cache back under pressure and
+dwAvailPhys does not count it.
+
+The figure that WOULD say something about headroom is the one `PROBE.EXE
+platform` prints beside it and gremote does not expose: `free resources:
+system 80%, GDI 91%, USER 80%`. Those are the heaps that kill 9x
+applications, and they were comfortable all evening. Getting them over the
+wire is a new control-lane field, which is a change for whoever next touches
+that lane.
