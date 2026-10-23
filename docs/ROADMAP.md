@@ -872,11 +872,11 @@ first thing to pick up.
 | **E5** | K1, the bring-up | **superseded** -- no floppy and no `TEST.BAT`; the owner had already put the kit on the box from a USB stick, so first contact was over the wire |
 | **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
 | **E7** | W1, the wire session | **COMPLETE.** UI lane, screen capture, exit codes, the cancel question, `focusprobe`, `memprobe` both halves, `wsprobe`, and the stub-based sync and view timings. Three of those needed a code fix before they would run at all, and two of the fixes were only reachable on real hardware |
-| E8 | K2, the keyboard sitting | not started. The icon judgement is answered from a photograph -- ours is a bare `IDI_APPLICATION` and the only one of six tray icons that does not say what it is -- but the standby runs, the Explorer restart, tray Exit and the no-gremote memory baseline all need somebody there. `research/probes/trayprobe.py` reads the log live so the sitting is the physical acts and nothing else |
+| **E8** | K2, the tray sitting | **mostly done over the wire**, which the plan did not expect. Icon judged from a photograph; the menu renders with the live client in its header and the checkmark matching `automation=2`; it dismisses on an outside click; and both taskbar lines came from the autostart reboot -- `no notification area yet` then `the taskbar appeared; adding the icon`. The toggle and Exit are **refused_self**: the automation tier will not send input to its own process, so they are keyboard steps BY DESIGN. Owed: prevent-sleep runs 2 and 3, and the no-gremote baseline (`research/measurements/tray-p200-20261023.txt`) |
 | **E9** | S1-S3, the session ends | **COMPLETE. All three pass.** Four readings, four correct last clauses, N between 122 and 284 ms: S1 and S2's gremote say *stays up to drive the shutdown it asked for*, S2's client and S3's gremote say *nothing below this line is ours*. Both halves of REMOTE.md:1329's discrimination, each in the circumstance that calls for it |
 | **E10** | U1, the two arms | **done**, and it is the headline |
 | E11 | the code the numbers demand | **as closed as the evidence allows.** `-ot` stays, which is the big one and is a decision not to change anything. `focusprobe` gained a log beside the exe, which is what made BACKLOG 9 answerable. `memprobe`'s own caveats were corrected against what the box did. BACKLOG 39's fix is deferred by the owner and 40's wants a diagnosis before a guard change |
-| E12 | X1, the injection battery | not started, needs the keyboard |
+| E12 | X1, the injection battery | the health check is **done and passes** -- foreground, keystroke and write, the baseline X1 compares against. The three injection probes are **blocked by Claude Code's permission classifier** ("Interfere With Workloads"), not by the hardware: `PROBE.EXE inject`, `targeted`, `gditext` |
 | E13 | docs | in progress; waits on E8 and E12 landing before the stage can be written closed |
 
 **`-ot` earns its bytes, which is what the stage existed to decide.** Two
@@ -966,20 +966,40 @@ the order that wastes the fewest sittings:
    the box with three abandoned `ui` lane threads. A program whose whole job
    is foreground manipulation could not emit one line on that desktop --
    the fourth symptom of the one defect below.
-2. **K2 -- the tray sitting.** The 16x16 icon at `SM_CXSMICON` (a judgement,
-   wants a photo); the menu dismissing on a click outside; `EXPLORER` killed
-   and restarted for `tray: the taskbar appeared; adding the icon`;
-   **prevent-sleep run 2** with `prevent_sleep=0` and the shortest standby,
-   reading for `tray: the machine asks to suspend` -- silence means no veto
-   can ever help; the tray toggle, which arms run 3 and is also the
-   checkmark-and-`[awake]` check, with no restart needed because the menu is
-   deliberately not persisted; **run 3**, where `REFUSED` then `the suspend
-   was abandoned` is the veto working -- and note the log records the first
-   of each kind and then every eighth, so a reading that expects one line per
-   ask will under-count; tray **Exit** for `tray: Prevent sleep OFF`, the
-   line the Wine suite structurally cannot see. Plus a `PROBE.EXE platform`
-   with gremote stopped, which is the no-gremote memory baseline and the one
-   figure that cannot be taken over the wire.
+2. **K2 -- what is left of the tray sitting.** Most of it was done over the
+   wire and is written up in `research/measurements/tray-p200-20261023.txt`:
+   the icon judged from a photograph, the menu rendering with the live
+   client in its header and the checkmark matching `automation=2`, the
+   dismiss on an outside click, and both taskbar lines from the autostart
+   reboot. Two things remain and both need somebody there.
+
+   **The standby runs.** Set the shortest standby in Control Panel, leave
+   the machine alone with `prevent_sleep=0`, and read for `tray: the machine
+   asks to suspend` -- **silence there IS the finding**, because a box that
+   suspends without asking is one no veto can ever help. Then the tray
+   toggle, which arms run 3 and is also the checkmark-and-`[awake]` check,
+   with no restart needed because the menu is deliberately not persisted
+   (`config.cpp`, `tray.cpp`). Then run 3, where `REFUSED` followed by `the
+   suspend was abandoned` is the veto working. **Note `tray.cpp` logs the
+   first of each kind and then every EIGHTH**, so a reading that expects one
+   line per ask will under-count. Finish with tray **Exit** for `tray:
+   Prevent sleep OFF` and its count -- the line the Wine suite structurally
+   cannot see, because `GuestServer` stops the guest by terminating it and
+   no teardown runs.
+
+   The toggle and Exit **cannot** be driven from here: `refused_self`, from
+   `Input::isOurs()`, because the automation tier will not send input to its
+   own process. That is `PLAN.md`'s rule working, not a gap.
+
+   **And `PROBE.EXE platform` with gremote stopped**, which is the
+   no-gremote memory baseline -- impossible over the wire by construction,
+   since asking gremote how much memory is free without gremote requires
+   gremote not to be running. It is the third point on the line
+   `memory-p200-20261023.txt` already has two of.
+
+   `research/probes/trayprobe.py` tails every `tray:` line as it appears, so
+   the sitting is the physical acts and nothing else.
+
 3. **X1 -- the injection battery.** `TEST.BAT` part three and
    `AUTOCHK.EXE --health` behind it, then a reboot whatever it says. Last and
    alone, because those three have killed Explorer once and ended a September
