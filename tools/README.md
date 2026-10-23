@@ -55,9 +55,8 @@ launch the client on the guest.
 `probelib.py` holds the handshake all four share. Their receive loops differ
 and stay where they are.
 
-They are listed here, rather than nowhere, because this is the file that has
-always listed them. `toolkit.py` is the one thing they still reach back into
-`tools/` for.
+They are listed here because this is the file that has always listed them,
+and `toolkit.py` is the one thing they still reach back into `tools/` for.
 
 ## Wired into the build
 

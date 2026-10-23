@@ -46,15 +46,17 @@ win/        the guest executables -- GASTON.EXE, GREMOTE.EXE, GUPDATE.EXE
 bridge/     Python: Agent SDK, MCP tools, pagination, markdown, compression
 gremote/    Python driver for the guest server, and how a build is shipped
 tests/      protocol, markdown, encoding, PE import allowlist
-tests/guest/  the check binaries: the shipping C run under Wine
+            guest/ is the check binaries: the shipping C, run under Wine
 research/   apparatus, not product -- probes, their host stubs, the numbers
 tools/      qmp.py, vm scripts, the build's own gates
 vm/         QEMU run scripts (images gitignored)
 ```
 
 `win/`, `bridge/`, `gremote/` and `tools/check/` are the product and the
-build. `tests/` and `research/` are how it is judged: nothing under either
-ships, and nothing under `win/` exists to be measured.
+build. `tests/` and `research/` are how it is judged, and nothing under
+either ships. The split is deliberate: `win/checks/` used to hold both the
+Wine test binaries and the probes that measure a real 1998 machine, under
+one directory name that said neither.
 
 ## Status
 

@@ -38,15 +38,17 @@ FOLDERS = {
     "check": "the static gates make check runs",
 }
 
-#: The apparatus. `probes/` was `tools/probe/` until the testing and research
-#: trees were split out of the product, and it is checked here still, under
-#: the same rule and for the same reasons: not one line of any of them
+#: The apparatus, under the same rule. `probes/` was `tools/probe/` until the
+#: testing and research trees were split out of the product, and it is
+#: checked here still for the same reasons: not one line of any of them
 #: changed in the move, and neither did what can go wrong with one. A probe
 #: is what decides what a measurement says, so a name used before it is
 #: imported is a number that never arrives.
 #:
-#: `guest/` is in the list because it is a directory somebody decided on,
-#: and contributes nothing to the parse checks: it holds C.
+#: Only `probes/` and `deflate-speeds/` hold Python. `guest/` is C and
+#: `measurements/` is recorded output, and both are listed anyway, because
+#: what this list is for is making a new directory here a decision rather
+#: than something that appeared.
 RESEARCH_FOLDERS = {
     "probes": "bridge stubs that drive the guest's own code",
     "guest": "the probes that run ON the machine, in C",

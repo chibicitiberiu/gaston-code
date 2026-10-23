@@ -21,9 +21,11 @@ detached worktree pinned to **`b6880fa`**, the commit that was `HEAD` when this
 audit started. Where the live tree has since made a latent finding *actual*,
 that is stated as such (04.7). That reorganisation also moved every script in
 `tools/` one directory down — `tools/cmovcheck.py` became `tools/check/
-cmovcheck.py`, `tools/syncprobe.py` became `research/probes/syncprobe.py`, and so
-on. Citations below use the **new** paths, because that is where a reader will
-find them; at `b6880fa` they are all one level up.
+cmovcheck.py`, `tools/syncprobe.py` became `tools/probe/syncprobe.py`, and so
+on. Citations below use the paths a reader will find today, not the ones
+`b6880fa` had: at that commit the tools are all one level up, and the probes
+have since left `tools/` entirely for `research/probes/`, as the check
+binaries left `win/checks/` for `tests/guest/` and `research/guest/`.
 
 ---
 
@@ -82,7 +84,7 @@ of a file going the other way.
 Nothing automated drives any of them.
 
 - `synccheck.exe` links `sync.cpp`, not `syncrpc.cpp`. Its four modes
-  (`tests/guest/synccheck.c:114-147`) are the directory walk, `--limits`,
+  (`tests/guest/synccheck.cpp:114-147`) are the directory walk, `--limits`,
   `--contained` and `--chunk`. It never sends a frame.
 - `netcheck.exe` and `rpccheck.exe` both *link* `syncrpc.o`
   (`win/Makefile:186-187`, `:198-199`) and neither drives it. `rpccheck.c`'s
@@ -258,7 +260,7 @@ Sitting three lines above it,
 `test_the_guest_s_real_manifest_rows_parse_with_the_bridge_s_real_parser:296` is
 the real closure of 03.1 and is excellent: it runs `synccheck --wire`, which
 emits through the same `rc_sync_manifest_row` `do_scan` uses
-(`tests/guest/synccheck.c:105-112`), and hands the bytes to
+(`tests/guest/synccheck.cpp:105-112`), and hands the bytes to
 `bridge.files.manifest.parse_rows`, the parser the frame handler uses. **03.1 is
 genuinely closed.** The vacuous test beside it is a separate defect.
 
@@ -493,7 +495,7 @@ according to its own source:
 
 | check | what Wine cannot answer | where it says so |
 |---|---|---|
-| `synccheck --limits` | MAX_PATH is not enforced under Wine the way Win98 enforces it; the check exercises the *arithmetic* of the refusal, not the filesystem's limit | `tests/guest/synccheck.c:36-39` |
+| `synccheck --limits` | MAX_PATH is not enforced under Wine the way Win98 enforces it; the check exercises the *arithmetic* of the refusal, not the filesystem's limit | `tests/guest/synccheck.cpp:36-39` |
 | `workcheck` | `CopyFile`, `MoveFile` and 8.3 aliasing are precisely the layer Wine reimplements | `tools/gen/mktools-iso.sh:40-42` |
 | `toolcheck` | how long a real FAT scan takes, and whether a path on an empty floppy drive raises the system-modal *"There is no disk in drive A:"* that freezes the message pump | `tools/gen/mktools-iso.sh:44-47` |
 | `probe` | most of it asks hardware questions; only the deflate section is run, deliberately | `docs/audit/03-contracts.md` 03.53 |
@@ -617,7 +619,7 @@ This report is a list of holes and would misrepresent the project if it stopped
 there. Five things here are better than most codebases manage.
 
 **The cross-language contract pattern works, and 03.1 really is closed.**
-`synccheck --wire` (`tests/guest/synccheck.c:98-112`) emits through
+`synccheck --wire` (`tests/guest/synccheck.cpp:98-112`) emits through
 `rc_sync_manifest_row`, the same function `do_scan` puts on the wire, in binary
 mode so the CRT cannot turn the row terminator into `\r\n` — and the comment at
 `:118-122` explains that the text-mode version *would have been a comparison
@@ -631,7 +633,7 @@ motivated it. This is the right shape and there are half a dozen instances of it
 **`inicheck` defends itself against its own hand-maintained list.** The check
 compares five named fields of `rc_config` across save/load — and then does
 `eq_i("sizeof(rc_config)", sizeof(rc_config), 64+4+128+4+128)`
-(`tests/guest/inicheck.c:71-73`) with the comment *"sizeof is the tripwire for a
+(`tests/guest/inicheck.cpp:71-73`) with the comment *"sizeof is the tripwire for a
 field added to the struct and to neither function: it cannot check the field,
 but it can refuse to pass quietly."* A sixth field cannot be added silently.
 That is the defence 04.7's hygiene check is missing.
