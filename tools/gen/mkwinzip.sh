@@ -198,7 +198,8 @@ WHAT IS IN HERE
                       lib\claude_agent_sdk\_bundled\ and is most of the
                       130 MB.
   README.TXT          this file.
-  LICENSE.TXT         MIT.
+  LICENSE.TXT         GNU AGPL v3 only. NOTICE.TXT has the permissive
+                      components carried in with it.
 
 Project page:  https://github.com/chibicitiberiu/gaston-code
 README

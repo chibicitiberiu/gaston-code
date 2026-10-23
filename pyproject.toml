@@ -25,7 +25,7 @@ version = "0.4.0"
 description = "The modern-host half of Gaston Code: runs Claude Code and speaks the wire protocol to a Windows 98 client"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Tiberiu Chibici" }]
 keywords = ["claude", "windows98", "retrocomputing", "agent"]

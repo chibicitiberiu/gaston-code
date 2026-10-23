@@ -63,7 +63,7 @@ FILESUBTYPE    0x0L
       VALUE "InternalName",     "gaston\0"
       /* Win98 gives LegalCopyright its own labelled line at the top of the
        * tab, above the fold, rather than burying it in the list. */
-      VALUE "LegalCopyright",   "Copyright (c) 2026 Tiberiu Chibici. MIT.\0"
+      VALUE "LegalCopyright",   "Copyright (c) 2026 Tiberiu Chibici. AGPLv3.\0"
       VALUE "OriginalFilename", "GASTON.EXE\0"
       VALUE "ProductName",      "Gaston Code\0"
       VALUE "ProductVersion",   RC_VER_STR "\0"

@@ -238,7 +238,8 @@ DRIVING THIS MACHINE REMOTELY
   this machine. You do not need it to use the client.
 
 Project page:  https://github.com/chibicitiberiu/gaston-code
-Licence:       MIT. See LICENSE.TXT.
+Licence:       GNU AGPL v3 only. See LICENSE.TXT, and NOTICE.TXT for
+               the two permissive components carried in with it.
 INI
 # @VERSION@ rather than $VERSION, because the heredoc above is quoted:
 # prose with a backtick in it ran as a command and emptied a sentence
@@ -411,7 +412,8 @@ THERE IS NO REMOTE SHUTDOWN, ON PURPOSE
   only ways to stop it are the tray icon's Exit and a reboot.
 
 Project page:  https://github.com/chibicitiberiu/gaston-code
-Licence:       MIT. See LICENSE.TXT.
+Licence:       GNU AGPL v3 only. See LICENSE.TXT, and NOTICE.TXT for
+               the two permissive components carried in with it.
 INI
 sed -i "s/@VERSION@/$VERSION/g" "$R/README.TXT"
 cp "$HERE/LICENSE" "$R/LICENSE.TXT"

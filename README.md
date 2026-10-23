@@ -114,5 +114,14 @@ docker build -f docker/Dockerfile -t gaston-bridge .
 
 ## Licence
 
-MIT. Portions of the guest agent derive from retro-agent (MIT) — see `NOTICE`
-and `docs/FORKED.md`.
+**GNU AGPL v3 only** — see `LICENSE`.
+
+Section 13 is the clause that matters for a program shaped like this one: if
+you modify it and let people use it over a network, they are entitled to the
+source of your modified version. The bridge-and-client arrangement is a
+network interaction, so that is the ordinary case rather than an edge one.
+
+Two permissive third-party components are carried in with their notices
+preserved — retro-agent (MIT) in the guest agent, and miniz (MIT) for
+deflate. `NOTICE` has both, and `docs/FORKED.md` records exactly what came
+from retro-agent and what changed.

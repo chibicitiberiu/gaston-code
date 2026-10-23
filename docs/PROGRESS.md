@@ -357,6 +357,8 @@ section padding. Verified on the guest, not under Wine, because every claim
 above is about how the Win98 shell renders a 4bpp image: title bar, taskbar
 button, Explorer's 16x16 list and 32x32 large-icon views, and the Version tab
 reading `0.4.0 / Gaston Code / Copyright (c) 2026 Tiberiu Chibici. MIT.`
+(that was the string on the day; the licence became AGPLv3 on 2026-10-24
+and `gaston.rc` now says `AGPLv3.` in the same place)
 
 One correction made against the guest rather than reasoned about: the first
 cut shipped `VALUE "CompanyName", ""`. An empty key is worse than a missing

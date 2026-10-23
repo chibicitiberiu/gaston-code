@@ -165,9 +165,18 @@ frame.resize((256, 256), Image.NEAREST).save(dst)
 print("    icon %dx%d -> 256x256 (nearest, it is pixel art)" % best)
 PY
 
+# THE LICENCE HAS TO TRAVEL WITH IT. This is AGPLv3 code, and section 4
+# requires conveying the licence along with the work -- a single-file
+# artefact with no licence in it is a compliance hole, not an untidiness.
+# `-x` is python-appimage's way to put extra files under $APPDIR; the two
+# land beside the AppRun where `--appimage-extract` will show them.
+cp "$HERE/LICENSE" "$WORK/LICENSE"
+cp "$HERE/NOTICE"  "$WORK/NOTICE"
+
 echo "--- AppImage ---"
 ( cd "$WORK" && "$WORK/tools/bin/python-appimage" build app \
-    -p "$PYVER" -l "$LINUXTAG" -n "gaston-bridge" "$RECIPE" )
+    -p "$PYVER" -l "$LINUXTAG" -n "gaston-bridge" \
+    -x LICENSE NOTICE -- "$RECIPE" )
 
 BUILT=$(echo "$WORK"/gaston-bridge*.AppImage)
 [ -f "$BUILT" ] || { echo "mkappimage: python-appimage produced nothing" >&2; exit 1; }
@@ -194,8 +203,11 @@ if ! env -i HOME=/nonexistent PATH=/usr/bin:/bin "$DEST" --help >/dev/null 2>&1;
 fi
 echo "    ok, it runs and parses arguments with an empty environment"
 
-echo "--- the SDK's bundled Claude Code is really in there ---"
-# Read out of the squashfs rather than asked of the running program: the
+# WHAT IS ACTUALLY INSIDE THE FILE, read out of the squashfs once and then
+# searched. Asked of the running program instead, a check could be answered
+# by something the build machine happens to have.
+#
+# -o THE OFFSET, which is the whole trick. An AppImage is a small ELF
 # question is what this FILE contains, and a running copy could answer from
 # something it found on the build machine.
 #
@@ -214,6 +226,21 @@ echo "--- the SDK's bundled Claude Code is really in there ---"
 # searched after.
 OFFSET=$("$DEST" --appimage-offset)
 unsquashfs -o "$OFFSET" -l "$DEST" > "$WORK/listing.txt" 2>/dev/null
+
+echo "--- the licence travelled with it ---"
+# AGPLv3 section 4 requires conveying the licence along with the work, so a
+# single-file artefact without it is a compliance hole rather than an
+# untidiness. `--appimage-extract` is how a user gets at them.
+for f in LICENSE NOTICE; do
+  if ! grep -qE "squashfs-root/$f\$" "$WORK/listing.txt"; then
+    echo "mkappimage: $f is not inside the AppImage. It is AGPLv3 code and
+       the licence has to travel with it." >&2
+    exit 1
+  fi
+done
+echo "    ok: LICENSE and NOTICE are both in there"
+
+echo "--- the SDK's bundled Claude Code is really in there ---"
 if ! grep -q "claude_agent_sdk/_bundled/claude" "$WORK/listing.txt"; then
   echo "mkappimage: no bundled Claude Code inside the AppImage. The SDK's
        platform wheel is supposed to carry one at

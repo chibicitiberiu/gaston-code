@@ -1,7 +1,21 @@
 Gaston Code
 Copyright (c) 2026 Tiberiu Chibici
 
-This product includes software developed as part of the retro-agent project.
+Licensed under the GNU Affero General Public License, version 3 only.
+The full licence text is in LICENSE. This program is distributed WITHOUT
+ANY WARRANTY; see sections 15 and 16 of that licence.
+
+WHAT THE AFFERO CLAUSE MEANS HERE. Section 13 is the one that distinguishes
+the AGPL from the GPL: if you modify this program and let users interact
+with it remotely over a network, those users have to be offered the source
+of your modified version. That is the normal way this program is used -- a
+bridge on one machine serving a client on another -- so it is worth reading
+rather than skimming.
+
+THIRD-PARTY NOTICES follow. Both are permissive licences, and both are
+compatible with the AGPL: permissive code can be carried into an
+AGPL-licensed combined work provided its own notices are preserved, which
+is what this file does. Neither third party endorses this project.
 
 --------------------------------------------------------------------------
 retro-agent
@@ -32,3 +46,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------
+miniz
+https://github.com/richgel999/miniz
+
+win/third_party/miniz/ is miniz, used under the MIT License, unmodified
+except as recorded in win/third_party/miniz/README.md. It provides the
+deflate and inflate used by the wire's compression. Its licence text is in
+win/third_party/miniz/LICENSE.
+
+Copyright 2013-2014 RAD Game Tools and Valve Software
+Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
