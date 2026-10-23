@@ -3,11 +3,28 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 5 — the P200.** Stages 1 and 2 closed
-2026-10-11, stage 3 on 2026-10-12, stages 3b and 3c on 2026-10-13, stage 4
-on 2026-10-14, and **stage 4b** — the "agent is driving" indicator, split
-out of stage 4 by review rather than by size — on 2026-10-15. Stage 5 has
-six unanswered bullets and wants the user's direction before it starts.
+**Current goal: `ROADMAP.md` stage 5 — the P200. Nine of its thirteen
+commits are done, 2026-10-23, and both questions it existed to answer are
+answered.** Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12, stages
+3b and 3c on 2026-10-13, stage 4 on 2026-10-14, and **stage 4b** — the
+"agent is driving" indicator, split out of stage 4 by review rather than by
+size — on 2026-10-15.
+
+**`-ot` earns its bytes**, which is the optimisation the stage was built to
+decide: a 24.8% penalty for `all-os` on the compressing direction, A/B/A
+with the closing arm reproducing the opening one to the millisecond, and
+three machines now agreeing (23% on the guest, 24%, 24.8%). Its 5,632 bytes
+do not show up in the client's working set at all, so the memory objection
+is closed too. **And Gaston Code runs on a Pentium 200 MMX** — installed
+over the wire onto a box with no CD, driving a tool-calling turn end to end
+in five seconds.
+
+What is left is **two keyboard sittings**: E8's tray and standby readings
+with the no-gremote memory baseline, and E12's injection battery, which the
+plan requires to run last and alone. Everything reachable over the wire is
+done. `research/probes/trayprobe.py` reads the log live so the sitting is
+the physical acts and nothing else, and `docs/ROADMAP.md`'s stage 5 section
+opens with the running order.
 
 Phase 5 (Attach) shipped; 5.1 is below, and 5.2/5.3 went in without a
 write-up of their own. Phase 6 is part-built: `ui`, `input`, `shot`,

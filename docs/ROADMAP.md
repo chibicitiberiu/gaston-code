@@ -845,9 +845,26 @@ built on a summary:
 ### Where it got to, 2026-10-23
 
 The box came up on the LAN at 10.0.0.158 and was driven from Linux all
-evening. **Eight of the thirteen commits are done, both questions the stage
+evening. **Nine of the thirteen commits are done, both questions the stage
 existed to answer are answered, and what is left is two sittings at the
 keyboard.**
+
+**The verdict, in one paragraph.** `-ot` earns its bytes and the Makefile
+does not change. Gaston Code runs on a Pentium 200 MMX. Gates 0.5c, 0.15c
+and 0.16 are closed on silicon with a measurement file behind each, the
+"Real hardware access" blocker is struck, and six BACKLOG entries have their
+answers — 2, 4, 9, 22, 26 and 31. Two new ones were opened by what the
+hardware showed (39, 40) and one measurement, `memprobe`, turned out to be
+asking a question this machine cannot answer once the client is up. Eight
+measurement files in `research/measurements/*-p200-20261023.txt`.
+
+**What the stage actually bought, beyond its own questions**, is the thing
+no plan predicted: **one unbounded MSAA call on hidden windows explains four
+separate symptoms** — the 155-second walk, a cancel that cannot stop it, a
+Start menu that opens by itself, and a machine that will not reboot. That is
+BACKLOG 39's option (2), one condition in `TreeSink::onNode`, and it is an
+availability fix rather than the cosmetic one the entry describes. It is the
+first thing to pick up.
 
 | | | |
 |---|---|---|
