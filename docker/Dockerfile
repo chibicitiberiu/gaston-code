@@ -7,47 +7,30 @@
 # is two Win98 executables in a zip (tools/gen/mkrelease.sh) and has nothing
 # to do with this image.
 #
-# WHY CLAUDE CODE IS INSTALLED IN HERE. claude-agent-sdk does not contain
-# it. The SDK SPAWNS the `claude` CLI, located through shutil.which and a
-# short list of well-known paths, and raises an explanatory error when it
-# finds neither (claude_agent_sdk/_internal/transport/subprocess_cli.py). So
-# a bridge image without that CLI starts, accepts the guest's connection,
-# and fails on the first prompt.
+# CLAUDE CODE IS ALREADY IN HERE, AND NOT BECAUSE THIS FILE PUTS IT THERE.
+# claude-agent-sdk ships one wheel per platform -- manylinux_2_17_x86_64 is
+# 95 MB of the 98 -- and each one carries the CLI as package data at
+# claude_agent_sdk/_bundled/claude, 228 MB unpacked. The SDK's
+# `_find_bundled_cli()` is checked BEFORE shutil.which, so that copy is the
+# one it actually runs.
 #
-# THE NATIVE INSTALLER, NOT NPM, and it is worth 493 MB. Both were built
-# and measured: `npm install -g @anthropic-ai/claude-code` needs nodejs and
-# npm from apt and lands at **1,266 MB**; the native installer is a
-# standalone binary and needs neither, at **773 MB**. Same CLI, same pinned
-# version. Most of what is left is the CLI itself -- 279 MB of
-# /root/.local -- so there is not much more to win here.
+# An earlier version of this file installed the CLI from Anthropic's native
+# installer in a builder stage, on the stated premise that "the SDK does not
+# contain Claude Code, it spawns it off PATH". That premise was wrong, and
+# the image carried TWO copies of a 228 MB binary -- 773 MB, of which 279 MB
+# was a CLI nothing ever executed. Asked directly, the SDK in that image
+# answered `/usr/local/.../claude_agent_sdk/_bundled/claude`, not the one the
+# Dockerfile had gone to the trouble of installing.
+#
+# So: no node, no npm, no installer, no builder stage. `pip install` is the
+# whole of it.
 #
 # YOU STILL HAVE TO BRING CREDENTIALS. Nothing in this image can talk to
 # Anthropic by itself -- pass ANTHROPIC_API_KEY, or bind-mount an
 # authenticated ~/.claude and ~/.claude.json.
 #
-# Pinned base, pinned CLI, pinned requirements. A release that resolves
-# "whatever the index served that morning" is not a release.
-
-# --------------------------------------------------------------- builder ---
-# Here only so that curl, apt's lists and the installer's own ~250 MB of
-# staging cache do not reach the image that gets pushed.
-FROM python:3.13.17-slim-trixie AS claude
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
-# The installer takes `stable`, `latest` or an exact version. An exact one,
-# deliberately: the CLI updates often, and an image that silently changes
-# the agent's behaviour between two pulls of the same tag is an image nobody
-# can debug. Raise it in a commit, so the change has a date.
-ARG CLAUDE_CODE_VERSION=2.1.308
-# pinned-dep-allow: install.sh is Anthropic's own installer for its own CLI,
-# and the version it installs is pinned on the next line.
-RUN curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_CODE_VERSION" \
- && /root/.local/bin/claude --version
-
-# ----------------------------------------------------------------- image ---
+# Pinned base, pinned requirements. A release that resolves "whatever the
+# index served that morning" is not a release.
 FROM python:3.13.17-slim-trixie
 
 # git because the agent is usually pointed at a repository. Nothing else:
@@ -56,21 +39,18 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# /root/.local holds the CLI launcher (bin/claude) and the versioned binary
-# it resolves (share/claude). NOT /root/.claude, which the installer also
-# creates and which is mounted over below -- the CLI and its credentials are
-# deliberately in different trees so a mounted credential directory cannot
-# shadow the program.
-COPY --from=claude /root/.local /root/.local
-ENV PATH="/root/.local/bin:${PATH}"
-RUN claude --version
-
 WORKDIR /app
 
 # Requirements before source, so an edit to the bridge does not re-resolve
-# and re-download thirty wheels.
+# and re-download the SDK's 95 MB wheel.
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+ && python -c "\
+from claude_agent_sdk._internal.transport.subprocess_cli import \
+     SubprocessCLITransport as T; \
+p = T._find_bundled_cli(None); \
+print('bundled CLI:', p); \
+assert p, 'the SDK wheel for this platform carries no bundled CLI'"
 
 # bridge/ is the product. gremote/ comes too: it is the host-side driver for
 # the guest server, it imports bridge.wire and bridge.agent, and somebody
@@ -101,7 +81,8 @@ VOLUME ["/root/.claude"]
 EXPOSE 7890
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    GASTON_PROG=gaston-bridge
 
 # 0.0.0.0 INSIDE a container is not the same decision as 0.0.0.0 on a host.
 # bridge/server.py's --host help says "use the retro-segment interface, not

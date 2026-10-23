@@ -4,11 +4,20 @@
 # transitive of these two, pinned by `uv pip compile` so a release build is
 # reproducible rather than "whatever the index served that morning".
 #
-# claude-agent-sdk does NOT bring Claude Code with it. It SPAWNS the `claude`
-# CLI, found through shutil.which and a short list of well-known paths
-# (claude_agent_sdk/_internal/transport/subprocess_cli.py). So no bridge
-# artefact is self-contained: each one either carries that CLI or requires it
-# on PATH, and this project requires it -- see docs/RELEASE.md.
+# claude-agent-sdk DOES bring Claude Code with it, which is worth knowing
+# before packaging anything: it publishes one wheel per platform (86-98 MB
+# each) and every one carries the CLI as package data at
+# claude_agent_sdk/_bundled/claude[.exe], 228-231 MB unpacked. Its
+# `_find_bundled_cli()` is tried BEFORE the shutil.which fallback, so that
+# copy is what runs. The sdist carries no binary, so an install from source
+# does fall back to a CLI on PATH -- nothing in this project installs that
+# way, and each release build asserts the bundled binary is present rather
+# than assuming either answer.
+#
+# That one fact is most of the size of all three host artefacts, and getting
+# it backwards cost a container image 279 MB of a second, unused copy and
+# gave two launchers a guard that refused to start over a CLI they already
+# contained.
 claude-agent-sdk==0.2.153
 
 # Lazily imported, in two places: bridge/wire/uiview.py renders the guest's

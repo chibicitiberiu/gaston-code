@@ -35,10 +35,10 @@ keywords = ["claude", "windows98", "retrocomputing", "agent"]
 # installed beside anything; the pinning belongs in requirements.txt, which
 # is what the release builds install from.
 #
-# Neither of these brings Claude Code with it. claude-agent-sdk SPAWNS the
-# `claude` CLI off PATH, so every artefact built from this either carries
-# that CLI (the container image does) or requires it to be installed
-# separately (the AppImage and the Windows zip do).
+# claude-agent-sdk carries Claude Code: one wheel per platform, each with
+# the CLI as package data, which the SDK prefers to anything on PATH. So
+# every artefact built from this has it already, and none of them needs the
+# user to install it -- see requirements.in.
 dependencies = [
     "claude-agent-sdk>=0.2.153",
     "pillow>=12.0",

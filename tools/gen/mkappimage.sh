@@ -6,14 +6,24 @@
 # distribution with Python 3.9 can use it without a venv, a package index
 # or any opinion about how Python should be installed on their machine.
 #
-# WHAT IT DOES NOT CARRY, AND CANNOT. Claude Code. claude-agent-sdk SPAWNS
-# the `claude` CLI, found through shutil.which and a short list of
-# well-known paths -- it does not link against it. The CLI is Anthropic's
-# own ~280 MB native binary, and bundling somebody else's program into our
-# redistributable is a decision this project is not entitled to make
-# quietly, so the AppImage requires it on PATH and says so when it is
-# missing. The container image is the artefact that has it, because there
-# the user is installing from Anthropic's own installer at build time.
+# IT CARRIES CLAUDE CODE, and not because this script puts it there.
+# claude-agent-sdk ships one wheel per platform and each carries the CLI as
+# package data at claude_agent_sdk/_bundled/claude -- 228 MB unpacked, which
+# is most of why a bridge AppImage is 133 MB of squashfs. The SDK checks
+# that copy BEFORE shutil.which, so it is the one that runs.
+#
+# An earlier version of this script had an entrypoint that refused to start
+# when no `claude` was on PATH, on the stated premise that the SDK does not
+# contain it. That premise was wrong, and the guard was therefore a bug: it
+# would have refused to run on exactly the machine the AppImage exists for
+# -- one with no Claude Code installed -- while carrying its own perfectly
+# good copy. Tested and believed before it was checked, which is the whole
+# reason this project runs things instead of reasoning about them.
+#
+# The one install that genuinely has no bundled CLI is from the sdist
+# (claude_agent_sdk-<v>.tar.gz carries no binary). Nothing here installs
+# that way, and the check below asserts it at build time rather than
+# trusting it.
 #
 # PYTHON 3.13.17, the same version the container image pins, from the same
 # manylinux2014 tree python-appimage pulls. Two artefacts of one release
@@ -109,24 +119,6 @@ echo "    $(basename "$WHEEL")"
 # a console script carries a shebang written at install time and `-m`
 # cannot be wrong about where the interpreter is.
 cat > "$RECIPE/entrypoint.sh" <<'ENTRY'
-# The bridge needs Claude Code, which is NOT in this AppImage -- the SDK
-# spawns the `claude` CLI rather than linking it. Say so here, once, rather
-# than letting the first prompt fail inside the agent SDK with a traceback
-# about a subprocess.
-if ! command -v claude >/dev/null 2>&1 \
-   && [ ! -x "$HOME/.local/bin/claude" ] \
-   && [ ! -x "$HOME/.claude/local/claude" ]; then
-  echo "gaston-bridge: Claude Code is not installed on this machine." >&2
-  echo "" >&2
-  echo "  This AppImage carries Python and the bridge, but not Claude Code:" >&2
-  echo "  the agent SDK runs the \`claude\` command as a subprocess rather" >&2
-  echo "  than linking a library, so it has to be installed separately." >&2
-  echo "" >&2
-  echo "      curl -fsSL https://claude.ai/install.sh | bash" >&2
-  echo "" >&2
-  echo "  Then make sure ~/.local/bin is on your PATH and run this again." >&2
-  exit 1
-fi
 # So argparse says "usage: gaston-bridge" rather than "usage: server.py",
 # which is what `-m bridge.server` gives it from sys.argv[0].
 export GASTON_PROG=gaston-bridge
@@ -190,20 +182,45 @@ echo
 # It must at least answer --help. An AppImage that builds and cannot start
 # is the normal failure here: a missing shared library shows up at run time
 # and never at build time.
-echo "--- smoke test: --help from the built AppImage ---"
-if "$DEST" --help >/dev/null 2>&1; then
-  echo "    ok, it runs and parses arguments"
-else
-  # The guard in entrypoint.sh exits 1 when Claude Code is absent, which on
-  # a build machine is the usual case and is not a build failure.
-  if "$DEST" --help 2>&1 | grep -q "Claude Code is not installed"; then
-    echo "    ok, it runs -- and correctly refuses because Claude Code is"
-    echo "    not installed on THIS machine, which is the guard working"
-  else
-    echo "mkappimage: the AppImage was built but will not run:" >&2
-    "$DEST" --help 2>&1 | head -20 >&2
-    exit 1
-  fi
+echo "--- smoke test: --help, under env -i so nothing leaks in ---"
+# env -i on purpose. Run with this shell's environment, an AppImage can pass
+# by using the developer's own PATH, HOME and PYTHON* variables; stripped,
+# what answers is only what is inside the file. That is also what proves the
+# bundled CLI claim rather than assuming it.
+if ! env -i HOME=/nonexistent PATH=/usr/bin:/bin "$DEST" --help >/dev/null 2>&1; then
+  echo "mkappimage: the AppImage was built but will not run:" >&2
+  env -i HOME=/nonexistent PATH=/usr/bin:/bin "$DEST" --help 2>&1 | head -20 >&2
+  exit 1
 fi
+echo "    ok, it runs and parses arguments with an empty environment"
+
+echo "--- the SDK's bundled Claude Code is really in there ---"
+# Read out of the squashfs rather than asked of the running program: the
+# question is what this FILE contains, and a running copy could answer from
+# something it found on the build machine.
+#
+# -o THE OFFSET, which is the whole trick. An AppImage is a small ELF
+# runtime with the squashfs appended, so `unsquashfs -l` on it alone finds
+# no superblock and fails -- and a `grep -q` on that empty output reads
+# exactly like "the file is missing". It said so once, about a file that was
+# there. The image prints its own offset.
+#
+# AND NOT `| grep -q`. Under `set -o pipefail` -- which is on at the top of
+# this file -- grep -q exits the moment it matches, unsquashfs dies of
+# SIGPIPE writing the rest of its 30,000 lines, and the pipeline reports
+# failure for a listing that contained exactly what was asked for. The
+# second false alarm about the same present file, from the same check, for
+# a completely different reason. So the listing is captured first and
+# searched after.
+OFFSET=$("$DEST" --appimage-offset)
+unsquashfs -o "$OFFSET" -l "$DEST" > "$WORK/listing.txt" 2>/dev/null
+if ! grep -q "claude_agent_sdk/_bundled/claude" "$WORK/listing.txt"; then
+  echo "mkappimage: no bundled Claude Code inside the AppImage. The SDK's
+       platform wheel is supposed to carry one at
+       claude_agent_sdk/_bundled/claude, and without it this artefact needs
+       a separately installed CLI that nothing told the user to install." >&2
+  exit 1
+fi
+echo "    ok: claude_agent_sdk/_bundled/claude is present"
 echo
 echo "appimage $VERSION in $OUT"
