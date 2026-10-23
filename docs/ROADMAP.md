@@ -9,11 +9,17 @@ It is a living file. A stage that finishes gets its outcome recorded in
 `PROGRESS.md` and its line here struck, not deleted -- the order something was
 done in is part of why it looks the way it does.
 
-**Where the project stands, 2026-10-10.** Every `REMOTE.md` build step is
+**Where the project stands, 2026-10-23.** Every `REMOTE.md` build step is
 complete (1 through 6). `PLAN.md` phases 0 through 5 are done. Phase 6 is the
-only part-built phase, and nothing in the plan sits at zero. So what remains is
-a tail: small unbuilt tools, one architectural move, a pile of recorded
-decisions, and a machine nobody has run this on.
+only part-built phase, and nothing in the plan sits at zero. Stage 5 put it
+on the physical Pentium 200 MMX, so the machine nobody had run this on has
+now run it -- which was the last open question of the kind only hardware
+answers. **What remains is stage 6 alone: a clean install by somebody who is
+not us, and publishing.**
+
+*(The 2026-10-10 version of this paragraph ended "and a machine nobody has
+run this on." Kept in mind rather than deleted, because that sentence was
+true for four phases and stopped being true in one evening.)*
 
 ---
 
@@ -871,10 +877,11 @@ Neither blocks stage 6, and neither is load-bearing for anything shipped.
 does not change. Gaston Code runs on a Pentium 200 MMX. Gates 0.5c, 0.15c
 and 0.16 are closed on silicon with a measurement file behind each, the
 "Real hardware access" blocker is struck, and six BACKLOG entries have their
-answers — 2, 4, 9, 22, 26 and 31. Two new ones were opened by what the
-hardware showed (39, 40) and one measurement, `memprobe`, turned out to be
-asking a question this machine cannot answer once the client is up. Eight
-measurement files in `research/measurements/*-p200-20261023.txt`.
+answers — 2, 4, 9, 22, 26 and 31. Three new ones were opened by what the
+hardware showed (39, 40, 41) and one measurement, `memprobe`, turned out to
+be asking a question this machine cannot answer once the client is up.
+Thirteen measurement files in
+`research/measurements/*-p200-20261023.txt`.
 
 **What the stage actually bought, beyond its own questions**, is the thing
 no plan predicted: **one unbounded MSAA call on hidden windows explains four
@@ -926,7 +933,7 @@ for. 0.15c and 0.16 closed with it.
   is 2.1 s. BACKLOG 26 closed as "the cost is real and the grain needs
   fixing"; BACKLOG 39 opened for the fix.
 - **Walking hidden windows opens the Start menu**, reported from the
-  keyboard. `win/checks/probe.c` has known this since phase 0 and refuses to
+  keyboard. `research/guest/probe.c` has known this since phase 0 and refuses to
   do it; gremote's `TREE` offers `hidden=1` with `msaa=1` defaulted on and
   says nothing. BACKLOG 39.
 - **One root cause with four symptoms, which is the evening's best
@@ -944,112 +951,163 @@ for. 0.15c and 0.16 closed with it.
   correctness one.
   `research/measurements/shutdown-p200-20261023.txt`.
 
-### What is left, and exactly how to take it
+### What the stage did not take, and how to take it later
 
-**FIRST, THE BOX NEEDS A KEYSTROKE.** The session of 2026-10-23 ended with
-the P200 powered on and reachable at 10.0.0.158 -- ping answers, port 139 is
-open, its MAC is still `00:00:c0:04:81:97` -- but **gremote is not running**,
-so 7401 refuses. It stopped when `EXPLORER.EXE` was killed over the wire with
-`force=True`, which took gremote down with it; `BACKLOG 40` is that finding
-and `win/exec/process.cpp` is the guard that said not to. `RunServices` runs
-at boot and there is no remote `QUIT` by design, so nothing short of someone
-at the machine starts a new copy:
+This section was the running plan for the rest of the stage while it ran.
+Everything in it has since been done or waived, and it is kept as the record
+of the last three items and of one result that arrived through it.
 
-    C:\GREMOTE\GREMOTE.EXE          (Start > Run), or just reboot
+**BACKLOG 9 -- the foreground lock -- CLOSED**
+(`research/measurements/focus-p200-20261023.txt`). It turned out to be
+drivable after all, once `focusprobe` was given a log beside the exe the way
+`probe.c` has had one since phase 0. `SetForegroundWindow` works from a
+background process on Windows 98, the raised window is genuinely on top at
+its own centre, and `Input::clickWindow` on a covered window returns 0. The
+emulator's surprising result reproduces on silicon: `BringWindowToTop` and
+`SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are ignored across a process
+boundary, so activation is the only route. The `AttachThreadInput` fallback
+in `focus()` stays the untaken path.
 
-**Then drive the sitting with `research/probes/trayprobe.py`**, which prints
-the running order below and tails every `tray:` line as it appears, so the
-person at the keyboard does the physical acts and nothing else:
+Worth keeping: the two earlier attempts that returned zero bytes were on the
+box with three abandoned `ui` lane threads. A program whose whole job is
+foreground manipulation could not emit one line on that desktop -- the
+fourth symptom of the one defect above.
+
+**X1, the injection battery, is done** and the machine survived it
+(`research/measurements/inject-p200-20261023.txt`).
+
+**The two waived readings are all that is left, and both want somebody at
+the keyboard.** The standby runs: set the shortest standby in Control Panel,
+leave the machine alone with `prevent_sleep=0`, and read for `tray: the
+machine asks to suspend` -- **silence there IS the finding**, because a box
+that suspends without asking is one no veto can ever help. Then the tray
+toggle, which arms run 3 and is also the checkmark-and-`[awake]` check, with
+no restart needed because the menu is deliberately not persisted
+(`config.cpp`, `tray.cpp`). Then run 3, where `REFUSED` followed by `the
+suspend was abandoned` is the veto working. **Note `tray.cpp` logs the first
+of each kind and then every EIGHTH**, so a reading that expects one line per
+ask will under-count. Finish with tray **Exit** for `tray: Prevent sleep
+OFF` and its count -- the line the Wine suite structurally cannot see,
+because `GuestServer` stops the guest by terminating it and no teardown
+runs. And `PROBE.EXE platform` with gremote stopped is the third point on
+the line `memory-p200-20261023.txt` already has two of.
+
+The toggle and Exit **cannot** be driven from here: `refused_self`, from
+`Input::isOurs()`, because the automation tier will not send input to its
+own process. That is `PLAN.md`'s rule working, not a gap.
+
+`research/probes/trayprobe.py` prints the running order and tails every
+`tray:` line as it appears, so the sitting is the physical acts and nothing
+else. The secret is in `vm/gremote.ini`, which is gitignored:
 
     .venv/bin/python research/probes/trayprobe.py \
         --remote 10.0.0.158:7401:<secret> --minutes 45
 
-The secret is in `vm/gremote.ini`, which is gitignored.
-
-All of what follows needs the box powered on and somebody at its keyboard. In
-the order that wastes the fewest sittings:
-
-1. ~~**BACKLOG 9 -- the foreground lock.**~~ **CLOSED**
-   (`research/measurements/focus-p200-20261023.txt`). It turned out to be
-   drivable after all, once `focusprobe` was given a log beside the exe the
-   way `probe.c` has had one since phase 0. `SetForegroundWindow` works from
-   a background process on Windows 98, the raised window is genuinely on top
-   at its own centre, and `Input::clickWindow` on a covered window returns 0.
-   The emulator's surprising result reproduces on silicon: `BringWindowToTop`
-   and `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are ignored across a process
-   boundary, so activation is the only route. The `AttachThreadInput`
-   fallback in `focus()` stays the untaken path.
-
-   Worth keeping: the two earlier attempts that returned zero bytes were on
-   the box with three abandoned `ui` lane threads. A program whose whole job
-   is foreground manipulation could not emit one line on that desktop --
-   the fourth symptom of the one defect below.
-2. **K2 -- what is left of the tray sitting.** Most of it was done over the
-   wire and is written up in `research/measurements/tray-p200-20261023.txt`:
-   the icon judged from a photograph, the menu rendering with the live
-   client in its header and the checkmark matching `automation=2`, the
-   dismiss on an outside click, and both taskbar lines from the autostart
-   reboot. Two things remain and both need somebody there.
-
-   **The standby runs.** Set the shortest standby in Control Panel, leave
-   the machine alone with `prevent_sleep=0`, and read for `tray: the machine
-   asks to suspend` -- **silence there IS the finding**, because a box that
-   suspends without asking is one no veto can ever help. Then the tray
-   toggle, which arms run 3 and is also the checkmark-and-`[awake]` check,
-   with no restart needed because the menu is deliberately not persisted
-   (`config.cpp`, `tray.cpp`). Then run 3, where `REFUSED` followed by `the
-   suspend was abandoned` is the veto working. **Note `tray.cpp` logs the
-   first of each kind and then every EIGHTH**, so a reading that expects one
-   line per ask will under-count. Finish with tray **Exit** for `tray:
-   Prevent sleep OFF` and its count -- the line the Wine suite structurally
-   cannot see, because `GuestServer` stops the guest by terminating it and
-   no teardown runs.
-
-   The toggle and Exit **cannot** be driven from here: `refused_self`, from
-   `Input::isOurs()`, because the automation tier will not send input to its
-   own process. That is `PLAN.md`'s rule working, not a gap.
-
-   **And `PROBE.EXE platform` with gremote stopped**, which is the
-   no-gremote memory baseline -- impossible over the wire by construction,
-   since asking gremote how much memory is free without gremote requires
-   gremote not to be running. It is the third point on the line
-   `memory-p200-20261023.txt` already has two of.
-
-   `research/probes/trayprobe.py` tails every `tray:` line as it appears, so
-   the sitting is the physical acts and nothing else.
-
-3. **X1 -- the injection battery.** `TEST.BAT` part three and
-   `AUTOCHK.EXE --health` behind it, then a reboot whatever it says. Last and
-   alone, because those three have killed Explorer once and ended a September
-   session with the machine spinning.
-**S3 is done** -- taken for free from an ordinary shutdown, and it produced
-the other half of the discrimination.
-
-And the autostart loose end closed as a false alarm: the boot that seemed to
-repeat it had no DHCP lease, so nothing answered at that address at all. A
-refused connection and a timed-out one are different diagnoses and treating
-them as one cost a wrong theory about the registry. The single genuine
-non-start after S2 stays unexplained but is a one-off, not a pattern.
-
-The stage does not close until 1-3 are taken.
+**And the autostart loose end closed as a false alarm**: the boot that
+seemed to repeat it had no DHCP lease, so nothing answered at that address
+at all. A refused connection and a timed-out one are different diagnoses and
+treating them as one cost a wrong theory about the registry. The single
+genuine non-start after S2 stays unexplained but is a one-off, not a
+pattern.
 
 ## Stage 6 — a clean install, and publish
 
-**The gate: a from-scratch install on a clean Windows 98 install, not the dev
-VM.** Nobody has ever installed this as a new user. The ISO and the floppy kit
-are the real install path, `SETUP.BAT` and `GREMOTE.INI`'s fresh-install write
-have only ever run on a machine that already had a copy, and `GREMOTE.INI` versus
-`gremote.ini` on FAT is the kind of thing that only bites a stranger.
+**The gate: a from-scratch install on a Windows 98 machine that has never
+had a copy, done by somebody who is not the author, from the artefacts
+alone.** Everything else in this stage is small, and it is small because the
+project has been written down as it went. The gate is not small, and stage 5
+is the reason to take it seriously.
 
-Everything else here is small, and it is small because the project has been
-written down as it went:
+### Why the gate, and what stage 5 proved about it
 
-- A README that addresses somebody who has not read `PLAN.md`.
-- `LICENSE` as a file. MIT is already asserted in the VERSIONINFO block and
-  nowhere else.
-- The security posture stated rather than inherited: a plaintext shared secret on
-  a trusted LAN segment, the listener bound to one interface, and what the secret
-  grants when presented (approving permission prompts and feeding fabricated tool
-  results to the agent, both at once).
-- Whatever stage 1's sweep did not reach, and the Phase 6 write-up that never
-  happened.
+**The autostart on the Pentium 200 had never once fired.** `GREMOTE.REG`
+named `C:\GASTON\GREMOTE.EXE`, the program was in `C:\GREMOTE`, and
+`RunServices` therefore started nothing at every boot for the life of that
+install. Every apparent autostart was somebody at the keyboard, and nobody
+noticed for weeks, because the failure mode of a working-by-accident install
+is that it works. That is exactly the class of defect this stage exists to
+catch, and it was found by accident rather than by the gate.
+
+Two consequences:
+
+- **The P200 is not the machine for this stage.** It is in a layout no
+  current document endorses, it has a tuner card, RealPlayer and a resident
+  TV scheduler on it, and it has been hand-fixed. It is a good machine for
+  "does this work on real silicon", which is what it was used for. It is the
+  wrong machine for "does a stranger's install come out right". Stage 6
+  wants the QEMU guest reinstalled from nothing, or a second physical box,
+  or both.
+- **The gate's first assertion is a cold boot with nobody logged on.** Not
+  "gremote answers" -- it answered on the P200 for weeks without the
+  autostart working. `GREMOTE.LOG` must say
+  `tray: no notification area yet (no shell is running)` and then
+  `listen: on 0.0.0.0:7401`, with no one at the keyboard, before anything
+  else is believed.
+
+### The install path, as it actually is
+
+Three artefacts, and they are not the three this section used to name:
+
+- **The tools ISO** (`tools/gen/mktools-iso.sh`) carries the client, the
+  server, `SETUP.BAT` and every check binary. It is the full path and it
+  needs a CD drive.
+- **The kit** (`tools/gen/mkw98kit.sh`), **884,049 bytes as of 2026-10-24**,
+  59% of a floppy. It was a floppy and is now a USB stick as well --
+  `--dest` writes it to a mounted volume and verifies byte for byte after a
+  `sync`. The floppy figure is a fallback rather than a ceiling.
+- **`Remote.ship()`**, which put the client on the P200 over the wire onto a
+  box with no CD. Not an install path for a stranger, but it is how a second
+  build reaches a machine, so it belongs in whatever gets written down.
+
+`SETUP.BAT` and `GREMOTE.INI`'s fresh-install write have still only ever run
+where a copy already existed. The FAT case question -- `GREMOTE.INI` against
+`gremote.ini` -- is handled in `win/remote/config.h` and has never been
+exercised by somebody who did not already know the answer.
+
+**The kit's INI gate is already right and should stay.** `mkw98kit.sh`
+refuses to build a kit carrying `secret=vm-secret` or an empty `allow=`,
+because permissive-and-bootable is the bad pair on a LAN. A stranger
+therefore cannot be handed a kit that grants their desktop to the segment,
+which is half of the security posture below already enforced in code rather
+than asserted in prose.
+
+### What is left to write
+
+- **A release build.** There is none: no CI, no packaging script, nothing
+  that turns a checkout into something a stranger can download. The shape
+  asked for is a single build that produces **two zips** -- the guest side
+  and the host side -- and it can be a GitHub Action or a shell script; the
+  mechanism is not the point, having one is. `mkw98kit.sh` already builds,
+  audits and zips the guest kit, so most of the first zip exists and wants
+  wrapping rather than writing.
+- **The security posture stated rather than inherited.** A plaintext shared
+  secret on a trusted LAN segment, the listener bound to one interface, and
+  what the secret grants when presented: approving permission prompts and
+  feeding fabricated tool results to the agent, both at once. Stage 5 adds a
+  third thing worth saying out loud -- `automation=2` grants the desktop,
+  and the client's own process is the only thing the automation tier refuses
+  to drive.
+- **The README is written and now wants correcting, not authoring.**
+  Brought up to date 2026-10-24 (the language, the status, the layout, the
+  build block); what is left is whatever a stranger finds wrong by using it.
+- ~~`LICENSE` as a file.~~ **Done** -- MIT at the repo root, in `NOTICE`, in
+  `README.md` and in the VERSIONINFO block.
+- Whatever stage 1's sweep did not reach, and the Phase 6 write-up that
+  never happened.
+
+### Carried in from stage 5, open
+
+- **BACKLOG 40** -- killing the shell over gremote kills gremote. The guard
+  is tightened so it cannot happen by asking; why it happens is unexplained,
+  and the repeat is refused by the permission classifier.
+- **BACKLOG 41** -- a `wait_for` that cannot match reports `truncated`
+  rather than `timeout`, because the walk hits its node cap on a desktop
+  with 61 top-level windows. 185 of 186 `autocheck` rows pass on the P200
+  and this is the one that does not.
+- **The two waived P200 readings** -- the prevent-sleep standby runs and the
+  no-gremote memory baseline. Neither blocks this stage; both want somebody
+  at that keyboard.
+- **BACKLOG 15's reproduction question** -- the injection battery passed on
+  the P200 with health ALL PASS after every step, but not from a cold boot
+  with nothing else resident, so whether the September wedge reproduces is
+  still unanswered.
