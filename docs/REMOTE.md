@@ -1152,16 +1152,21 @@ The Phase 6 agent tools then need only handlers and bridge work.
 
 Things only the real box can answer, collected so the first session covers them.
 
-**Which box, though.** Several files in `research/measurements/` are named
-`*-p200-*.txt` and were taken on the **Athlon XP 2000+** at 10.0.0.125 --
-`keys-named-p200-*`, `exit-codes-via-batch-p200-*`, `sleep-mechanisms-p200-*`,
+**Which box, though. The date tells you, the name does not.** Several
+files in `research/measurements/` are named `*-p200-*.txt` and were taken on
+the **Athlon XP 2000+** at 10.0.0.125 -- `keys-named-p200-*`,
+`exit-codes-via-batch-p200-*`, `sleep-mechanisms-p200-*`,
 `batch-eol-and-dir-b-p200-*`, `inifile-absent-key-p200-*`, the last of which
-calls the Athlon "the P200 checklist box" outright. The actual Pentium 200 MMX
-appears only in `p200-run1-20260926.txt` and `p200-run2-20260926.txt`. The
-filenames were not renamed because four documents cite them; read the machine
-off the file's own header, never off its name. An item below marked answered on
-the Athlon is answered on *real hardware* and not on the slow machine, which
-matters for anything with a clock in it.
+calls the Athlon "the P200 checklist box" outright.
+
+The actual Pentium 200 MMX is **`p200-run1/2-20260926.txt`** (the September
+visit) and **the thirteen `*-p200-20261023.txt` files** from stage 5.
+Anything else named `p200` is the Athlon. The filenames were not renamed
+because several documents cite them; read the machine off the file's own
+header, never off its name -- every 2026-10-23 file carries it, self-
+identified from HELLO. An item below marked answered on the Athlon is
+answered on *real hardware* and not on the slow machine, which matters for
+anything with a clock in it.
 
 - `oleacc.dll` present, and its version. **ANSWERED 2026-10-04: present on
   the Athlon XP's retail 98**, and it answers properly rather than merely
@@ -1172,17 +1177,25 @@ matters for anything with a clock in it.
   (`research/measurements/ui-lane-real-hw-20261004.txt`). With Progman in front,
   a `focus` step asked for by gremote -- a process with no window of its own
   on the screen -- put Notepad in the foreground, and `Input::focus`'s
-  AttachThreadInput fallback was not needed. The P200 itself is still a
-  different machine. *Narrowed 2026-10-02:* the lock is real on 98 and
+  AttachThreadInput fallback was not needed. **Confirmed on the Pentium 200
+  2026-10-23** (`research/measurements/focus-p200-20261023.txt`, BACKLOG 9
+  closed): same answer on the slow machine, the raised window genuinely on
+  top at its own centre, a click on a covered window refused, and
+  `BringWindowToTop` and `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` ignored
+  across a process boundary exactly as under TCG -- so activation is the
+  only route and the fallback stays the untaken path.
+  *Narrowed 2026-10-02:* the lock is real on 98 and
   measured at 15000 ms, and `Input::focus` already relaxes it around the one
   call that needs it and puts it back (`win/automation/input.cpp`). What is
   untested is whether that works from a process with **no window on screen,
   started before anyone logged on** -- which is exactly what gremote is, and
   what its ui lane now asks on every `focus` step.
-- `COMMAND.COM /c` exit codes: is the child's errorlevel returned. *Answered
-  on the VM (2026-09-26, `research/measurements/execprobe-vm-gui-20260926.txt`):
-  no, always 0, even for a program that does not exist; a direct spawn
-  returns the real code. The P200 only needs to confirm.*
+- ~~`COMMAND.COM /c` exit codes: is the child's errorlevel returned.~~
+  **ANSWERED on the VM 2026-09-26 and CONFIRMED on the Pentium 200
+  2026-10-23**: no, always 0 -- `EXIT 0`, `EXIT 3`, `EXIT 7` and a program
+  that does not exist all come back 0, while a direct spawn returns the real
+  code. (`research/measurements/execprobe-vm-gui-20260926.txt`,
+  `research/measurements/wire-p200-20261023.txt`.)
 - Handle inheritance of sockets into children on 98. *Answered on the VM
   (same file): a listening socket is not kept alive by an inheriting child;
   closing it in the parent frees the port. Wine and NT differ.*
@@ -1199,6 +1212,17 @@ matters for anything with a clock in it.
   `SetForegroundWindow`/`PostMessage` pair), that Exit leaves no ghost icon
   behind -- and neither does a shutdown, which takes the same
   `signalStop()` path with nothing joined.
+
+  **MOSTLY ANSWERED 2026-10-23**
+  (`research/measurements/tray-p200-20261023.txt`). Both taskbar lines came
+  from the autostart reboot -- `no notification area yet` before the shell,
+  then the icon added when it appeared. The icon was judged from a
+  photograph: legible, correctly sized, and not confusable with an absence.
+  The menu renders with the live client in its header and the checkmark
+  matching `automation=2`, and it dismisses on an outside click. **What is
+  still owed is Exit and the ghost icon**, which cannot be driven from
+  Linux: `Input::isOurs()` refuses to send input to our own process, which
+  is the design working rather than a gap.
 - **Prevent sleep, and it is the one item here with an open question behind
   it.** `win/remote/tray.h` argues the four mechanisms; what no document
   settles, and what Wine and the QEMU guest cannot settle either (that guest has
@@ -1224,6 +1248,16 @@ matters for anything with a clock in it.
      and which message it names settles `WM_POWERBROADCAST` versus the obsolete
      `WM_POWER`. **Silence means no veto can ever help**, and the nudge is the
      only layer that can.
+  2 and 3 were **WAIVED by the owner 2026-10-23** rather than measured,
+  and so are still unknown: both need the shortest standby set in Control
+  Panel and a genuinely idle machine, and the tray toggle that arms run 3
+  cannot be clicked from here at all (`refused_self`). Whether this box asks
+  before it suspends, and whether the veto takes, remains an open question
+  with no number behind it. `research/probes/trayprobe.py` tails every
+  `tray:` line live for whoever takes them. Note `tray.cpp` logs the first
+  of each kind and then **every eighth**, so a reading that expects one line
+  per ask will under-count.
+
   3. `prevent_sleep=1`, same wait. `REFUSED` then
      `the suspend was abandoned` is the veto working.
      `the machine is suspending ANYWAY` is it being asked and ignored. Neither

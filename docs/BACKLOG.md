@@ -45,12 +45,17 @@ exercises the adaptive-codec thresholds but never fills the guest's queue.
 
 ## 1b. Real hardware gate (period PC)
 
-**Status:** open since Phase 1.9; deferred while developing on QEMU Win98 SE domain.
+**Status: CLOSED 2026-10-23.** Open since Phase 1.9 and deferred through
+four phases of QEMU development; run on the box in stage 5, which left it
+reachable on the LAN. Thirteen measurement files,
+`research/measurements/*-p200-20261023.txt`, and `ROADMAP.md`'s stage 5
+section is the verdict. The rest of this entry is the record of how it
+stayed open so long.
 
 `PLAN.md:719-721` moved the physical hardware gate up from Phase 2 to Phase 1 so
 hardware quirks, RichEdit issues, and pagination bugs wouldn't stack. Four phases of
 software have accumulated on QEMU without running on the LAN's physical Pentium 200 MMX
-box (`PROGRESS.md:35`). The physical PC is now available and ready to run the validation
+box. The physical PC is now available and ready to run the validation
 gate.
 
 **Plan (2026-09-25):** drive the box with `gremote.exe`, `docs/REMOTE.md` step 4.
@@ -82,17 +87,26 @@ is gremote over port 7401, the way the Athlon has been driven since 2026-10-01.
 **And the channel is a USB stick, not a floppy (2026-10-23)** -- the box reads
 one, so `mkw98kit.sh --dest` writes the kit to a mounted volume and the 1.44 MB
 ceiling is a fallback figure rather than a limit.
-Stage 5 is where that gets used; `docs/stage5-plan.md` is the plan. `tools/gen/mkw98kit.sh` gains `GREMOTE.EXE` in stage 1 so that channel
-exists when the box does -- the kit had no size check at all when this was
-written. It has one now, and the figure has moved: 567 KB of a 1.44 MB floppy
-once rebuilt, and about 900 KB after stage 5 adds `GUPDATE.EXE`,
-`FOCUSPROBE.EXE` and a deflate corpus.
+Stage 5 is where that got used, and `docs/stage5-plan.md` is the plan it
+ran to. `tools/gen/mkw98kit.sh` gained `GREMOTE.EXE` in stage 1 so that
+channel existed when the box did -- the kit had no size check at all when
+this was written. It has one now, and the figure has settled: **884,049
+bytes, 59% of a 1.44 MB floppy**, measured 2026-10-24, with `GUPDATE.EXE`,
+`FOCUSPRB.EXE` and the 214,827-byte deflate corpus in it. The script prints
+that total on every build, so it is never an estimate again.
 
-**And a naming hazard worth more than it looks.** Most `research/measurements/*-p200-*.txt`
-files are **Athlon XP** runs; `inifile-absent-key-p200-20261001.txt` even calls
-the Athlon "the P200 checklist box". The real Pentium 200 appears only in
-`p200-run1/2-20260926.txt`. Read a filename as the machine and this gate looks
-half-closed when nothing has run on it.
+**And a naming hazard worth more than it looks.** The older
+`research/measurements/*-p200-*.txt` files are **Athlon XP** runs;
+`inifile-absent-key-p200-20261001.txt` even calls the Athlon "the P200
+checklist box". Reading a filename as a machine is how this gate came to
+look half-closed when nothing had run on it.
+
+**The discriminator is the date, not the name.** Thirteen files carry the
+`-p200-20261023` suffix and every one of them is the real Pentium 200;
+`p200-run1/2-20260926.txt` are the September visit to the same box. Anything
+else named `p200` is the Athlon. Each 2026-10-23 file also carries the
+machine in its own header -- self-identified from HELLO, 32,284 KB, MAC
+`00:00:c0:04:81:97` -- which is the fix this hazard actually asked for.
 
 ---
 
@@ -1922,9 +1936,31 @@ machine survived it is not finished, however green its own output is.
   and section D needs rethinking before D2 is built on it. If it does not,
   the battery is the place to look next.
 
-Until this is closed, treat `inproc` and the injection gates as
-**attended-only**: run them when somebody can watch the guest, and not as
-part of an unattended sweep.
+**[2026-10-23] Two of the four are done, on the Pentium 200.** Stage 5's X1
+ran `TEST.BAT` part three **last and alone**, with `AUTOCHK.EXE --health`
+between every step so a wedge would have had one suspect, and health came
+back **ALL PASS after every one**
+(`research/measurements/inject-p200-20261023.txt`). Neither the Explorer
+kill nor the September spin recurred, and the box took a reboot afterwards.
+So the health check exists and is used, and the gates have a running order
+that does not measure everything else on a machine they may have damaged.
+
+What that run does **not** settle is the fourth sub-item: it was not a cold
+boot with only 0.15d and 0.15f and an hour of nothing afterwards. The
+machine it ran on had RealPlayer, a TV tuner and the client resident
+throughout, which is a harder test for a wedge and a worse one for
+attribution. **The reproduction question stays open.**
+
+Two findings came out of it that belong here, because both are things
+reasoning would have got wrong: **`WH_GETMESSAGE` was the only one of four
+hook types that delivered** -- the other three installed cleanly and
+produced nothing -- and the deny list holds case-insensitively, which is the
+comparison that matters, since a `strcmp` would let `explorer.exe` through.
+
+Until the reproduction question is closed, treat `inproc` and the injection
+gates as **attended-only**: run them when somebody can watch the guest, and
+not as part of an unattended sweep. The P200 run obeyed that and is the
+model for the next one.
 
 ## 16. An agent can be told a control is occluded and have no way to fix it
 
@@ -4180,7 +4216,7 @@ was driving `TREE` with `hidden=1` from Linux: "that ghost opening of start
 menu bug (we saw it in the accessibility i think) is still happening."
 
 **The cause is already written down, in the program that refuses to do it.**
-`win/checks/probe.c`, above `g_uiw_all`:
+`research/guest/probe.c`, above `g_uiw_all`:
 
 > Walking hidden windows MOVED the desktop: `probe msaa` left the Start menu
 > open every run while `probe screen`, same driving, never did. A closed Start
@@ -4223,7 +4259,7 @@ argues for the second:
 
 **It is not only a correctness problem, which is the argument for (2).**
 Measured the same evening, same machine
-(`docs/measurements/wire-p200-20261023.txt` and the session that produced it):
+(`research/measurements/wire-p200-20261023.txt` and the session that produced it):
 
     tree scope=desktop msaa=1 hidden=0      315 ms      53 nodes
     tree scope=desktop msaa=0 hidden=0       92 ms      53 nodes

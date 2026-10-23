@@ -384,7 +384,7 @@ alternative is streaming 83 records per event across a link the project
 budgets at 5 KB/s. The compiled selector goes down as a small struct, the
 same shape as the sync layer's existing filters.
 
-## What only the P200 can answer — **four and a half of five, 2026-10-23**
+## What only the P200 can answer — **all five, 2026-10-23**
 
 Every millisecond above is from the emulator. These were the five questions,
 and the Pentium 200 at 10.0.0.158 answered them over gremote rather than from
@@ -410,14 +410,25 @@ the floppy kit this section anticipated:
   poll — is 111 ms naive / **29 ms filtered**, with the absent template
   constructed from a histogram so a miss is certain. All 600 rows fit the
   buffer at 800x600. (`deflate-p200-20261023.txt`)
-- **the foreground lock, yes; injection, NOT YET.**
+- ~~the foreground lock, and injection~~ **both yes.**
   `SetForegroundWindow` works from a background process and the raised window
   is on top at its own centre; `BringWindowToTop` and
   `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are ignored across a process
   boundary exactly as under TCG, so activation is the only route
-  (`focus-p200-20261023.txt`, BACKLOG 9 closed). **Injection is unmeasured**
-  — it is `TEST.BAT` part three, which runs last and alone because those
-  steps have killed Explorer before, and it needs somebody at the machine.
+  (`focus-p200-20261023.txt`, BACKLOG 9 closed).
+
+  **Injection works on real silicon and can be aimed**, measured by
+  `TEST.BAT` part three run last and alone, with `AUTOCHK --health` between
+  each step so a wedge would have had one suspect. Neither the Explorer kill
+  nor the September spin recurred. Two findings came with it, and both are
+  things reasoning would have got wrong:
+  **`WH_GETMESSAGE` was the only one of four hook types that delivered** —
+  the other three installed cleanly and produced nothing — and the deny list
+  holds case-insensitively, which is the comparison that matters.
+  And a finding **against** D4: MSHTML, the one target the GDI text patch
+  exists for, imports `TextOutW`, `ExtTextOutW`, `DrawTextW` and `DrawTextA`,
+  none of which D4 patches.
+  (`research/measurements/inject-p200-20261023.txt`)
 
 ## The tool surface
 

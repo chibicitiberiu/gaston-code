@@ -1,7 +1,7 @@
 # Progress
 
-Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
-that gets re-planned once Phase 0 answers land.
+Rolling log. Plan is `PLAN.md`. Phases 0 through 5 shipped; phase 6 is
+part-built, and `ROADMAP.md` is the order the rest of it goes in.
 
 **Current goal: `ROADMAP.md` stage 6 — a clean install, and publish.**
 Stages 1 and 2 closed 2026-10-11, stage 3 on 2026-10-12, stages 3b and 3c on
@@ -37,6 +37,15 @@ Two readings were waived rather than taken: the prevent-sleep standby runs
 and the no-gremote memory baseline. `ROADMAP.md`'s stage 5 section says
 what they would have answered.
 
+**What stage 6 inherits from that.** The autostart finding is the argument
+for the stage: an install can work for weeks while a piece of it has never
+once run, and the only thing that catches it is a cold boot with nobody at
+the keyboard. The P200 is the wrong machine to prove it on -- it is in a
+hand-fixed layout with a tuner card and a TV scheduler resident -- so stage
+6 wants a guest reinstalled from nothing. And there is still **no release
+build of any kind**: no CI, no packaging, nothing that turns a checkout into
+two zips a stranger can download.
+
 Phase 5 (Attach) shipped; 5.1 is below, and 5.2/5.3 went in without a
 write-up of their own. Phase 6 is part-built: `ui`, `input`, `shot`,
 `focus`, `launch`, `ps`, `kill`, the clipboard pair **and `ocr` (stage 4)**
@@ -51,10 +60,12 @@ broadcast, and that `RunServices` runs at boot rather than per session — so
 before stage 4, one logoff cost the machine its remote access until a
 reboot.
 
-Phases 0–5 are done and demoed on the real guest (the QEMU Win98 SE domain, and
-since 2026-10-01 the Athlon XP box over `gremote`; Phase 1.9's **Pentium 200**
-hardware gate remains open in `BACKLOG.md` §1b, and it is a different machine
-from the Athlon whatever the `*-p200-*.txt` filenames suggest). Phase 4's own
+Phases 0–5 are done and demoed on the real guest: the QEMU Win98 SE domain,
+the Athlon XP box over `gremote` since 2026-10-01, and **the physical Pentium
+200 MMX since 2026-10-23**, which closed Phase 1.9 and `BACKLOG.md` §1b. The
+Athlon and the P200 are different machines whatever the older `*-p200-*.txt`
+filenames suggest; the `-20261023` suffix is the one that means the real
+Pentium. Phase 4's own
 list is closed except for R7 (multiple clients) -- **and R7 is now IN**, as
 `ROADMAP.md` stage 3c, taking `BACKLOG.md` §7's implementation list with it.
 
@@ -148,7 +159,7 @@ Linux side first, so the guest develops against something real.
 | 1.6 | `bridge/fakegui.py` — Linux CLI speaking the wire protocol | **done** |
 | 1.7 | `win/` — window, RichEdit, edit box, reader thread, log, status bar | **done** — 42KB, builds + runs |
 | 1.8 | Stop button + `interrupt()` | **done** |
-| 1.9 | Real hardware gate (period PC) | blocked |
+| 1.9 | Real hardware gate (period PC) | **done — PASS 2026-10-23**, thirteen `research/measurements/*-p200-20261023.txt` |
 | 1.10 | **Guest gate: `netcheck.exe` on real Win98 -> bridge -> Claude** | **done — PASS** |
 | 1.11 | **Guest gate: `retroclaude.exe` GUI on real Win98** | **done — PASS** |
 
