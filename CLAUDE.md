@@ -119,3 +119,31 @@ three statics), not a local cleanup path in the caller.
 
 **Do not touch the `retrobridge` libvirt domain** in `qemu:///system` -- it
 belongs to an unrelated project.
+
+**Before acting on a real machine, ask whether a bad outcome leaves you able
+to reach it.** gremote is single-session, has no remote `QUIT` by design, and
+starts only at boot. Those three together mean anything that disturbs
+gremote, the shell, or a session end is potentially one-way, and recovery
+costs somebody a walk to another room. If the answer is no, it is a keyboard
+step or it waits -- whatever the API technically exposes. Written after a
+session that locked itself out twice in one evening, each time with a warning
+already in front of it:
+
+- **A flag that exists is not permission.** `win/exec/process.cpp` refuses to
+  kill `EXPLORER.EXE` and logs `refused without force`. `kill(force=True)`
+  gets past it, takes gremote down with the shell, and leaves the box
+  reachable by ping and by nothing else (BACKLOG 40). A guard with a note
+  attached is an argument, not a gate.
+- **Read the guest's log for damage, not just for results.** The first
+  hidden-window MSAA walk logged `thread: the ui lane did not stop within
+  5000ms` -- the guest saying it had abandoned a thread it could not stop.
+  Four more were run. By then the box had three wedged threads on it, would
+  not honour a reboot, and held its session slot for half an hour.
+- **A step the plan calls a keyboard step is one for a reason.** Overriding
+  that is overriding the plan, not just the guard.
+
+**Nothing untested reaches the box.** This is `docs/stage5-plan.md`'s first
+design principle and it keeps paying: `trayprobe.py` was correct by
+inspection and had two defects in its only interesting path, both found by
+running it against the QEMU guest and pulling the connection out from under
+it. Rehearse the driver, not only the thing it drives.
