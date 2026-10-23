@@ -1,0 +1,84 @@
+# TEST.BAT's measurement steps on the Pentium 200, taken over the wire
+# rather than from a floppy and a sitting.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB,
+#           800x600 at 24 bpp, at 10.0.0.158. A real install with a TV
+#           tuner and RealPlayer resident, and the client running.
+# Driven  : gremote's exec lane, one PROBE.EXE section at a time.
+# Date    : 2026-10-23
+#
+# docs/stage5-plan.md's K1 expected these from `TEST.BAT` at the keyboard
+# after a floppy was carried across town. The box turned out to be on the
+# LAN, so they were taken one exec at a time instead -- which also means
+# each step's output is attributable, rather than one long console scroll.
+# Steps 18-20 and the health check are in inject-p200-20261023.txt;
+# step 1, 4, 7 and 12 are in deflate-p200-20261023.txt.
+
+
+=== What the twelve remaining steps said ===
+
+  [2]  threads      3 of 3 started, 266 ticks; threads and a message loop
+                    coexist
+  [3]  exec         four captures, all PASS, 8-441 bytes in 46-260 ms
+  [5]  hooks        2000 sends unhooked 70 ms, hooked 60 ms with 2000 hook
+                    calls -- the hook is free at this scale, and the
+                    unhooked run being SLOWER is noise at a 55 ms tick
+  [6]  events       WinEvents 77 total, 73 about another process's window;
+                    WH_CBT 0 and 0
+  [8]  waitfor      WaitForControl 26 ms / 3 rechecks; WaitForText 0 ms / 1;
+                    an absent control at 1500 ms timed out in 3 rechecks;
+                    WaitForGone 45 ms / 3
+  [9]  screen       BitBlt full 190 ms; GetDIBits 24bpp 600 lines in 58 ms
+                    (1,440,000 bytes), 8bpp in 70 ms, RLE8 PASS 181,696
+                    bytes in 134 ms
+  [10] depths       the full ladder, raw vs deflate vs RLE per bpp
+  [11] verify       0.12a range PASS, 0.12b blt+whole PASS
+  [13] automation   oleacc loaded, AccessibleObjectFromWindow found
+  [14] uiwalk       **61 top-level windows, 133 nodes, depth 6.**
+                    A enum only 54 nodes 0 ms; B +class 0 ms;
+                    C +text at 2000 ms 44 ms total, none timed out;
+                    D +text at 200 ms 25 ms total, none timed out;
+                    E +msaa 268 ms, 54 objects, 26 named
+  [15] msaa         OBJID_WINDOW and OBJID_CLIENT both 54 nodes / 54 objs
+  [16] dom          the browser page as a tree
+  [17] autocheck    **186 rows, 185 pass, 1 FAIL** -- below
+
+**[14] is the one to keep.** `E + msaa` at 268 ms against `D + text` at
+25 ms is MSAA costing ~10x on the same 54 nodes, which corroborates the 3.4x
+the ui lane measured on a smaller tree (ui-cancel-p200-20261023.txt) and
+says the multiplier grows with the desktop. Note also "C +text 2000ms" and
+"D +text 200ms" differ by 19 ms with nothing timing out either way: on this
+desktop the per-window text budget is not being spent, so the 2000 in
+GREMOTE.INI costs nothing *here* and would cost everything on a desktop with
+one unresponsive thread.
+
+And this box has **61 top-level windows**, which is the number to hold in
+mind when reading any walk figure taken on the emulator.
+
+
+=== The one failure, and it is hardware-only ===
+
+  FAIL  steps-waitfor-times-out-at-its-own-timeout
+        at=0 status=truncated took=309 ()
+
+`research/guest/autocheck.cpp` asserts `at == 0 && status == "timeout" &&
+took < 1500` for a `wait_for` on a selector that can never match, with a
+300 ms step timeout. Two of the three hold: it failed at step 0 and it took
+309 ms. The status is wrong -- **`truncated`, not `timeout`**.
+
+`truncated` comes from `UIWAIT_TRUNCATED` in `win/automation/steps.cpp`:
+the wait's tree walk hit its node cap before it could decide. On Wine's
+near-empty desktop the walk never truncates and the case passes, which is
+why 465 wine-smoke tests are green. On a real desktop with 61 top-level
+windows it truncates every time.
+
+**This matters beyond the test.** A caller waiting for something that never
+appears is told `truncated`, which means "I could not see the whole desktop"
+and invites raising the cap or retrying. The truth is "it is not there".
+Those are different answers and a caller branching on status will take the
+wrong one -- on the machine the product is for, and never on the machine its
+tests run on. Recorded as BACKLOG 41.
+
+It is NOT caused by the hidden-window change made the same day: the
+`AUTOCHK.EXE` on this box is the 15 October kit build, and that change was
+in `win/ui/uiengine.cpp`, which autocheck does not link.

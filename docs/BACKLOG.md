@@ -4377,3 +4377,60 @@ its own, with no `force` and no remote caller involved. Tightening the guard
 protects against the deliberate case and nothing else.
 
 `gremote.exe` unchanged at 262,656 bytes, 267,177 committed at load.
+
+## 41. A wait that never matches says `truncated`, not `timeout`
+
+Found 2026-10-23 by running `autocheck` on the Pentium 200: **185 of 186
+rows pass and this one does not.**
+
+    FAIL  steps-waitfor-times-out-at-its-own-timeout
+          at=0 status=truncated took=309 ()
+
+`research/guest/autocheck.cpp` sets a `wait_for` on a selector that can
+never match, with a 300 ms step timeout, and asserts `at == 0 &&
+strcmp(status, "timeout") == 0 && took < 1500`. Two of the three hold. The
+status is `truncated`.
+
+**It is a real difference, not a flaky test.** `truncated` is
+`UIWAIT_TRUNCATED` in `win/automation/steps.cpp`, raised when the wait's
+tree walk hits its node cap before it can decide anything. This box has
+**61 top-level windows and 133 nodes** (`testbat-p200-20261023.txt`, step
+14). Wine's desktop has a handful, never truncates, and reports the
+`timeout` the test expects -- which is why `make wine-smoke` is 465 green
+while the hardware fails.
+
+**Why it matters past the test.** The two statuses mean opposite things to
+a caller:
+
+  * `timeout`  -- I searched and it is not there. Give up, or wait longer.
+  * `truncated` -- I could not see the whole desktop. Raise the cap, narrow
+    the scope, try again.
+
+A caller that branches on status takes the second path when the truth is the
+first, on the machine this product is for and never on the machine its tests
+run on. An agent told `truncated` will reasonably retry with a bigger cap
+and get `truncated` again.
+
+**What closing it would take.** The wait knows both facts -- that the walk
+truncated AND that its own deadline passed -- and currently reports only the
+first. Three shapes, and the measurement above does not pick between them:
+
+1. **Let the deadline win.** If the step's timeout has expired, report
+   `timeout` even if the walk truncated; a truncated walk that also ran out
+   of time is a timeout as far as the caller is concerned. Smallest change,
+   and it loses the information that the desktop was too big to see.
+2. **Report both**, e.g. `timeout` with `detail` saying the walk was
+   truncated. Keeps the distinction where somebody can read it without
+   making the caller branch on it.
+3. **Do not truncate for a wait.** A wait is looking for one thing and could
+   stop at the first match rather than building the whole tree, which would
+   make the cap irrelevant here. Biggest change and the only one that
+   removes the failure mode rather than relabelling it.
+
+(2) is probably right -- the caller gets one status to branch on and a human
+reading a log still learns the desktop was large -- but this is a decision
+about the step contract, not a bug fix, so it is recorded rather than taken.
+
+**Not started.** No hardware is needed to reproduce it any further: the cap
+and the node count are both known, so a desktop with enough windows
+reproduces it anywhere.
