@@ -1,0 +1,125 @@
+# K2, the tray sitting, as far as the wire can take it -- which turned out
+# to be most of the way, and the part it cannot reach is refused BY DESIGN
+# rather than by caution.
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 800x600x24, at
+#           10.0.0.158. Same box as the other *-p200-20261023.txt files, a
+#           real install with a TV tuner and RealPlayer resident.
+# Driven  : gremote -- screenshots, the UI lane's input steps, and
+#           GREMOTE.LOG.
+# Date    : 2026-10-23
+
+
+=== The icon: it works, and it says nothing ===
+
+`win/remote/tray.cpp` loads `IDI_APPLICATION` at `SM_CXSMICON`, and on this
+machine's notification area that is the blandest thing present. Reading left
+to right the tray holds: the scheduling agent (a clock over a document),
+**ours (a plain window outline)**, the network monitor, the volume horn, a
+black arrow, and RealPlayer's logo. Five of the six say what they are at a
+glance and ours does not.
+
+It is legible, correctly sized, and not confusable with an *absence* -- the
+judgement this item asked for is only whether it reads as a program, and it
+does. Whether it should read as THIS program is a separate question with an
+obvious answer and a cheap fix: `tools/gen/mkicon.py` already draws this
+project's icons, including the three connection lights redrawn the same
+evening, so a 16x16 server glyph is an hour's work. Not done, because
+nothing measured says it must be.
+
+
+=== The pre-logon half and the TaskbarCreated half, both from one boot ===
+
+docs/stage5-plan.md's K1 step 3 wanted the first; K2 wanted the second from
+an Explorer restart. The reboot that proved the autostart fix produced both,
+because a boot runs the same sequence an Explorer restart does:
+
+  20:43:51.990 tray: no notification area yet (no shell is running); the
+               icon will appear when the taskbar does
+  20:44:11.980 tray: the taskbar appeared; adding the icon
+  20:44:12.970 tray: icon added to the notification area
+
+Twenty seconds between gremote starting and the shell existing, and the icon
+appearing on its own when it did. That is `TaskbarCreated` reaching a window
+created before the shell -- `win/remote/tray.cpp`'s handler, which says it
+fires "either because this is the first logon (gremote was already up,
+started from RunServices) or because Explorer crashed and restarted".
+
+**The mechanism is the same message either way**, so this is the evidence
+the item wanted, taken from a logon rather than a crash. What a deliberate
+Explorer kill would add is only that the crash path reaches the same code,
+and an attempt at one over the wire took gremote down with the shell
+(BACKLOG 40) -- so the cheap half is done and the expensive half is not
+worth a second outage.
+
+
+=== The menu renders, and it reports the truth ===
+
+Right-clicking the icon over the UI lane opens it:
+
+    Gaston Remote: client from 10.0.0.45, port 7401     (greyed header)
+    Prevent sleep
+    ------
+    Screen: off
+    Screen: read only
+  * Screen: read and drive
+    ------
+    Exit
+
+Three things worth having: the header names the **live** client and its
+port, so somebody at the machine can see who is driving it; the checkmark is
+on `read and drive`, which is `automation=2` in GREMOTE.INI, so the menu
+reflects config rather than a default; and `Prevent sleep` is unchecked,
+which matches `prevent_sleep=0`.
+
+**It dismisses on a click outside.** Clicked at (150, 200), menu gone. That
+click also landed in the client's conversation list and tried to switch
+conversation with the bridge down, which produced exactly the right thing --
+"Switching conversation could not be sent -- the connection is down. It will
+not have taken effect. Try again once it reconnects." An accident, and a
+free demonstration that the client's offline path says what happened rather
+than failing silently.
+
+
+=== What the wire CANNOT do here, and why that is correct ===
+
+Clicking `Prevent sleep` is refused:
+
+    run -> refused_self
+
+`win/automation/steps.cpp`: *"the window in front is this program's own;
+focus the one to type into first"*, from `Input::isOurs()`. The automation
+tier refuses to send input to its own process -- `docs/PLAN.md`'s rule,
+recorded in BACKLOG 9 as "never send keys to Gaston's own window... compare
+`GetWindowThreadProcessId(target)` against our own **process** id and refuse
+the whole process".
+
+So **the tray menu cannot be driven by the program the tray menu belongs
+to**, and that is the safeguard working rather than a gap. It means these
+are keyboard steps by design and not by anybody's caution:
+
+  - the Prevent sleep toggle, and the `[awake]` tooltip it brings
+  - tray **Exit**, and its `tray: Prevent sleep OFF (...)` line with the
+    refusal count -- the line the Wine suite structurally cannot see
+
+A second machine could drive them, since the refusal is per-process and not
+per-host. Nothing needs one today.
+
+
+=== Still owed, and both need somebody there ===
+
+**Prevent-sleep runs 2 and 3.** They need the shortest standby set in
+Control Panel and then a genuinely idle machine, which is a keyboard step
+twice over -- the power scheme lives in a binary registry blob this project
+has no reason to learn, and gremote polling does not reset 9x's idle timer
+but a person in the room does. The reading to take is in
+`research/probes/trayprobe.py`'s docstring, including the trap: `tray.cpp`
+logs the first of each kind and then **every eighth**, so expecting one line
+per ask under-counts. And silence at run 2 IS the finding -- a box that
+suspends without asking is one no veto can help.
+
+**The no-gremote memory baseline.** `PROBE.EXE platform` with gremote
+stopped. Impossible over the wire by construction: asking gremote how much
+memory is free without gremote requires gremote not to be running. The
+with-and-without-client figures are already in
+`memory-p200-20261023.txt`; this is the third point on that line.
