@@ -4,6 +4,11 @@
 build/
 tmp/
 
+# setuptools metadata, written beside pyproject.toml rather than in build/
+# because a PEP 517 backend puts it where the project is. The rule above is
+# still the rule; this is the safety net it asks for.
+*.egg-info/
+
 # Wine prefix: 221MB, disposable, recreated by `make wine`.
 spike/.wineprefix/
 .wineprefix/
