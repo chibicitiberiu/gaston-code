@@ -854,7 +854,7 @@ keyboard.**
 | E0-E4 | the apparatus, built and rehearsed on the guest | done |
 | **E5** | K1, the bring-up | **superseded** -- no floppy and no `TEST.BAT`; the owner had already put the kit on the box from a USB stick, so first contact was over the wire |
 | **E6** | C1, the client over the wire | **done** -- `ship()` onto a box with no CD, then a tool-calling turn driven end to end with nobody at the keyboard: `done 5s $0.0523` |
-| **E7** | W1, the wire session | **mostly** -- UI lane, screen capture, exit codes, the cancel question, `focusprobe` (which needed a code change first) and `memprobe` BOTH halves. Outstanding: `wsprobe` and the stub-based sync and view timings |
+| **E7** | W1, the wire session | **COMPLETE.** UI lane, screen capture, exit codes, the cancel question, `focusprobe`, `memprobe` both halves, `wsprobe`, and the stub-based sync and view timings. Three of those needed a code fix before they would run at all, and two of the fixes were only reachable on real hardware |
 | E8 | K2, the keyboard sitting | not started. The icon judgement is answered from a photograph -- ours is a bare `IDI_APPLICATION` and the only one of six tray icons that does not say what it is -- but the standby runs, the Explorer restart, tray Exit and the no-gremote memory baseline all need somebody there. `research/probes/trayprobe.py` reads the log live so the sitting is the physical acts and nothing else |
 | **E9** | S1-S3, the session ends | **COMPLETE. All three pass.** Four readings, four correct last clauses, N between 122 and 284 ms: S1 and S2's gremote say *stays up to drive the shutdown it asked for*, S2's client and S3's gremote say *nothing below this line is ours*. Both halves of REMOTE.md:1329's discrimination, each in the circumstance that calls for it |
 | **E10** | U1, the two arms | **done**, and it is the headline |
@@ -868,6 +868,15 @@ arms from one tree via `HOT_OPT`, A/B/A, on the machine in question: HEAD
 closing A reproducing the opening A to the millisecond, against 23% on the
 QEMU guest and 24% four days earlier. `win/Makefile:859-860` stays, for
 5,120 bytes of gremote image.
+
+**BACKLOG 2, 4 and 31 answered, and 4 flips to buildable.** A no-change
+sync scan of 551 entries costs **8.2 s** on this box and does not get cheaper
+across five passes, so §4's cache is justified on measurement rather than a
+guess -- `docs/stage5-plan.md` pre-committed both ways and this is the
+"costs real seconds" branch. §31: a live re-render keeps up with the
+coalescer on an empty page and falls **12%** behind with 150 KB under it.
+And `-ot`'s 5,632 bytes do not show up in the client's working set at all,
+which closes the memory objection to the hot-module override.
 
 **Gate 0.5c closed** on the real CPU against the identical corpus the
 rehearsal used, crc32 `c200f36e` -- which is exactly what that crc was added
