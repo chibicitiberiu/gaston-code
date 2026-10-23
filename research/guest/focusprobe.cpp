@@ -118,6 +118,31 @@ int main(void)
     OSVERSIONINFOA v;
     int i;
 
+    /* UNBUFFERED, and it is not a nicety. The header comment above says the
+     * transport is a screenshot, which was true when this box had no network:
+     * against a console stdout is line-buffered and every line appears as it
+     * is printed. Driven over gremote's exec lane the same stdout is a PIPE,
+     * so it is BLOCK-buffered at 4KB, and the only fflush is after the last
+     * test -- which means a probe that hangs part-way returns ZERO BYTES and
+     * says nothing about where it stopped.
+     *
+     * Measured on the Pentium 200, 2026-10-23: it does hang, hitting
+     * gremote's 120s max_timeout_ms with exit 1 and no output at all. A probe
+     * whose failure mode is silence cannot answer BACKLOG 9.
+     *
+     * THIS LINE DID NOT FIX THAT, and saying so is the point of writing it
+     * down. Unbuffered, over the same lane, the second run produced zero
+     * bytes again -- so the silence is not the 4KB buffer, and this program
+     * is not reaching its first printf when gremote starts it. PROBE.EXE's
+     * stdout comes back over the same lane in the same session, so the lane
+     * works; whatever is different here is in this image. The line stays
+     * because it is correct and costs nothing, and because the next person
+     * to pipe this probe should not have to rule the buffer out twice.
+     *
+     * Until that is understood, this probe is a KEYBOARD instrument, as its
+     * header comment always said. Run it from a DOS box on the machine. */
+    setvbuf(stdout, (char *)0, _IONBF, 0);
+
     v.dwOSVersionInfoSize = sizeof(v);
     GetVersionExA(&v);
     printf("focusprobe: %lu.%lu build %lu\n",
