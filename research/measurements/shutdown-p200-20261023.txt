@@ -105,3 +105,37 @@ will have been the Start menu's and not gremote's.
 S1 and S2 remain unmeasured. S1 cannot be retried until the box is back, and
 should be retried, because one failure does not say whether this is
 reproducible or a one-off caused by whatever had a dialog open.
+
+
+=== Added the same evening: the safety net that should have caught this ===
+
+GREMOTE.INI on this box carries `heartbeat_timeout_s=30`, and
+`win/remote/server.cpp:66` turns it into
+`m_conn.setIdleTimeout(heartbeatS * 1000)`. A peer that stops talking for
+thirty seconds is supposed to lose the slot. That is precisely the situation
+here -- the peer is gone and has been for over ten minutes -- and the slot is
+still held. Confirmed by polling: AUTH refused `busy` continuously from the
+moment the reboot was asked for, past the thirty-second mark by a factor of
+twenty.
+
+**The net is strung on the thread it is meant to catch.** The idle timeout is
+enforced by the connection's reader, and the reader is what is sitting in the
+session-end path. So it cannot fire in the one case it exists for: not a peer
+that went quiet while the server was healthy, but a server that stopped
+reading while the peer went away.
+
+Which makes three things that all failed in the same direction, and they
+should be read as one defect rather than three:
+
+  1. the shutdown was asked for and did not happen
+  2. the three-minute "nothing is left to drive" watch never armed, because
+     it counts from a session end that was never signalled
+  3. the thirty-second idle timeout never fired, because the thread that
+     enforces it is the blocked one
+
+Every recovery path gremote has for this situation runs on the thread that is
+stuck. A fourth path that does not -- the listener refusing to believe in a
+session whose socket is closed, checked where the listener already accepts --
+is what would have turned a seven-minute outage into a reconnect. Noted here
+rather than in BACKLOG because it belongs with 35 and the shutdown work, and
+whoever picks that up should see the measurement that argues for it.
