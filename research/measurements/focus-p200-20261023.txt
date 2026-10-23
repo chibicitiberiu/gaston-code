@@ -1,0 +1,88 @@
+# BACKLOG 9's last open item, and BACKLOG 16's foundation: can a background
+# process raise another process's window on real Windows 98?
+#
+# Machine : Pentium 200 MMX, Windows 98 SE 4.10.2222 A, 32,284 KB, 800x600x24,
+#           at 10.0.0.158. Freshly booted. Same box as the other
+#           *-p200-20261023.txt files.
+# Driven  : research/guest/focusprobe.cpp over gremote's exec lane, which
+#           took a code change to make possible -- see the second section.
+# Date    : 2026-10-23
+
+
+=== The answer, and it is the good one ===
+
+  === focusprobe starting ===
+  focusprobe: 4.10 build 2222
+  setup: we are background       yes  fg pid 4294693107, target pid
+                                      4294722107, us 4294678483
+  setup: target is behind        yes
+  SetForegroundWindow            yes
+    ... and on top at centre     yes
+  BringWindowToTop               NO   z-order only
+  SetWindowPos HWND_TOP          NO   no activate
+  after LOCKTIMEOUT=0            yes  SPI returned 1
+  with AttachThreadInput         yes  attach ok
+    ... and on top at centre     yes
+  z-order only, then click-check NO   BringWindowToTop + SetWindowPos
+  activate, then click-check     yes  SetForegroundWindow -- what click
+                                      should do
+  Input::clickWindow, covered    yes  behind first yes, result 0
+    ... target now on top        yes
+  done
+
+**`SetForegroundWindow` works from a background process on Windows 98**, with
+no foreground lock refusing it, and the window it raises is genuinely on top
+at its own centre -- which is the question `Input::clickAt` actually asks.
+`Input::clickWindow` on a covered window returns 0 and leaves the target on
+top. BACKLOG 16's fix rests on something that works here.
+
+**And the emulator's surprising result reproduces exactly.** BACKLOG 9
+records that `BringWindowToTop` and `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)`
+are both ignored across a process boundary on 9x, so "the cheap,
+focus-preserving route does not work; activation is the only one that does."
+Both are `NO` here, on silicon, with the same reason beside them. The
+z-order-only combination then fails the click check while activation passes
+it -- the two lines that make the point in one pair.
+
+`SPI_SETFOREGROUNDLOCKTIMEOUT` returns 1 and setting it to 0 changes nothing,
+because nothing was blocking to begin with.
+
+**So the `AttachThreadInput` fallback in `focus()` stays the untaken path.**
+docs/stage5-plan.md pre-committed to the opposite outcome -- "if it disagrees,
+the fallback is already in `focus()`" -- and it does not disagree. The
+fallback works too (`with AttachThreadInput: yes`), so it is not dead code,
+but plain activation suffices and nothing has to change.
+
+That closes BACKLOG 9's residue item and `docs/REMOTE.md:664`'s question.
+
+
+=== It needed a code change to be measurable, which is its own finding ===
+
+docs/stage5-plan.md expected this probe to be run with "exec with a redirect
+and a get". Earlier the same evening that failed twice, both times exit 1 at
+gremote's 120 s cap with **zero bytes**: once redirected through COMMAND.COM
+(no output file appeared at all) and once with gremote capturing stdout
+directly. `setvbuf(_IONBF)` was tried and changed nothing.
+
+So focusprobe gained what `probe.c` has had since phase 0: **a log beside the
+exe**, written through one `line()` helper and flushed per line, because the
+header comment's "a screenshot is the transport" stopped being true when the
+box got a network. Beside the EXE rather than in the working directory --
+gremote runs a child in a scratch directory and then deletes it, so a
+relative path would write the record into something about to vanish.
+
+**And then it worked over stdout as well**: exit 0, 735 bytes, 13 seconds.
+Which means the log was not what fixed it. What changed between the failures
+and this run is the MACHINE: those attempts were on a box that had been up
+101 minutes with three abandoned `ui` lane threads on it -- the same state
+that made S1 refuse to reboot (shutdown-p200-20261023.txt) and that
+ui-cancel-p200-20261023.txt traces to an unbounded MSAA call.
+
+That is the fourth symptom of one defect, and worth stating plainly: on that
+box, a program whose whole job is foreground manipulation could not produce a
+line of output. A desktop with threads wedged in cross-process calls is not
+one where foreground operations complete.
+
+The log stays regardless. A probe that can only report through a channel that
+fails when the machine is in trouble is a probe that goes quiet exactly when
+it has something to say.

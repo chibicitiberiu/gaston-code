@@ -25,6 +25,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 
 #include "core/str.h"
 #include "automation/input.h"
@@ -103,10 +104,67 @@ static int onTopAtCentre(HWND h)
     return rootOf(under) == h;
 }
 
+/* A LOG BESIDE THE EXE, because stdout does not survive this probe.
+ *
+ * The header says the transport is a screenshot, which was true before the
+ * box had a network. It is now driven over gremote's exec lane, and over that
+ * lane this program returns ZERO BYTES at the 120s cap -- twice, redirected
+ * through COMMAND.COM and with gremote capturing stdout directly, and
+ * unbuffered as well as buffered. PROBE.EXE's stdout comes back over the same
+ * lane in the same session, so the lane works and whatever is different is in
+ * this image.
+ *
+ * Rather than keep guessing at that, write the answers somewhere that does
+ * not depend on it. probe.c has done this since phase 0 -- "Writes PROBE.LOG
+ * beside itself as well as to stdout" -- for the same reason, on the same
+ * machine, and the file can simply be fetched afterwards.
+ *
+ * Beside the EXE rather than in the current directory: gremote runs a child
+ * in a scratch directory it then cleans up, so a relative path would write
+ * the record into something that is about to be deleted.
+ */
+static FILE *g_log;
+
+static void openLog(void)
+{
+    char path[MAX_PATH];
+    DWORD n = GetModuleFileNameA(0, path, sizeof(path));
+    int i;
+
+    if (!n || n >= sizeof(path))
+        return;
+    for (i = (int)n - 1; i > 0; --i)
+        if (path[i] == '\\' || path[i] == '/')
+            break;
+    if (i <= 0 || (size_t)i + 14 >= sizeof(path))
+        return;
+    rc_strcpy(path + i + 1, sizeof(path) - (size_t)i - 1, "FOCUSPRB.LOG");
+    g_log = fopen(path, "a");
+}
+
+/* Everything this program has to say goes through here. */
+static void line(const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+
+    fputs(buf, stdout);
+    fflush(stdout);
+    if (g_log)
+    {
+        fputs(buf, g_log);
+        fflush(g_log);          /* every line, because this probe can hang */
+    }
+}
+
 static void say(const char *name, int ok, const char *detail)
 {
-    printf("%-28s %-4s %s\n", name, ok ? "yes" : "NO", detail ? detail : "");
-    fflush(stdout);
+    line("%-28s %-4s %s\n", name, ok ? "yes" : "NO", detail ? detail : "");
 }
 
 int main(void)
@@ -142,10 +200,12 @@ int main(void)
      * Until that is understood, this probe is a KEYBOARD instrument, as its
      * header comment always said. Run it from a DOS box on the machine. */
     setvbuf(stdout, (char *)0, _IONBF, 0);
+    openLog();
+    line("=== focusprobe starting ===\n");
 
     v.dwOSVersionInfoSize = sizeof(v);
     GetVersionExA(&v);
-    printf("focusprobe: %lu.%lu build %lu\n",
+    line("focusprobe: %lu.%lu build %lu\n",
            (unsigned long)v.dwMajorVersion, (unsigned long)v.dwMinorVersion,
            (unsigned long)(v.dwBuildNumber & 0xFFFF));
 
@@ -157,7 +217,7 @@ int main(void)
 
     if (notepads(f) < 2)
     {
-        printf("need two Notepad windows, found %d -- cannot measure\n", f.n);
+        line("need two Notepad windows, found %d -- cannot measure\n", f.n);
         return 2;
     }
 
@@ -173,7 +233,7 @@ int main(void)
     }
     if (!target)
     {
-        printf("both Notepads are the foreground window -- cannot measure\n");
+        line("both Notepads are the foreground window -- cannot measure\n");
         return 2;
     }
 
@@ -274,7 +334,7 @@ int main(void)
         say("  ... target now on top", onTopAtCentre(target), "");
     }
 
-    printf("done\n");
+    line("done\n");
     fflush(stdout);
     return 0;
 }

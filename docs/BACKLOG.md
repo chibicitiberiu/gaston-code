@@ -1990,9 +1990,20 @@ our own window from a dialog it had not read.
 - There is still no standalone `FOCUS` op (`REMOTE.md:308`). Nothing needs one
   today: `click` raises what it must and `keys` already goes through
   `focus()`. Add it when a caller wants to raise a window WITHOUT clicking it.
-- Measured on an emulator, not the P200. `REMOTE.md:664`'s
-  `SPI_SETFOREGROUNDLOCKTIMEOUT` question stays open until the real machine
-  agrees; if it disagrees, the fallback is already in `focus()`.
+- ~~Measured on an emulator, not the P200.~~ **CLOSED 2026-10-23**
+  (`research/measurements/focus-p200-20261023.txt`). The real machine agrees,
+  so the pre-commitment above never had to be cashed. `SetForegroundWindow`
+  works from a background process on Windows 98, the raised window is on top
+  at its own centre, and `Input::clickWindow` on a covered window returns 0
+  and leaves the target on top. `SPI_SETFOREGROUNDLOCKTIMEOUT` returns 1 and
+  setting it to 0 changes nothing, because nothing was blocking.
+
+  The emulator's surprising result reproduces exactly: `BringWindowToTop` and
+  `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are both ignored across a process
+  boundary on silicon too, the z-order-only pair fails the click check, and
+  activation passes it. **So the `AttachThreadInput` fallback in `focus()`
+  stays the untaken path** -- it works when asked, but plain activation
+  suffices and nothing changes.
 
 ---
 
