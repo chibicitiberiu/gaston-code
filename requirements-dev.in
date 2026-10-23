@@ -1,0 +1,8 @@
+# The bridge's runtime, plus what the gates need. `make lint` and
+# `make test-fast` run from this; a release build does not.
+-r requirements.in
+
+mypy==2.3.1
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.16.9

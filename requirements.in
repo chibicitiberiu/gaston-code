@@ -1,0 +1,19 @@
+# What the BRIDGE needs at runtime, and nothing else.
+#
+# Two direct dependencies. Everything else in requirements.txt is a
+# transitive of these two, pinned by `uv pip compile` so a release build is
+# reproducible rather than "whatever the index served that morning".
+#
+# claude-agent-sdk does NOT bring Claude Code with it. It SPAWNS the `claude`
+# CLI, found through shutil.which and a short list of well-known paths
+# (claude_agent_sdk/_internal/transport/subprocess_cli.py). So no bridge
+# artefact is self-contained: each one either carries that CLI or requires it
+# on PATH, and this project requires it -- see docs/RELEASE.md.
+claude-agent-sdk==0.2.153
+
+# Lazily imported, in two places: bridge/wire/uiview.py renders the guest's
+# UI records to PNG, and bridge/services/attachment.py re-encodes what a
+# person drops on the window. Both `from PIL import Image` inside the
+# function, so the bridge starts without it and fails at the feature. That
+# is not a reason to leave it out of a package.
+pillow==12.3.0
