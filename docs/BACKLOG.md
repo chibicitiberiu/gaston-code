@@ -4280,3 +4280,64 @@ had not taken effect at all after 300 s on an earlier attempt, with every
 **Not started.** Recorded at the owner's instruction -- "put it in task list,
 it's for later" -- with the three options above so the decision is not
 re-derived.
+
+## 40. Killing the shell over gremote kills gremote
+
+Found 2026-10-23 by doing it, on the Pentium 200, from Linux. The cost was a
+session: the box went unreachable and needed somebody in the room.
+
+`win/exec/process.cpp` has two tiers. Five images are refused outright --
+`KERNEL32.DLL`, `MSGSRV32.EXE`, `MPREXE.EXE`, `MMTASK.TSK`, `REDIR32.EXE` --
+and `EXPLORER.EXE` plus any Win16 image is refused **unless `force`**:
+
+    if (!force && (lstrcmpiA(name, "EXPLORER.EXE") == 0 || isWin16Exe(p->exe)))
+    {
+        rc_log("process: kill %08lx (%s) refused without force", pid, name);
+        return KILL_DENIED;
+    }
+
+`gremote/client.py`'s `kill(pid, force=True)` sets the header that gets past
+it. What happens next, measured once:
+
+    killing Explorer pid 4294851595 with force=True
+      refused: the link failed: [Errno 104] Connection reset by peer
+
+and gremote was gone. Windows was entirely well afterwards -- ping 0.53 ms,
+port 139 open -- and 7401 refused. `RunServices` runs at boot and there is no
+remote `QUIT` by design, so nothing short of somebody at the keyboard brings
+it back.
+
+**Why gremote died is NOT established**, and this entry does not guess. Three
+candidates, in no order:
+
+1. 9x instability after `TerminateProcess` on the shell, taking an unrelated
+   process with it.
+2. gremote faulting in its own tray code when the notification area vanishes
+   mid-call. `win/remote/tray.cpp` handles a shell that was never there --
+   `tray: no notification area yet (no shell is running)` -- but "never
+   there" and "disappeared underneath us" are different paths.
+3. Something in the shell watch that `docs/REMOTE.md` describes for the
+   session-end case (`the shell is still gone a minute after...`) firing
+   outside a session end.
+
+Deciding between them means doing it again and reading `GREMOTE.PRV`
+afterwards, which is cheap once somebody is at the machine anyway.
+
+**What the entry argues for, pending that.** The `!force` gate reads like
+caution and is load-bearing. A remote caller has no use for a dead shell and
+a live link -- it cannot see the desktop it just destroyed, and on this
+evidence it does not keep the link either. So `force` on `EXPLORER.EXE`
+specifically is a flag that only ever gets somebody into trouble, and moving
+that name into the always-refused list costs nothing anybody wants. The Win16
+half of the same condition is a different question and is not covered here.
+
+**And the K2 item that provoked it does not need this at all.**
+`docs/stage5-plan.md`'s "EXPLORER killed and restarted, for `tray: the
+taskbar appeared; adding the icon`" is a KEYBOARD step in the plan, and it is
+one for a reason. It was attempted over the wire because the flag was there,
+not because the plan asked for it.
+
+**Not started.** The guard change is one line and should wait for the
+diagnosis, because "why did gremote die" is the part worth knowing -- if it
+is (2) or (3), the same fault is reachable whenever Explorer crashes on its
+own, which needs no `force` and no remote caller at all.
