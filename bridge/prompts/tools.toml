@@ -380,7 +380,7 @@ Items inside `{sel}`:'''
 # It says "may have", not "did nothing", because a program CAN add the
 # accelerator and one measured on 2026-10-11 does -- two text editors on the
 # same OS, one from 1999 and one from 2005, disagreeing
-# (docs/measurements/clipboard-athlon-20261011.txt). A note the agent can
+# (research/measurements/clipboard-athlon-20261011.txt). A note the agent can
 # watch be wrong in front of it is worse than no note.
 ctrl_a = '''
 Note: Ctrl+A may have selected nothing -- this machine's own text boxes implement no select-all, and only some programs add it. If that was meant to take the whole text, select it with `[Home][Shift+End]` and type over that.'''
@@ -766,7 +766,7 @@ made_folder = ''' The folder {folder} did not exist, so it was made first.'''
 
 # WHY A TOOL AND NOT `dir`. The bar is CLAUDE.md's: a tool earns its place only
 # if `exec` does the job badly. Measured on real Windows 98, twelve files in one
-# directory (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt):
+# directory (research/measurements/batch-eol-and-dir-b-p200-20261001.txt):
 #
 #   dir /b <path>    131 bytes -- names, no sizes, no dates
 #   dir    <path>    about 1,100 -- volume label, serial number, a directory

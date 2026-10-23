@@ -10,7 +10,7 @@ that rule exists for: MSHTML hosting cost, directory-change notifications and
 BI_RLE8 support are real Win98 behaviour that a Wine prefix has no reason to
 reproduce, so a driver asserting on them would fail on Wine's platform
 differences and prove nothing about the guest's code. See docs/PROGRESS.md
-and win/checks/probe.c's own section comments for why each section exists.
+and research/guest/probe.c's own section comments for why each section exists.
 
 `probe deflate` is the one section that is pure code: it round-trips the
 SHIPPING miniz (win/third_party/miniz, the same library net.cpp and sync.cpp
@@ -57,7 +57,7 @@ def test_probe_deflate_refuses_without_a_corpus(tmp_path):
 
     The synthetic sample this section used to build compressed 164:1, and its
     throughput was quoted as a threshold for a year by four documents --
-    win/checks/probe.c's own comment said in as many words that it was not
+    research/guest/probe.c's own comment said in as many words that it was not
     usable. A fallback is how that happened: it printed a plausible figure
     under the same heading and nothing downstream could tell the two apart.
 

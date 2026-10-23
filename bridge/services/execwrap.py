@@ -1,14 +1,14 @@
 r"""Getting a real exit code out of a shell that loses it.
 
 `command.com /c <cmd>` exits 0 whatever happened -- for a failing child and for
-a program that does not exist (`docs/measurements/execprobe-vm-gui-20260926.txt`).
+a program that does not exist (`research/measurements/execprobe-vm-gui-20260926.txt`).
 So `exec` through that shell could not say whether a build worked, and a live
 session verified every single compile with a follow-up `dir`: two round trips
 per build, on a machine where each one is a second.
 
 `if errorlevel` INSIDE a batch file does see a program's real code. Measured on
 real hardware, 2026-10-01
-(`docs/measurements/exit-codes-via-batch-p200-20261002.txt`):
+(`research/measurements/exit-codes-via-batch-p200-20261002.txt`):
 
     failing .exe, then `if errorlevel 1`      -> fired
     succeeding .exe, same                     -> did not fire

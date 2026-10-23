@@ -1,7 +1,9 @@
 # 04 — Verification: what is proved and what is claimed
 
 Audit date 2026-09-21. Scope: the tests and the verification tooling, not the
-product code — `tests/python/**`, `win/checks/*`, `Makefile`, `win/Makefile`,
+product code — `tests/python/**`, the check binaries and probes (then
+`win/checks/*`, now `tests/guest/*` and `research/guest/*`), `Makefile`,
+`win/Makefile`,
 `make/`, `pytest.ini`, `tools/`, and the gate and verification-status claims in
 `docs/PROGRESS.md` and `docs/PLAN.md`.
 
@@ -20,8 +22,10 @@ audit started. Where the live tree has since made a latent finding *actual*,
 that is stated as such (04.7). That reorganisation also moved every script in
 `tools/` one directory down — `tools/cmovcheck.py` became `tools/check/
 cmovcheck.py`, `tools/syncprobe.py` became `tools/probe/syncprobe.py`, and so
-on. Citations below use the **new** paths, because that is where a reader will
-find them; at `b6880fa` they are all one level up.
+on. Citations below use the paths a reader will find today, not the ones
+`b6880fa` had: at that commit the tools are all one level up, and the probes
+have since left `tools/` entirely for `research/probes/`, as the check
+binaries left `win/checks/` for `tests/guest/` and `research/guest/`.
 
 ---
 
@@ -80,7 +84,7 @@ of a file going the other way.
 Nothing automated drives any of them.
 
 - `synccheck.exe` links `sync.cpp`, not `syncrpc.cpp`. Its four modes
-  (`win/checks/synccheck.c:114-147`) are the directory walk, `--limits`,
+  (`tests/guest/synccheck.cpp:114-147`) are the directory walk, `--limits`,
   `--contained` and `--chunk`. It never sends a frame.
 - `netcheck.exe` and `rpccheck.exe` both *link* `syncrpc.o`
   (`win/Makefile:186-187`, `:198-199`) and neither drives it. `rpccheck.c`'s
@@ -104,7 +108,7 @@ the target. Or invert the CRC comparison so a corrupted transfer commits.
 Or make `do_get` chunk from the wrong offset after a retry. Every one of those
 compiles, links, and passes `make test`, `make wine-smoke` and `make check`.
 The only thing in the repo that would catch them is
-`tools/probe/syncprobe.py` — and its own docstring says how it is used:
+`research/probes/syncprobe.py` — and its own docstring says how it is used:
 *"Start it INSTEAD OF the bridge, then launch the client on the guest."* It is a
 human-driven acceptance tool, it is not collected by pytest, it is in no gate,
 and `PROGRESS.md:2335`'s *"54/54 on the sync probe"* is a record of one person
@@ -129,14 +133,14 @@ Run 1 failed two tests in `test_guest_rpc.py`. Runs 2 and 3 passed. The same
 file passes alone and under `-m guest`. The failing verdict is produced by the
 C, not by the Python:
 
-`win/checks/rpccheck.c:334` does `ok = log_contains("clamped")`, and
+`tests/guest/rpccheck.c:334` does `ok = log_contains("clamped")`, and
 `log_contains:268` opens **`retroclaude.log` in the process's current working
 directory** — which, because neither `conftest.run_guest` nor
 `test_guest_rpc.py:37` passes a `cwd`, is the repo root.
 
 Two things make that fragile:
 
-1. **Two check binaries write the same file.** `win/checks/netcheck.c:117` and
+1. **Two check binaries write the same file.** `tests/guest/netcheck.c:117` and
    `:235` both call `rc_log_open(".")`, and so does `rpccheck.c:346`.
    `win/core/log.cpp:20` opens it with `CREATE_ALWAYS, FILE_SHARE_READ` — write
    sharing is *denied*. A second opener gets `INVALID_HANDLE_VALUE`, and
@@ -182,7 +186,7 @@ pending-echo settle, the page cache and the chat list.
 
 Some of this is unavoidable — driving a Win32 message pump from pytest is not a
 weekend's work — and the project compensates honestly with
-`tools/probe/barprobe.py`, `viewprobe.py`, `drainprobe.py` and screenshots on
+`research/probes/barprobe.py`, `viewprobe.py`, `drainprobe.py` and screenshots on
 the real machine. What is worth saying is where the boundary sits and that it is
 not where the gate labels imply. `make wine-smoke` is described in `Makefile:73`
 as running *"the SHIPPING guest C"* and it runs about 40% of it.
@@ -256,7 +260,7 @@ Sitting three lines above it,
 `test_the_guest_s_real_manifest_rows_parse_with_the_bridge_s_real_parser:296` is
 the real closure of 03.1 and is excellent: it runs `synccheck --wire`, which
 emits through the same `rc_sync_manifest_row` `do_scan` uses
-(`win/checks/synccheck.c:105-112`), and hands the bytes to
+(`tests/guest/synccheck.cpp:105-112`), and hands the bytes to
 `bridge.files.manifest.parse_rows`, the parser the frame handler uses. **03.1 is
 genuinely closed.** The vacuous test beside it is a separate defect.
 
@@ -491,7 +495,7 @@ according to its own source:
 
 | check | what Wine cannot answer | where it says so |
 |---|---|---|
-| `synccheck --limits` | MAX_PATH is not enforced under Wine the way Win98 enforces it; the check exercises the *arithmetic* of the refusal, not the filesystem's limit | `win/checks/synccheck.c:36-39` |
+| `synccheck --limits` | MAX_PATH is not enforced under Wine the way Win98 enforces it; the check exercises the *arithmetic* of the refusal, not the filesystem's limit | `tests/guest/synccheck.cpp:36-39` |
 | `workcheck` | `CopyFile`, `MoveFile` and 8.3 aliasing are precisely the layer Wine reimplements | `tools/gen/mktools-iso.sh:40-42` |
 | `toolcheck` | how long a real FAT scan takes, and whether a path on an empty floppy drive raises the system-modal *"There is no disk in drive A:"* that freezes the message pump | `tools/gen/mktools-iso.sh:44-47` |
 | `probe` | most of it asks hardware questions; only the deflate section is run, deliberately | `docs/audit/03-contracts.md` 03.53 |
@@ -503,7 +507,7 @@ output that says "this answer is about the code".
 **And there is no guest-side runner.** `tools/vm/vmship.sh` rebuilds
 `vm/tools.iso` and ejects-then-inserts it (correctly — the `change-media
 --update` no-op cost an evening and the script says so). `tools/vm/watchvm.sh`
-screenshots and OCRs. `tools/probe/syncprobe.py`, `barprobe.py`, `viewprobe.py`
+screenshots and OCRs. `research/probes/syncprobe.py`, `barprobe.py`, `viewprobe.py`
 and `drainprobe.py` are launched by hand. Nothing collects a guest-side result,
 nothing records which check binary last ran on the guest at which commit, and
 the only record that any of it happened is prose in `PROGRESS.md`. A claim like
@@ -615,7 +619,7 @@ This report is a list of holes and would misrepresent the project if it stopped
 there. Five things here are better than most codebases manage.
 
 **The cross-language contract pattern works, and 03.1 really is closed.**
-`synccheck --wire` (`win/checks/synccheck.c:98-112`) emits through
+`synccheck --wire` (`tests/guest/synccheck.cpp:98-112`) emits through
 `rc_sync_manifest_row`, the same function `do_scan` puts on the wire, in binary
 mode so the CRT cannot turn the row terminator into `\r\n` — and the comment at
 `:118-122` explains that the text-mode version *would have been a comparison
@@ -629,7 +633,7 @@ motivated it. This is the right shape and there are half a dozen instances of it
 **`inicheck` defends itself against its own hand-maintained list.** The check
 compares five named fields of `rc_config` across save/load — and then does
 `eq_i("sizeof(rc_config)", sizeof(rc_config), 64+4+128+4+128)`
-(`win/checks/inicheck.c:71-73`) with the comment *"sizeof is the tripwire for a
+(`tests/guest/inicheck.cpp:71-73`) with the comment *"sizeof is the tripwire for a
 field added to the struct and to neither function: it cannot check the field,
 but it can refuse to pass quietly."* A sixth field cannot be added silently.
 That is the defence 04.7's hygiene check is missing.
@@ -739,9 +743,9 @@ And the gate itself fails one run in three (04.2).
 
 All 16 findings (04.1 through 04.16) addressed, verified, and closed.
 
-- **04.1 (Guest sync transfer handlers test):** Fixed. Added `--sync-rpc` mode in `win/checks/rpccheck.c` executing `rc_syncrpc_handle` for `SYNCPUT` + `SYNCPUTEND` (happy-path commit, CRC mismatch refusal, `if_crc` refusal), `SYNCMKDIR` (nested hierarchy creation), and `SYNCGET`. Added `test_guest_syncrpc_handlers` in `tests/python/guest/test_guest_rpc.py` driving this under Wine and asserting both C-level verdicts and Python-side filesystem state (atomic commit, temp file cleanup, directory structure).
+- **04.1 (Guest sync transfer handlers test):** Fixed. Added `--sync-rpc` mode in `tests/guest/rpccheck.c` executing `rc_syncrpc_handle` for `SYNCPUT` + `SYNCPUTEND` (happy-path commit, CRC mismatch refusal, `if_crc` refusal), `SYNCMKDIR` (nested hierarchy creation), and `SYNCGET`. Added `test_guest_syncrpc_handlers` in `tests/python/guest/test_guest_rpc.py` driving this under Wine and asserting both C-level verdicts and Python-side filesystem state (atomic commit, temp file cleanup, directory structure).
 - **04.2 (Shared log file in repo root & clamp timing):** Fixed. `tests/python/conftest.py`'s `run_guest` now isolates Wine executions into a temporary directory when `cwd is None`, eliminating `retroclaude.log` root collision. `win/core/log.h` and `log.cpp` return `int` (0 on success, -1 on failure), checked by `rpccheck.c` and `netcheck.c`. Replaced fixed 1500ms sleep in `rpccheck.c` with a 50ms polling loop up to 3000ms.
-- **04.3 (GUI layer verification boundary):** Fixed. Explicitly documented the boundary between headless automated C logic and the 6,993 lines of Win32 GUI message pump/window controls in `Makefile` and `CLAUDE.md`. Cross-language contract tests (`test_frame_contract.py`, `test_guest_css.py`) guard interface drift, and manual VM acceptance (`tools/probe/*probe.py`) verifies windowing.
+- **04.3 (GUI layer verification boundary):** Fixed. Explicitly documented the boundary between headless automated C logic and the 6,993 lines of Win32 GUI message pump/window controls in `Makefile` and `CLAUDE.md`. Cross-language contract tests (`test_frame_contract.py`, `test_guest_css.py`) guard interface drift, and manual VM acceptance (`research/probes/*probe.py`) verifies windowing.
 - **04.4 (Frame-type inventory contract):** Fixed. Created `tests/python/meta/test_frame_contract.py` parsing `g_dispatch[]` (`win/app/main.cpp`), `RC_LANE_TABLE` (`win/net/frameproto.cpp`), and `rc_syncrpc_handle` (`win/sync/syncrpc.cpp`), diffing bidirectional frame vocabularies against `bridge/wire/protocol.py` and `bridge/files/synctransport.py`.
 - **04.5 (Vacuous manifest refusal assertion & parser fix):** Fixed. Corrected assertion in `tests/python/guest/test_guest_agreement.py` (`test_a_row_that_would_not_fit_is_refused_rather_than_truncated`) to strictly require `rows == {}`. Fixed latent parsing bug in `bridge/files/manifest.py:parse_rows` where slice extraction failed to validate `len(raw) == plen`, silently accepting truncated paths.
 - **04.6 (Static PE audit BSS budget ceiling):** Fixed. Added budget ceiling check in `win/Makefile`'s `check` target asserting BSS usage is <= 450,000 bytes (currently ~377k bytes), failing with non-zero exit if exceeded.

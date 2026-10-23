@@ -72,7 +72,7 @@ extern "C" {
  * assuming 0 or 1 -- see bridge/files/caps.py.
  *
  * NONE is the restrictive reading and so it is 0, which also means a client
- * that never sets the field (the check harnesses in win/checks, which have
+ * that never sets the field (the check harnesses in tests/guest, which have
  * no screen to drive) declares the safe thing by construction. */
 #define RC_AUTOMATION_NONE   0  /* no screen: the five ui tools do not exist */
 #define RC_AUTOMATION_SCREEN 1  /* read the screen, click, type, shoot, focus */

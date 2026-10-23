@@ -506,7 +506,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * `command.com /c` loses a program's exit code (always 0, even for a
      * program that does not exist), and the only way to get it back is a
      * wrapper batch file that runs the command and echoes what `if errorlevel`
-     * saw -- measured on real hardware, docs/measurements/
+     * saw -- measured on real hardware, research/measurements/
      * exit-codes-via-batch-p200-20261002.txt. That file is plumbing. It does
      * not belong in a folder the person looks at.
      *

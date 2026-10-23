@@ -67,7 +67,7 @@ def _pin_corpus_to_the_guests_real_chunk_size():
     change to the chunk size would otherwise leave this corpus quietly
     testing the OLD boundary while every test using it kept passing.
 
-    `synccheck --chunk` prints that constant (win/checks/synccheck.c); this
+    `synccheck --chunk` prints that constant (tests/guest/synccheck.cpp); this
     also cross-checks it against the bridge's OWN chunk size
     (bridge/files/syncrun.py's CHUNK), since a disagreement there means the
     guest's chunked read and the bridge's chunked send would carry at
@@ -293,7 +293,7 @@ def test_the_guest_s_real_manifest_rows_parse_with_the_bridge_s_real_parser(
     """The manifest row format was written four times and verified zero times.
 
     win/sync/syncrpc.c produced it, the bridge parsed it, test_sync_wire.py
-    re-implemented the producer for the tests, and tools/probe/syncprobe.py
+    re-implemented the producer for the tests, and research/probes/syncprobe.py
     re-implemented the parser. synccheck.exe -- the one thing that runs the
     real C against the real Python -- printed a DIFFERENT, tab-separated
     format of its own, so it proved the classifier and the checksums and

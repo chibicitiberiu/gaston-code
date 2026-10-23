@@ -6,7 +6,7 @@
  * kills the image at load. Without it list/kill/descendants refuse
  * (init() returns false); launch works everywhere.
  *
- * What the guest showed (docs/measurements/execprobe-vm-*-20260926.txt):
+ * What the guest showed (research/measurements/execprobe-vm-*-20260926.txt):
  *   - a snapshot is cheap: 20 of them in 5-10ms, 9-12 processes on a stock
  *     box, so every call takes a fresh one and nothing is cached;
  *   - pids have the high bit set (they are obfuscated pointers): always
@@ -88,7 +88,7 @@ public:
      * (WINOA386.MOD) below it -- a console program's console, or a DOS
      * session it runs. Ending it leaves that VM half-dead until reboot
      * (measured, docs/BACKLOG.md 17), and a guest carrying such VMs later
-     * blue-screened in VMM (docs/measurements/bsod-vm-20260927.txt).
+     * blue-screened in VMM (research/measurements/bsod-vm-20260927.txt).
      * Decided 2026-09-27: no such kill without force.
      *
      * WITH `force`, since 2026-10-13: the Win32 descendants are terminated

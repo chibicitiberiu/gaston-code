@@ -1,10 +1,10 @@
 """How often is the Check value's second model unsure on calls the person
 clearly asked for, and does it ever approve one it should not?
 
-    .venv/bin/python tools/probe/checkerprobe.py
+    .venv/bin/python research/probes/checkerprobe.py
 
 Real model calls (Haiku), about two minutes. Results of the 2026-10-04 run
-are in docs/measurements/checker-haiku-20261004.txt.
+are in research/measurements/checker-haiku-20261004.txt.
 """
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import toolkit
 
 toolkit.on_path()

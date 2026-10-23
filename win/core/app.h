@@ -69,7 +69,7 @@
  * desktop with one unanswering task and an idle CPU, and no Ctrl+Alt+Del on
  * that task releases it. MEASURED four times out of four, against two builds,
  * on a clean Windows 98 guest with nothing third-party on it
- * (docs/measurements/gremote-shutdown-vm-20261001.txt); the same guest
+ * (research/measurements/gremote-shutdown-vm-20261001.txt); the same guest
  * rebooted in three seconds when a rundll32 it launched made the call
  * instead, because rundll32 stays parked inside ExitWindowsEx until the
  * machine goes.
@@ -212,7 +212,7 @@ public:
      * session that opened it and should.
      *
      * A service process overrides it. MEASURED 2026-10-13 on the QEMU
-     * guest (docs/measurements/logoff-vm-20261013.txt), because the
+     * guest (research/measurements/logoff-vm-20261013.txt), because the
      * alternative was guessing: `RegisterServiceProcess(0,
      * RSP_SIMPLE_SERVICE)` does NOT exempt a process from the logoff
      * broadcast on 98 SE. gremote received WM_ENDSESSION with

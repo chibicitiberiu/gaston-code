@@ -460,7 +460,7 @@ desktop icons); `text` inside a plain Edit (EM_POSFROMCHAR); an `at` offset
 from its corner; `screen` pixels last. `ui items_of=<selector>` lists one
 control's items, each ending `item="..."` in the form to copy -- measured
 answering on both machines for the desktop icons, an Explorer file list, its
-folder tree and its toolbar (`docs/measurements/input-and-ops-real-hw-
+folder tree and its toolbar (`research/measurements/input-and-ops-real-hw-
 20261002.txt`).
 
 **Matching is loose by default.** `~=` is a case-insensitive glob; a mnemonic
@@ -479,7 +479,7 @@ max), and `UICANCEL` stops it inside any wait.
 
 **Characters are typed on the TARGET's keyboard layout**: the key
 VkKeyScanEx names only if ToAsciiEx agrees it produces that character, a dead
-key then Space, else Alt+Numpad 0nnn (`docs/measurements/keyboard-layouts-
+key then Space, else Alt+Numpad 0nnn (`research/measurements/keyboard-layouts-
 vm-20261002.txt`). Key names are a frozen, versioned table
 (`bridge/agent/keynames.py`, HELLO `keys=`).
 
@@ -690,7 +690,7 @@ before the first two:
   to the probe's own pid, so nothing has ever been captured from a foreign
   process; and the injection verdict read a counter nothing zeroed, in a section
   no injected copy unmaps, so it was cumulative since boot. Both were fixed, and
-  the fixed probe ran -- `docs/measurements/vm-20260926.txt`, `generation
+  the fixed probe ran -- `research/measurements/vm-20260926.txt`, `generation
   33779831, counters zeroed`, `distinct pids 2 (neither of them us)`,
   `-> INJECTION WORKS`. Two caveats survive, which is why this line stays: that
   generation is 9.4 hours into an uptime rather than a cold boot, and it was the
@@ -789,6 +789,6 @@ are patched now.
 
 What is still owed: `0.15d` **from a cold boot** (it has been re-run with the
 generation word, on the VM, 9.4 hours into an uptime --
-`docs/measurements/vm-20260926.txt`), with the injection gates moved last and a
+`research/measurements/vm-20260926.txt`), with the injection gates moved last and a
 health check behind them (`BACKLOG.md` 15, and the check goes in
 `autocheck.exe --health`); and one end-to-end turn through the bridge.

@@ -331,7 +331,7 @@ static void do_fsget(rc_net *net, rc_frame *f)
 /*
  * WHY A TOOL AND NOT `dir`. CLAUDE.md's bar is that a tool earns its place
  * only if `exec` does the job badly, and measured on real hardware
- * (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt) `dir` does:
+ * (research/measurements/batch-eol-and-dir-b-p200-20261001.txt) `dir` does:
  * twelve files cost about 1,100 bytes of volume label, serial number,
  * directory header, `.` and `..`, a free-space footer and BOTH name forms per
  * row. `dir /b` is 131 bytes but drops the sizes and dates. Neither can be

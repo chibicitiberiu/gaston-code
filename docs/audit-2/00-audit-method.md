@@ -72,7 +72,8 @@ Both are from the report's own numbered "Top findings" list, items 5 and 9 of
 - `Makefile:44-45` now reads `check:` / `@$(MAKE) -C win check`. `01.9` is
   closed.
 - No live `_snprintf`, `sprintf`, `strcpy` or `strcat` call remains in `win/`
-  outside `win/third_party/` and `win/checks/`; every remaining occurrence of the
+  outside `win/third_party/` and the check binaries (then `win/checks/`, now
+  `tests/guest/` and `research/guest/`); every remaining occurrence of the
   string is inside a comment explaining why it was removed. `docs/BACKLOG.md:183-185`
   has also been corrected to state the measured 39/15/32 split. `01.5` is closed,
   both halves.

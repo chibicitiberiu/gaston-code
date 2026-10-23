@@ -31,7 +31,7 @@ def test_every_case_passes(verdicts):
 #: 129 -> 147 on 2026-10-02: fourteen cases for the named-key syntax in
 #: `typeText` -- including three for bracket escaping, asked for by name -- and
 #: four for which part of a compound selector was not found. Both were defects
-#: a live session hit (docs/measurements/keys-named-p200-20261002.txt).
+#: a live session hit (research/measurements/keys-named-p200-20261002.txt).
 #:
 #: 147 -> 164 later the same day: the `~=` glob, mnemonic `&` ignored in
 #: captions and names, and `*` as an any-class step -- an agent rarely knows

@@ -41,7 +41,7 @@ static const char TITLE[] = "Gaston Remote";
  * When REBOOT asks Windows to end the session, this process must not exit
  * while its own thread is inside ExitWindowsEx driving the broadcast -- doing
  * so wedges a Windows 98 on a bare desktop, measured four runs out of four
- * (core/app.h, docs/measurements/gremote-shutdown-vm-20261001.txt). App
+ * (core/app.h, research/measurements/gremote-shutdown-vm-20261001.txt). App
  * therefore skips its PostQuitMessage on that path and the message loop keeps
  * running until Windows ends the process itself.
  *
@@ -91,7 +91,7 @@ static const UINT_PTR STAY_TIMER = 1;
  */
 /* True if this process is now exempt from being terminated with the
  * session -- or at least claims to be. MEASURED, and the claim is only half
- * true: the broadcast still arrives (docs/measurements/logoff-vm-20261013.txt),
+ * true: the broadcast still arrives (research/measurements/logoff-vm-20261013.txt),
  * so App::survivesLogoff is what actually keeps us alive, and this is the
  * condition it is keyed on. Without the registration, declining to quit
  * would just mean being killed a moment later. */

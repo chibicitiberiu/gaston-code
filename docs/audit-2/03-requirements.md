@@ -220,7 +220,7 @@ Related and separate: `PLAN.md:1156-1159` makes *"Guest free memory is measured
 again at the end of the phase, the same way as above, and compared against the
 28KB baseline"* a Phase 3 gate. Phase 4's close (`PROGRESS.md:2423`) measured
 window creation and chat list but **not** after a turn — the only one of the
-three points the standing rule actually quotes. `docs/measurements/` holds only
+three points the standing rule actually quotes. `research/measurements/` holds only
 the S1 tool-detection runs.
 
 ### 03.8 — `HELLO` grew a body and two headers; the Protocol reference, written to close exactly this gap, does not know **DOC-WRONG**
@@ -256,7 +256,7 @@ returns one hit, `PLAN.md:590`, about the Open Watcom import question. Nothing
 else.
 
 What exists: `win/app/tooldet.cpp` (219 lines), `win/app/tooldet.h`,
-`win/tools_detect.ini` (86 lines), `win/checks/toolcheck.cpp`,
+`win/tools_detect.ini` (86 lines), `tests/guest/toolcheck.cpp`,
 `bridge/agent/toolrules.py` (200), `bridge/agent/toolrep.py` (117),
 `bridge/agent/toolnotes.py` (66), `bridge/profiles/`, a new wire payload in
 `HELLO`'s body, `machine.py`'s `tools_block` (`bridge/agent/machine.py:197`),

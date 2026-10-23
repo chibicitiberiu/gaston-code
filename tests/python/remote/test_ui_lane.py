@@ -7,7 +7,7 @@ popup, and it honours WINEVENT_SKIPOWNPROCESS in name only. So what is
 asserted here is the LANE -- that the ops are routed, refused and answered
 the way the op table says -- and not what the desktop contains.
 
-The guest run is docs/measurements/ui-lane-vm-20261003.txt.
+The guest run is research/measurements/ui-lane-vm-20261003.txt.
 """
 from __future__ import annotations
 
@@ -278,7 +278,7 @@ def test_the_driving_indicator_comes_up_with_a_step_list(tmp_path):
     rc_ui_run raised it and the window was really created. Whether it sits
     above a full-screen DOS box, whether SW_SHOWNOACTIVATE keeps it out of
     the foreground on 98 SE, and whether it can be read at 640x480 are the
-    guest's to answer (docs/measurements/indicator-vm-*.txt).
+    guest's to answer (research/measurements/indicator-vm-*.txt).
     """
     with _server(tmp_path, indicator=1) as server:
         with Remote("127.0.0.1", SECRET, port=server.port) as r:

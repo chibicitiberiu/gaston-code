@@ -5,7 +5,7 @@ in THIS machine's Recycle Bin, does a folder move across drives come out
 whole, are the counts right. Works under C:\\GTEST\\TREE and, with `--other`,
 under a distinctive name on another drive, and removes both.
 
-    python3 -u tools/probe/treeprobe.py --host 10.0.0.45 --port 7893 \\
+    python3 -u research/probes/treeprobe.py --host 10.0.0.45 --port 7893 \\
         --remote 10.0.0.125:<secret> --other D:
 
 Start it INSTEAD OF the bridge, then launch the client. `--other` should be a
@@ -18,7 +18,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

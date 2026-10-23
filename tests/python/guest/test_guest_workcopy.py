@@ -1,6 +1,6 @@
 """The three answers to a filename collision, run as the shipping code.
 
-`win/checks/workcheck.cpp` builds real trees, runs the real
+`tests/guest/workcheck.cpp` builds real trees, runs the real
 `rc_workcopy_run`, and asserts the CONTENT of every file afterwards. This is
 the part that makes it a gate rather than something someone ran once.
 

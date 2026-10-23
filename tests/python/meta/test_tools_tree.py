@@ -1,4 +1,4 @@
-"""The scripts in tools/ parse, and live where they say they live.
+"""The scripts in tools/ and research/ parse, and live where they say they live.
 
 `tools/install-sitter.sh` sat in this repo unable to run. It had an `if`
 one-liner followed by a block closed with a bare `fi`, so `bash -n` rejected
@@ -19,6 +19,7 @@ how `syncprobe.py` was found to have no `import os` at all, only
 
 import ast
 import os
+import re
 import shutil
 import subprocess
 
@@ -26,6 +27,7 @@ import conftest
 import pytest
 
 TOOLS = os.path.join(conftest.REPO, "tools")
+RESEARCH = os.path.join(conftest.REPO, "research")
 
 #: One folder per job. Listed rather than discovered, so a new one is a
 #: decision somebody made rather than a directory that appeared -- the same
@@ -34,16 +36,39 @@ FOLDERS = {
     "vm": "drive the guest from outside it",
     "gen": "generate what ships",
     "check": "the static gates make check runs",
-    "probe": "bridge stubs that drive the guest's own code",
+}
+
+#: The apparatus, under the same rule. `probes/` was `tools/probe/` until the
+#: testing and research trees were split out of the product, and it is
+#: checked here still for the same reasons: not one line of any of them
+#: changed in the move, and neither did what can go wrong with one. A probe
+#: is what decides what a measurement says, so a name used before it is
+#: imported is a number that never arrives.
+#:
+#: Only `probes/` and `deflate-speeds/` hold Python. `guest/` is C and
+#: `measurements/` is recorded output, and both are listed anyway, because
+#: what this list is for is making a new directory here a decision rather
+#: than something that appeared.
+RESEARCH_FOLDERS = {
+    "probes": "bridge stubs that drive the guest's own code",
+    "guest": "the probes that run ON the machine, in C",
+    "deflate-speeds": "one experiment: gate 0.5c and the corpus it needs",
+    "measurements": "what the runs actually said, dated and kept",
 }
 
 
-def _scripts(ext):
+def _folders():
     for folder in sorted(FOLDERS):
-        d = os.path.join(TOOLS, folder)
+        yield f"tools/{folder}", os.path.join(TOOLS, folder)
+    for folder in sorted(RESEARCH_FOLDERS):
+        yield f"research/{folder}", os.path.join(RESEARCH, folder)
+
+
+def _scripts(ext):
+    for label, d in _folders():
         for name in sorted(os.listdir(d)):
             if name.endswith(ext):
-                yield f"{folder}/{name}", os.path.join(d, name)
+                yield f"{label}/{name}", os.path.join(d, name)
 
 
 @pytest.mark.parametrize("name,path", list(_scripts(".sh")))
@@ -99,7 +124,14 @@ def test_a_python_tool_imports_what_it_uses(name, path):
 
 
 def test_every_tool_lives_in_a_folder():
-    """Nothing loose in tools/ except the two shared modules and the map."""
+    """Nothing loose in tools/ or research/, and no folder nobody chose.
+
+    Both trees, in one test rather than two, because the rule is one rule:
+    a directory here is a decision somebody made, not a directory that
+    appeared. research/ joined when the apparatus was split out of the
+    product -- `tools/probe/` became `research/probes/` and `win/checks/`
+    became `tests/guest/` and `research/guest/`.
+    """
     allowed = {"toolkit.py", "vmlib.sh", "README.md"}
     loose = {n for n in os.listdir(TOOLS)
              if os.path.isfile(os.path.join(TOOLS, n))} - allowed
@@ -110,6 +142,33 @@ def test_every_tool_lives_in_a_folder():
             and not n.startswith((".", "__"))}
     assert dirs == set(FOLDERS), f"unexpected: {dirs ^ set(FOLDERS)}"
 
+    loose = {n for n in os.listdir(RESEARCH)
+             if os.path.isfile(os.path.join(RESEARCH, n))} - {"README.md"}
+    assert not loose, (
+        f"put these in one of {sorted(RESEARCH_FOLDERS)}: {sorted(loose)}")
+
+    dirs = {n for n in os.listdir(RESEARCH)
+            if os.path.isdir(os.path.join(RESEARCH, n))
+            and not n.startswith((".", "__"))}
+    assert dirs == set(RESEARCH_FOLDERS), (
+        f"unexpected: {dirs ^ set(RESEARCH_FOLDERS)}")
+
+
+#: The one path a script still spells out by hand: put `tools/` on sys.path
+#: so `import toolkit` works. TWO spellings, because a script is either one
+#: directory inside `tools/` or two inside `research/` -- and that second one
+#: exists because the probes DID move out of tools/, which is the thing this
+#: file's docstring says a count cannot survive. Neither spelling finds the
+#: repo root; `toolkit.REPO` does that by walking up for markers, which is
+#: the whole point. Compared with whitespace removed, so a wrapped line
+#: cannot slip past the check below on a line break.
+FIND_TOOLKIT = (
+    "sys.path.insert(0,os.path.dirname(os.path.dirname("
+    "os.path.abspath(__file__))))",
+    "sys.path.insert(0,os.path.join(os.path.dirname(os.path.dirname("
+    'os.path.dirname(os.path.abspath(__file__)))),"tools"))',
+)
+
 
 def test_nothing_counts_directory_levels_to_find_the_repo():
     """The reason toolkit.py and vmlib.sh exist.
@@ -118,13 +177,22 @@ def test_nothing_counts_directory_levels_to_find_the_repo():
     `..`, in five spellings. Every one of them was wrong the moment these
     files moved one directory deeper, and wrong SILENTLY -- a generator
     would have written its output into `tools/` instead of `win/resources/`.
+
+    The reach for `toolkit.py` itself is the carved-out exception, and it is
+    stripped before the counting below rather than tolerated, so the
+    exception cannot grow a second use by accident.
     """
     for name, path in _scripts(".py"):
-        s = open(path).read()
-        assert "os.path.dirname(os.path.dirname(os.path.dirname(" not in s, name
-        assert '__import__("os")' not in s, name
-        # One level, to reach toolkit beside these folders, is the exception.
-        assert s.count("os.path.dirname(os.path.dirname(") <= 1, name
+        flat = re.sub(r"\s+", "", open(path).read())
+        assert '__import__("os")' not in flat, name
+        found = sum(flat.count(f) for f in FIND_TOOLKIT)
+        assert found <= 1, f"{name} reaches toolkit.py {found} times"
+        rest = flat
+        for f in FIND_TOOLKIT:
+            rest = rest.replace(f, "")
+        assert "os.path.dirname(os.path.dirname(os.path.dirname(" \
+            not in rest, name
+        assert rest.count("os.path.dirname(os.path.dirname(") <= 1, name
 
 
 def test_the_shared_modules_agree_on_the_repo_root():
@@ -138,8 +206,8 @@ def test_the_shared_modules_agree_on_the_repo_root():
 # --- the generators write where the assets actually live ---------------------
 
 
-GENERATORS = [("gen/mkicon.py", "win/resources/gaston.ico"),
-              ("gen/mkspin.py", "win/resources/spin.gif")]
+GENERATORS = [("tools/gen/mkicon.py", "win/resources/gaston.ico"),
+              ("tools/gen/mkspin.py", "win/resources/spin.gif")]
 
 
 @pytest.mark.parametrize("script,asset", GENERATORS)
@@ -170,7 +238,7 @@ def test_a_generator_reproduces_its_committed_asset(script, asset, tmp_path):
 
     target = os.path.join(conftest.REPO, asset)
     before = open(target, "rb").read()
-    out = subprocess.run([py, os.path.join(TOOLS, script)],
+    out = subprocess.run([py, os.path.join(conftest.REPO, script)],
                          capture_output=True, text=True, cwd=tmp_path)
     assert out.returncode == 0, out.stderr[-800:]
     assert open(target, "rb").read() == before, (

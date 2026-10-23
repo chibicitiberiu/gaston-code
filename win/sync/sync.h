@@ -153,7 +153,7 @@ unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
 
 /* Parse "<len> <rel>" + data. `out` receives the bounded, validated relative
  * path and `data_off` (may be NULL) the offset of the file's own bytes.
- * Exposed so win/checks/synccheck.c can drive the REAL parser over bodies
+ * Exposed so tests/guest/synccheck.cpp can drive the REAL parser over bodies
  * with real content glued to the tail -- the composition that had no test.
  * See the implementation for what each refusal protects against. */
 int rc_syncrpc_put_path(const char *body, unsigned body_len,

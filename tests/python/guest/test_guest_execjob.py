@@ -1,12 +1,12 @@
 """libexec, run as the shipping code under Wine.
 
-`win/checks/execcheck.cpp` drives `ExecJob` directly: the refuse-rather-than-
+`tests/guest/execcheck.cpp` drives `ExecJob` directly: the refuse-rather-than-
 truncate guard, output reaching the sink, the cap, the exit code, a failed
 spawn, the timeout, both kinds of cancel, a reader that goes away and the
 via-shell flag. What COMMAND.COM does on the
 real guest -- REDIR32, the DOS VM, the always-zero exit code -- Wine cannot
-show; `win/checks/execprobe.cpp` measures that on the VM
-(docs/measurements/execprobe-vm-*).
+show; `research/guest/execprobe.cpp` measures that on the VM
+(research/measurements/execprobe-vm-*).
 
 Since 2026-10-02 it also drives `exec/cpuid.cpp`, which is libexec too. Those
 cases assert a SHAPE and never a particular processor, because they run here on
@@ -48,7 +48,7 @@ def test_every_case_passes(verdicts):
 #: there is no WINOA386.MOD here, so it degrades to "a forced kill of an
 #: ordinary program still works" and prints vm=0. The line worth reading is
 #: the one from the guest, where vm=1; see
-#: docs/measurements/forcekill-vm-20261014.txt.
+#: research/measurements/forcekill-vm-20261014.txt.
 CASE_COUNT = 30
 
 

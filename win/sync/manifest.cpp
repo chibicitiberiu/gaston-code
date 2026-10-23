@@ -234,7 +234,7 @@ int rc_sync_scan(const char *root, rc_sync_sink sink, void *ctx)
 /* --- writing ------------------------------------------------------------- */
 
 /* The write path is libfs now (fs/writer.h). These two keep the C shape the
- * sync RPC and win/checks/synccheck.c already use: begin_write hands back a
+ * sync RPC and tests/guest/synccheck.cpp already use: begin_write hands back a
  * HANDLE the caller writes to and a temp name it holds until a later frame
  * arrives with the checksum, and commit is a separate call because SYNCPUTEND
  * is a separate frame. A FileWriter object cannot span those two RPCs, so the

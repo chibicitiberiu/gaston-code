@@ -7,7 +7,7 @@
  * queue.
  *
  * `exit` IS ONLY MEANINGFUL WITHOUT A SHELL, measured on the VM
- * (docs/measurements/execprobe-vm-gui-20260926.txt): COMMAND.COM /c on 98
+ * (research/measurements/execprobe-vm-gui-20260926.txt): COMMAND.COM /c on 98
  * exits 0 whatever happens, even for a program that does not exist, while a
  * program spawned directly returns its real code. So END carries
  * `via_shell`, and it is a fact rather than a verdict -- the caller decides

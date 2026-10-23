@@ -114,13 +114,13 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # the paragraph above warns about, so the runtime number is measured this
 # time and not just this one: free physical memory with the client up,
 # before and after the feature set, on the guest
-# (docs/measurements/workingset-*-20261002.txt).
+# (research/measurements/workingset-*-20261002.txt).
 #
 # 502,768 -> 506,864 (one page), the same day: copy, move and delete of whole
 # trees -- the Recycle Bin, a move that never loses its source, nothing
 # overwritten unless asked (fs/tree.h) -- measured at 506,233. Written as
 # plain data first; the std::string version was 11KB. The runtime number is
-# re-measured on the guest with it (docs/measurements/workingset-*).
+# re-measured on the guest with it (research/measurements/workingset-*).
 #
 # 506,864 -> 515,056 (two pages), the same day: the `ui` listing of one
 # control's items -- what `input`'s `item` targets. About 1.5KB of code and no
@@ -133,8 +133,8 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # room. Trimmed first: a std::vector<std::string> in config.h, included by
 # half the program, cost 25KB and is a TextList (core/textlist.h). The
 # runtime number was measured for the whole set: idle, the client holds
-# 36KB more than before it (docs/measurements/workingset-vm-20261004.txt,
-# tools/probe/wsprobe.py).
+# 36KB more than before it (research/measurements/workingset-vm-20261004.txt,
+# research/probes/wsprobe.py).
 # 585,728 -> 482,345 on 2026-10-11, and this is the FIRST REDUCTION in the
 # ladder above. Stage 2 took 104,448 bytes out of the image without removing
 # a feature: 31,744 of uuid.lib GUIDs that one reference pulled whole, ~45,000
@@ -351,7 +351,7 @@ OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
-HTMLSPIKE_OBJS = $(call objs,checks/htmlspike.c)
+HTMLSPIKE_OBJS = $(call objs,research/guest/htmlspike.c)
 htmlspike: $(BUILD)/htmlspike.exe
 $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 	@$(WLINK) $(LFLAGS) library ole32.lib, oleaut32.lib, uuid.lib \
@@ -361,7 +361,7 @@ $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(call objs,checks/synccheck.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
+SYNCCHECK_OBJS = $(call objs,tests/guest/synccheck.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
                  $(MINIZ)) $(LIBFS) $(LIBCORE)
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
@@ -372,7 +372,7 @@ $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 # Asserts save() and load() agree on the field list. Two bugs of that exact
 # shape have shipped (font_size, then the sync root), and neither was visible
 # from reading the code.
-INICHECK_OBJS = $(call objs,checks/inicheck.cpp app/config.cpp app/modes.cpp) $(LIBCORE)
+INICHECK_OBJS = $(call objs,tests/guest/inicheck.cpp app/config.cpp app/modes.cpp) $(LIBCORE)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -384,7 +384,7 @@ $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 # real I/O and the mint half is OLE32 -- and because a client that silently
 # re-mints on every launch is indistinguishable from one that works until the
 # chat list comes up empty. See BACKLOG.md 21.
-IDCHECK_OBJS = $(call objs,checks/idcheck.cpp app/machineid.cpp) $(LIBCORE)
+IDCHECK_OBJS = $(call objs,tests/guest/idcheck.cpp app/machineid.cpp) $(LIBCORE)
 idcheck: $(BUILD)/idcheck.exe
 $(BUILD)/idcheck.exe: $(IDCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -395,7 +395,7 @@ $(BUILD)/idcheck.exe: $(IDCHECK_OBJS)
 # profile API would read from C:\WINDOWS, an inline comment that becomes part
 # of the value, a value one byte too long, an unknown key. See
 # docs/REMOTE.md, Configuration.
-INIFILECHECK_OBJS = $(call objs,checks/inifilecheck.cpp) $(LIBCORE)
+INIFILECHECK_OBJS = $(call objs,tests/guest/inifilecheck.cpp) $(LIBCORE)
 inifilecheck: $(BUILD)/inifilecheck.exe
 $(BUILD)/inifilecheck.exe: $(INIFILECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -405,7 +405,7 @@ $(BUILD)/inifilecheck.exe: $(INIFILECHECK_OBJS)
 # App's lifecycle, traced: init and start in order, signal-all-then-join in
 # reverse, a stuck join leaked rather than deleted, quit() from another
 # thread, WM_ENDSESSION. See docs/REMOTE.md, "Services and lifecycle".
-APPCHECK_OBJS = $(call objs,checks/appcheck.cpp) $(LIBCORE)
+APPCHECK_OBJS = $(call objs,tests/guest/appcheck.cpp) $(LIBCORE)
 appcheck: $(BUILD)/appcheck.exe
 $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -415,7 +415,7 @@ $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
 # Not a check: measures on the guest what libexec's design depends on --
 # Toolhelp, whether a grandchild outlives its killed shell, exit codes through
 # COMMAND.COM, socket inheritance, launch's show value. Read back over COM1.
-EXECPROBE_OBJS = $(call objs,checks/execprobe.cpp) $(LIBCORE)
+EXECPROBE_OBJS = $(call objs,research/guest/execprobe.cpp) $(LIBCORE)
 execprobe: $(BUILD)/execprobe.exe
 $(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -430,7 +430,7 @@ $(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
 # a loaded layout, ToAsciiEx as a dead-key test, AltGr as Ctrl+Alt, and
 # Alt+Numpad -- measured into its own edit control. Wine's layouts are the
 # host's, so only the guest answers. Writes KEYPROBE.TXT beside itself.
-KEYPROBE_OBJS = $(call objs,checks/keyprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
+KEYPROBE_OBJS = $(call objs,research/guest/keyprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
 keyprobe: $(BUILD)/keyprobe.exe
 $(BUILD)/keyprobe.exe: $(KEYPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -446,14 +446,14 @@ $(BUILD)/keyprobe.exe: $(KEYPROBE_OBJS)
 # SW_SHOWNOACTIVATE really keeps it out of the foreground (load-bearing:
 # keyboardTargetOk refuses every typing step while one of ours is in
 # front). Writes STRIPPRB.TXT beside itself.
-STRIPPROBE_OBJS = $(call objs,checks/stripprobe.cpp) $(LIBCORE)
+STRIPPROBE_OBJS = $(call objs,research/guest/stripprobe.cpp) $(LIBCORE)
 stripprobe: $(BUILD)/stripprobe.exe
 $(BUILD)/stripprobe.exe: $(STRIPPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
 
-FOCUSPROBE_OBJS = $(call objs,checks/focusprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
+FOCUSPROBE_OBJS = $(call objs,research/guest/focusprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
 focusprobe: $(BUILD)/focusprobe.exe
 $(BUILD)/focusprobe.exe: $(FOCUSPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -464,7 +464,7 @@ $(BUILD)/focusprobe.exe: $(FOCUSPROBE_OBJS)
 # own binary: fs/list.o and, later, fs/drives.o are gremote-only and the
 # client never links them, so without a gate here the CMOV and stack-frame
 # checks never see that code at all.
-FSCHECK_OBJS = $(call objs,checks/fscheck.cpp) $(LIBFS) $(LIBCORE)
+FSCHECK_OBJS = $(call objs,tests/guest/fscheck.cpp) $(LIBFS) $(LIBCORE)
 fscheck: $(BUILD)/fscheck.exe
 $(BUILD)/fscheck.exe: $(FSCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0, \
@@ -474,7 +474,7 @@ $(BUILD)/fscheck.exe: $(FSCHECK_OBJS)
 
 # libexec under Wine: the refuse-rather-than-truncate guard, output, the cap,
 # timeout and cancel, driven through ExecJob for real.
-EXECCHECK_OBJS = $(call objs,checks/execcheck.cpp) $(LIBEXEC) $(LIBCORE)
+EXECCHECK_OBJS = $(call objs,tests/guest/execcheck.cpp) $(LIBEXEC) $(LIBCORE)
 execcheck: $(BUILD)/execcheck.exe
 $(BUILD)/execcheck.exe: $(EXECCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -491,7 +491,7 @@ $(BUILD)/execcheck.exe: $(EXECCHECK_OBJS)
 # trusted (win/core/inifile.cpp:50-107).
 #
 # map= because check-% hands that path to cmovcheck.py and stackframes.py.
-RENDERCHECK_OBJS = $(call objs,checks/rendercheck.cpp) $(LIBVIEW) $(LIBCORE)
+RENDERCHECK_OBJS = $(call objs,tests/guest/rendercheck.cpp) $(LIBVIEW) $(LIBCORE)
 rendercheck: $(BUILD)/rendercheck.exe
 $(BUILD)/rendercheck.exe: $(RENDERCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0, \
@@ -502,7 +502,7 @@ $(BUILD)/rendercheck.exe: $(RENDERCHECK_OBJS)
 # against one adopted from a Listener over loopback -- round trips, deflate,
 # a near-cap frame, order, the idle timeout, the four-call stop. The server
 # half has no other user until gremote.
-WIRECHECK_OBJS = $(call objs,checks/wirecheck.cpp $(MINIZ)) $(LIBWIRE) $(LIBCORE)
+WIRECHECK_OBJS = $(call objs,tests/guest/wirecheck.cpp $(MINIZ)) $(LIBWIRE) $(LIBCORE)
 wirecheck: $(BUILD)/wirecheck.exe
 $(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -565,7 +565,7 @@ $(BUILD)/gupdate.exe: $(GUPDATE_OBJS)
 # Window and SubclassedWindow (core/window.h): WM_CREATE seeing hwnd(),
 # destroy through the object and from outside, two instances of one class,
 # two subclassed EDITs that do not share state, detach.
-WINDOWCHECK_OBJS = $(call objs,checks/windowcheck.cpp) $(LIBCORE)
+WINDOWCHECK_OBJS = $(call objs,tests/guest/windowcheck.cpp) $(LIBCORE)
 windowcheck: $(BUILD)/windowcheck.exe
 $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -575,7 +575,7 @@ $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 # libautomation's selector grammar and tree walker. Links the library, so
 # what is tested is what would ship. Wine settles the grammar completely
 # (it is string work) and only proves the walk does not crash.
-UICHECK_OBJS = $(call objs,checks/uicheck.cpp ui/uirec.cpp ui/uiengine.cpp \
+UICHECK_OBJS = $(call objs,tests/guest/uicheck.cpp ui/uirec.cpp ui/uiengine.cpp \
                 ui/inject.cpp) \
                $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
 uicheck: $(BUILD)/uicheck.exe
@@ -584,7 +584,7 @@ $(BUILD)/uicheck.exe: $(UICHECK_OBJS)
 	  map=$(BUILD)/uicheck.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
 
-AUTOCHECK_OBJS = $(call objs,checks/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
+AUTOCHECK_OBJS = $(call objs,research/guest/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
 autocheck: $(BUILD)/autocheck.exe
 $(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0, \
@@ -608,7 +608,7 @@ $(BUILD)/HOOKDLL.DLL: $(HOOKDLL_OBJS)
 # because frameproto.h claimed for three phases that header values were
 # percent-encoded, and that was true of the parser and false of the builder --
 # nothing ran the two halves against each other.
-FRAMECHECK_OBJS = $(call objs,checks/framecheck.cpp net/frameproto.cpp) \
+FRAMECHECK_OBJS = $(call objs,tests/guest/framecheck.cpp net/frameproto.cpp) \
                   $(LIBWIRE) $(LIBCORE)
 framecheck: $(BUILD)/framecheck.exe
 $(BUILD)/framecheck.exe: $(FRAMECHECK_OBJS)
@@ -619,7 +619,7 @@ $(BUILD)/framecheck.exe: $(FRAMECHECK_OBJS)
 # Asserts the C++ guards actually guard: that Buf reports truncation at and
 # past the limit, and that every destructor fires, in order, on every path.
 # Guard code that is wrong is worse than no guard, because it is trusted.
-CPPCHECK_OBJS = $(call objs,checks/cppcheck.cpp) $(LIBCORE)
+CPPCHECK_OBJS = $(call objs,tests/guest/cppcheck.cpp) $(LIBCORE)
 cppcheck: $(BUILD)/cppcheck.exe
 $(BUILD)/cppcheck.exe: $(CPPCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -630,7 +630,7 @@ $(BUILD)/cppcheck.exe: $(CPPCHECK_OBJS)
 # macros, not retyped), so tests/python/test_guest_caps.py can catch a value
 # being RE-MEANT on one side without the other -- something a range check on
 # the wire integer alone cannot see.
-CAPSCHECK_OBJS = $(call objs,checks/capscheck.c)
+CAPSCHECK_OBJS = $(call objs,tests/guest/capscheck.c)
 capscheck: $(BUILD)/capscheck.exe
 $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -647,14 +647,14 @@ $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 # guest and for the tests, so the format Python parses is the format that
 # ships. Takes a directory so it can run under Wine against a synthetic tree
 # with its own INI, without the toolchains actually being installed.
-TOOLCHECK_OBJS = $(call objs,checks/toolcheck.cpp app/tooldet.cpp) $(LIBCORE)
+TOOLCHECK_OBJS = $(call objs,tests/guest/toolcheck.cpp app/tooldet.cpp) $(LIBCORE)
 toolcheck: $(BUILD)/toolcheck.exe
 $(BUILD)/toolcheck.exe: $(TOOLCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
 
-WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp sync/manifest.cpp \
+WORKCHECK_OBJS = $(call objs,tests/guest/workcheck.cpp app/workcopy.cpp sync/manifest.cpp \
                  sync/putpath.cpp sync/scanner.cpp sync/verify.cpp $(MINIZ)) $(LIBFS) $(LIBCORE)
 workcheck: $(BUILD)/workcheck.exe
 $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
@@ -662,7 +662,7 @@ $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	  $(LINKIN)
 	@echo "built $@"
 
-PROBE_OBJS = $(call objs,checks/probe.c $(MINIZ)) $(LIBCORE)
+PROBE_OBJS = $(call objs,research/guest/probe.c $(MINIZ)) $(LIBCORE)
 # The corpus is a PREREQUISITE of the probe, not an optional extra beside it.
 # `probe deflate` reads CORPUS.TXT from its own directory and REFUSES without
 # it -- deliberately, because the synthetic sample it used to build compressed
@@ -689,7 +689,7 @@ probe: $(BUILD)/probe.exe corpus
 
 .PHONY: corpus
 corpus:
-	@$(PYTHON) $(TOP)/tools/gen/mkcorpus.py -o $(BUILD)/CORPUS.TXT | sed 's/^/  /'
+	@$(PYTHON) $(TOP)/research/deflate-speeds/mkcorpus.py -o $(BUILD)/CORPUS.TXT | sed 's/^/  /'
 $(BUILD)/probe.exe: $(PROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
@@ -722,7 +722,7 @@ all: msgids $(BUILD)/gaston.exe gremote gupdate synccheck inicheck idcheck inifi
 # the same code the GUI does, without needing GUI automation.
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
-NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
+NETCHECK_OBJS = $(call objs,tests/guest/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/cmdlog.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
                 sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uiengine.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
@@ -737,7 +737,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # same worker the GUI runs, not a reimplementation of it. No live bridge
 # needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
 # safe no-op here.
-RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
+RPCCHECK_OBJS = $(call objs,tests/guest/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/cmdlog.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
                 sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uiengine.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
@@ -808,6 +808,37 @@ $(OBJ)/%.o: %.cpp $(OBJ)/%.d
 	@$(WPP) $(CFLAGS) $(CXXONLY) $(DEPFLAGS) -fo=$@ -fr=$(@:.o=.err) $<
 	@$(FIXDEP)
 
+# THE SAME TWO RULES AGAIN, for sources that are NOT under win/. The test
+# binaries live in tests/guest/ and the research probes in research/guest/,
+# because neither ships and neither belongs in the directory that builds the
+# three exes that do. A target names them relative to the REPO root --
+# `tests/guest/appcheck.cpp`, not `../tests/guest/appcheck.cpp` -- and their
+# objects therefore land at $(OBJ)/tests/guest/appcheck.o.
+#
+# Naming them relative to the repo root rather than with a `..` is not
+# cosmetic. `$(call objs,../tests/guest/appcheck.cpp)` would put the object at
+# $(OBJ)/../tests/guest/appcheck.o, which is OUTSIDE $(OBJ) -- and the .d
+# sweep above is `find $(OBJ) -name '*.d'`, so every header dependency of
+# every check would silently stop being tracked. That is the exact failure
+# the -ad machinery was added for: an object built against an older header,
+# allocating a struct at the old size.
+#
+# A target under $(OBJ)/tests/ or $(OBJ)/research/ matches this pattern AND
+# the win-relative one above, with the same stem, so the pair above stays
+# FIRST and make resolves the overlap by prerequisite: `tests/guest/
+# appcheck.cpp` does not exist under win/ and nothing can make it, so the
+# first rule is rejected and this one applies. Every shipping source keeps
+# taking the first pair, because $(TOP)/app/main.cpp does not exist either.
+$(OBJ)/%.o: $(TOP)/%.c $(OBJ)/%.d
+	@mkdir -p $(@D)
+	@$(WCC) $(CFLAGS) $(DEPFLAGS) -fo=$@ -fr=$(@:.o=.err) $<
+	@$(FIXDEP)
+
+$(OBJ)/%.o: $(TOP)/%.cpp $(OBJ)/%.d
+	@mkdir -p $(@D)
+	@$(WPP) $(CFLAGS) $(CXXONLY) $(DEPFLAGS) -fo=$@ -fr=$(@:.o=.err) $<
+	@$(FIXDEP)
+
 # An object whose .d is MISSING is out of date, not up to date. Without this
 # a lost .d left its object stale for good: no header could ever trigger a
 # rebuild of it. main.o was built against an older mainwindow.h, allocated
@@ -829,12 +860,12 @@ $(OBJ)/%.d: ;
 # one object only.
 $(OBJ)/app/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 
-# checks/cppcheck.o includes the same mshtml.h, for the same reason and with
-# the same consequence: it compares win/app/htmlview.cpp's spelled-out GUIDs
-# against uuid.lib's own copies, so it needs the toolchain's declarations of
-# them. A check exe may link uuid.lib -- the shipping exes are the ones that
-# must not.
-$(OBJ)/checks/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
+# tests/guest/cppcheck.o includes the same mshtml.h, for the same reason and
+# with the same consequence: it compares win/app/htmlview.cpp's spelled-out
+# GUIDs against uuid.lib's own copies, so it needs the toolchain's
+# declarations of them. A check exe may link uuid.lib -- the shipping exes are
+# the ones that must not.
+$(OBJ)/tests/guest/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
 
 # THE DEFAULT IS -os AND -ot IS THE EXCEPTION, which is the inversion of how
 # this file read until 2026-10-11 and the answer to BACKLOG.md 2. It used to
@@ -851,7 +882,7 @@ $(OBJ)/checks/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
 # Six exceptions and a general rule pointing the other way is a default that
 # has been voted against. So it is turned around, and the four modules
 # nobody had measured came with it. Measured on the QEMU guest,
-# docs/measurements/flags-vm-20261011.txt:
+# research/measurements/flags-vm-20261011.txt:
 #
 #   whole program at -os          gaston -26,624   gremote -19,456
 #                                 but the compressing direction of a
@@ -888,7 +919,7 @@ $(OBJ)/checks/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
 # The numbers above are from the QEMU guest, which is TCG on a modern host --
 # so the 23% is a statement about a Ryzen, and the machine the trade is FOR is
 # a 200MHz Pentium with 32MB. docs/stage5-plan.md measures HEAD against -os
-# everywhere on the real box, A/B/A, through tools/probe/flagsprobe.py.
+# everywhere on the real box, A/B/A, through research/probes/flagsprobe.py.
 #
 # BUILD= already gives each arm its own object tree, but the flags were not
 # reachable from the command line: -os is hardcoded above and this override
@@ -952,6 +983,27 @@ $(LIBVIEW): $(call objs,$(VIEW_SRCS))
 	@mkdir -p $(@D)
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 
+# EVERY DIRECTORY OF OUR OWN SOURCE, which is no longer one directory. The
+# two source-tree gates below -- msgids and check-sources -- were written
+# when the check binaries sat in win/checks/ and a walk of win/ therefore
+# covered them for free. It does not any more, and both gates lose something
+# real if the list is not kept:
+#
+#   msgids.py claims the private window message numbers are unique ACROSS
+#   THE TREE, and tests/guest/appcheck.cpp and windowcheck.cpp each define
+#   one (WM_APP + 0x200 and + 0x210). appcheck's own comment says in as many
+#   words that it is staying clear of core/'s block because this gate is
+#   watching. A gate that silently stopped seeing two of the definitions
+#   would still print "ok" and would no longer mean it.
+#
+#   check-sources refuses strcpy/sprintf/alloca and dropped path separators.
+#   A check harness builds real paths and writes real files, so it is
+#   exactly the code that wants refusing. research/guest/ is here for the
+#   stronger version of the same reason: probe.c is 4,036 lines of C that
+#   runs on the real 1998 machine, and a dropped separator there is a probe
+#   that measures nothing and says it measured something.
+SRCDIRS = $(CURDIR) $(TOP)/tests/guest $(TOP)/research/guest
+
 # The map is not a debugging nicety: `make check` needs symbol names to gate on
 # stack frame sizes, and objdump cannot read Watcom's OMF objects.
 # Private window messages must not share a number (tools/check/msgids.py).
@@ -959,7 +1011,7 @@ $(LIBVIEW): $(call objs,$(VIEW_SRCS))
 # misroutes messages at runtime, so it is a build error. Order-only, so it
 # runs before every link of the client without forcing one.
 msgids:
-	@$(PYTHON) $(TOP)/tools/check/msgids.py $(CURDIR)
+	@$(PYTHON) $(TOP)/tools/check/msgids.py $(SRCDIRS)
 
 $(BUILD)/gaston.exe: $(OBJS) $(BUILD)/gaston.res | msgids
 	@$(WLINK) $(LFLAGS), resource=$(BUILD)/gaston.res, \
@@ -1151,7 +1203,7 @@ check-sources:
 	@# \b does not match inside rc_strcpy, because '_' is a word character.
 	@# third_party is excluded: miniz is vendored and not ours to rewrite.
 	@bad=$$(grep -rnE '\b(strcpy|strcat|sprintf|vsprintf|gets|lstrcpyA?|lstrcatA?|wsprintfA?|_mbscpy|alloca)[[:space:]]*\(' \
-	        $(CURDIR) --include='*.c' --include='*.cpp' --include='*.h' \
+	        $(SRCDIRS) --include='*.c' --include='*.cpp' --include='*.h' \
 	        2>/dev/null | grep -v third_party || true); \
 	 if [ -n "$$bad" ]; then \
 	   echo "$$bad"; \
@@ -1172,9 +1224,9 @@ check-sources:
 	@# "\" in the file, and one level of collapse too many is invisible in
 	@# a diff. The valid set is the C89 list plus \x and octal.
 	@bad=$$(grep -rnE '"[^"]*\\[^\\nrtbfav0xq'"'"'"?%][^"]*"' \
-	        $(CURDIR) --include='*.c' --include='*.cpp' --include='*.h' \
+	        $(SRCDIRS) --include='*.c' --include='*.cpp' --include='*.h' \
 	        2>/dev/null | grep -v third_party || true); \
-	 bad2=$$(grep -rn '%s\\%s' $(CURDIR) --include='*.c' --include='*.cpp' \
+	 bad2=$$(grep -rn '%s\\%s' $(SRCDIRS) --include='*.c' --include='*.cpp' \
 	        --include='*.h' 2>/dev/null | grep -v third_party \
 	        | grep -v '%s\\\\%s' || true); \
 	 if [ -n "$$bad2" ]; then \

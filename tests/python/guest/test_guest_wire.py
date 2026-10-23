@@ -1,6 +1,6 @@
 """libwire's Connection and Listener, end to end, as the shipping code under Wine.
 
-`win/checks/wirecheck.cpp` connects a Connection to another one adopted from a
+`tests/guest/wirecheck.cpp` connects a Connection to another one adopted from a
 Listener over loopback, in one process, and prints a verdict per case. The
 server half -- adopt(), the idle timeout that is gremote's heartbeat, the
 listener -- has no other user until gremote exists (docs/REMOTE.md step 4),

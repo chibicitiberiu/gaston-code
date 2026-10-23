@@ -8,9 +8,9 @@ from hardware.** Stage 5 is not a feature stage. It is where a physical Pentium 
 nothing else may answer, and where one optimisation is decided by the machine it exists for.
 
 The box: Pentium 200 MMX, Win98 SE 4.10.2222 A, 32,284 KB, 800x600 at 24bpp, AutoPatcher applied
-(`docs/measurements/p200-run1-20260926.txt:1-2`). It is **not** the Athlon XP 2000+ at 10.0.0.125
+(`research/measurements/p200-run1-20260926.txt:1-2`). It is **not** the Athlon XP 2000+ at 10.0.0.125
 that has been driven over gremote since 2026-10-01; `docs/REMOTE.md:1145-1154` and
-`docs/BACKLOG.md:83-88` both exist because most `docs/measurements/*-p200-*.txt` files are that
+`docs/BACKLOG.md:83-88` both exist because most `research/measurements/*-p200-*.txt` files are that
 other machine, and reading a filename as a machine is how this gate came to look half-closed when
 nothing had run on it.
 
@@ -78,10 +78,10 @@ Nothing to design but the order and the honesty of the instruments. Three princi
    `retroclaude-win98` first. The P200 is 20x slower and in another room; the September visit
    already lost step 18 that way.
 2. **Each session end pays for more than one item.** Four in the whole stage, each named below.
-3. **Every file is `docs/measurements/<name>-p200-<date>.txt` with the machine in its own header**,
+3. **Every file is `research/measurements/<name>-p200-<date>.txt` with the machine in its own header**,
    not in the filename. That is the lesson of `BACKLOG.md:83-88`, and it is why the one P200 figure
    this plan leans on — `PROGRESS.md:106`'s 11 ms naive / 1 ms filtered template scan — is treated
-   as a summary rather than a measurement: **no file in `docs/measurements/` carries it.**
+   as a summary rather than a measurement: **no file in `research/measurements/` carries it.**
 
 ### What must be built before the box is touched
 
@@ -94,8 +94,8 @@ Nothing to design but the order and the honesty of the instruments. Three princi
 | `probe evlat` uses the `ms` parameter it already receives | `probe.c:2222-2233`, naming which of the three hook sites it touches | otherwise one of the five questions has no instrument |
 | `probe imgfind` times an **absent** template over the full height | `probe.c:3598-3601` | the present-template case is the only one anybody has |
 | `HOT_OPT ?= -otexan` | `win/Makefile:51,859-860` | otherwise `all-os` is a hand edit, not a switch |
-| `tools/probe/flagsprobe.py` | new | the round trip was done by hand |
-| `tools/probe/memprobe.py` | new | the **under-load** half of `REMOTE.md:1235` has no instrument at all |
+| `research/probes/flagsprobe.py` | new | the round trip was done by hand |
+| `research/probes/memprobe.py` | new | the **under-load** half of `REMOTE.md:1235` has no instrument at all |
 | `cancelprobe.py`, a gremote-lane mode | rewrite, not a flag | §26's number |
 | `syncprobe.py`, a **scan-only** timed repeat-pass mode | its `run()` calls `dos()`, which is QEMU-only (`tools/vm/dos.py:22-45`) and cannot execute against the P200 | §2's timed scan, §4's re-read |
 | `viewprobe.py`'s growth corpus parameterised for a long page | `viewprobe.py:192-205` | §31, which no draft scheduled |
@@ -245,7 +245,7 @@ gone — a box that answers nothing and cannot be told to.
 | **E0** | docs: this plan as `docs/stage5-plan.md`; `ROADMAP.md`'s stage 5 rewritten; the record corrections below | — |
 | **E1** | the floppy and the install path: `GUPDATE.EXE`, `FOCUSPROBE.EXE`, a ≤256 KB corpus; `C:\GASTON` vs `C:\GREMOTE` settled in the generator; a P200 INI | the script's CRLF and size checks print the new total; a rehearsal install from the kit on the guest |
 | **E2** | `probe.c`: `deflate` reads the corpus and **refuses** rather than falling back; `evlat` uses its `ms` parameter; `imgfind` times an absent template over the full height | `make -C win probe`, `check-sources`, a guest run showing each print something the old one could not |
-| **E3** | `HOT_OPT` in `win/Makefile`; `tools/probe/flagsprobe.py` | `make -C win check` unchanged at the defaults — the point of the knob is that the shipped build does not move; a guest run reproducing the 0.182-against-0.219 shape |
+| **E3** | `HOT_OPT` in `win/Makefile`; `research/probes/flagsprobe.py` | `make -C win check` unchanged at the defaults — the point of the knob is that the shipped build does not move; a guest run reproducing the 0.182-against-0.219 shape |
 | **E4** | `memprobe.py`; `cancelprobe.py`'s gremote-lane mode; `syncprobe.py`'s scan-only timed passes; `viewprobe.py`'s long-page corpus | guest runs of each; cancelprobe against `ui-cancel-vm-20261003.txt` |
 | **E5** | **K1**: bring-up, baseline, boot #1, first contact | `bringup-p200-<date>.txt`, `testbat-p200-<date>.txt`. Closes gate 0.5c |
 | **E6** | **C1**: the client installed over the wire | `ship()`/`put` transcript in the W1 file; the client answers the bridge from the box |

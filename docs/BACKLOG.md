@@ -57,7 +57,7 @@ gate.
 
 **The tool exists (2026-09-27).** `gremote.exe` is built and proven on the
 QEMU guest -- exec, processes, the whole fs lane and `ship()`, measured in
-`docs/measurements/gremote-vm-20260927.txt`. What is still owed is the
+`research/measurements/gremote-vm-20260927.txt`. What is still owed is the
 hardware.
 
 **[R -- 2026-10-10] Two of the three things this entry called missing were
@@ -68,7 +68,7 @@ already built, and the entry was wrong to keep asking for them.**
   `SETUP.BAT`, and deliberately not applied automatically -- `SETUP.BAT` prints
   the `REGEDIT /S` line and says why. The reasoning this entry gives for a
   `.REG` over registry calls in C is already a comment in that script. It is
-  **proven**: `docs/measurements/gremote-vm-20260927.txt` has the box answering
+  **proven**: `research/measurements/gremote-vm-20260927.txt` has the box answering
   2s after a cold boot with nobody logged in and no EXPLORER running, and
   `docs/gremote-plan.md` lists it under "Closed since".
 - *First delivery.* Answered by use on the Athlon, which has been driven over
@@ -88,7 +88,7 @@ written. It has one now, and the figure has moved: 567 KB of a 1.44 MB floppy
 once rebuilt, and about 900 KB after stage 5 adds `GUPDATE.EXE`,
 `FOCUSPROBE.EXE` and a deflate corpus.
 
-**And a naming hazard worth more than it looks.** Most `docs/measurements/*-p200-*.txt`
+**And a naming hazard worth more than it looks.** Most `research/measurements/*-p200-*.txt`
 files are **Athlon XP** runs; `inifile-absent-key-p200-20261001.txt` even calls
 the Athlon "the P200 checklist box". The real Pentium 200 appears only in
 `p200-run1/2-20260926.txt`. Read a filename as the machine and this gate looks
@@ -105,7 +105,7 @@ the entry stays open.
 byte** -- `miniz.o`, `sync/scanner.o`, `fs/reader.o`, and nothing else.
 `win/Makefile` is inverted to match. gaston went 499,241 -> 478,249 and
 gremote 273,321 -> 259,497, with no measurable speed cost.
-`docs/measurements/flags-vm-20261011.txt` has the method and the numbers.
+`research/measurements/flags-vm-20261011.txt` has the method and the numbers.
 
 Three things that measurement settled, beyond the headline:
 
@@ -425,7 +425,7 @@ file unreliable, which is the thing stage 4's exit condition depends on.**
 - ~~**The netem gate is no longer blocked on sudo, and still has not been
   run.**~~ **Discharged 2026-09-18** (01.62), with the plan's own named
   fallback rather than netem: a deliberate slow reader
-  (`win/checks/netcheck.c --slowsend` driven from
+  (`tests/guest/netcheck.c --slowsend` driven from
   `tests/python/test_guest_net.py`). It fills the guest's outbound queue
   directly, which is what the named weaknesses actually need, and it lives in
   the suite instead of being run by hand.
@@ -669,7 +669,7 @@ the reason:
 machines against one bridge. BUILT 2026-10-13, stage 3c** -- the bridge keys
 guests by machine id, baselines by (machine, folder), and two machines held
 two mirrors and two baselines at once on the real hardware
-(`docs/measurements/two-guests-20261013.txt`). The implementation list below
+(`research/measurements/two-guests-20261013.txt`). The implementation list below
 is done except where it says otherwise; `docs/stage3c-plan.md` is the plan
 and `ROADMAP.md` stage 3c the outcome.** `docs/ROADMAP.md` gives it stage 3c, after the
 markup moves to the client and after pagination, and before the
@@ -877,7 +877,7 @@ was measured and works -- but that is GDI's RLE inside a DIB, a different thing 
 **[R -- 2026-10-10] Phase 6's screenshot path HAS landed**, which removes this
 entry's own reason for waiting: `shot` ships on the client and gremote, and a
 922KB capture was measured over deflate on the Athlon (compressed 0.046s against
-raw 0.090s, `docs/measurements/ui-lane-real-hw-20261004.txt`). So the traffic
+raw 0.090s, `research/measurements/ui-lane-real-hw-20261004.txt`). So the traffic
 that would want RLE exists now, and the two readings below are a live decision
 rather than a dormant one. It sits in `ROADMAP.md` stage 4; the measurement to
 beat is that one, on the machine that took it.
@@ -928,9 +928,9 @@ codec does the compression. Two documents said closed, two said open, and
 nobody noticed because each was read on its own.
 
 **The 2.8x figure has no measurement file behind it.** Nothing in
-`docs/measurements/` contains the string RLE; gate 0.12b's depth ladder prints
+`research/measurements/` contains the string RLE; gate 0.12b's depth ladder prints
 an RLE column and its output was never saved. The nearest real number is in
-`win/checks/probe.c`, in the comment explaining why an EARLIER number was
+`research/guest/probe.c`, in the comment explaining why an EARLIER number was
 **discarded**: *"The first version sampled a single strip of mostly-flat
 desktop and concluded deflate beats RLE by 2.7x, which is a claim about that
 band and not about screenshots."* That is 2.7x the other way round -- deflate
@@ -943,7 +943,7 @@ shouldCompress` in `win/wire/connection.cpp`, `should_compress` in
 `bridge/wire/compress.py`, and the same shape again in `gremote/client.py`.
 Each has a decoder, one of which treats an unknown `enc` as raw rather than
 refusing. The encoder is unwritten -- RLE in this tree exists only in
-`win/checks/probe.c`, where GDI produces it for free inside a DIB, which is a
+`research/guest/probe.c`, where GDI produces it for free inside a DIB, which is a
 different thing from a wire codec over an arbitrary frame body. Add a HELLO
 negotiation bit and it is a day, for a codec measured as worse on the link we
 have.
@@ -1421,7 +1421,7 @@ control has somewhere to go.
 **The measurement this entry asked for could not be taken, and that is the
 part worth keeping.** It said `GetFreeSystemResources` was "already ruled out
 (9x-only 16-bit export, no 32-bit equivalent worth resolving)", which is half
-wrong: `win/checks/probe.c:75-93` already resolves it through `rsrc32.dll`
+wrong: `research/guest/probe.c:75-93` already resolves it through `rsrc32.dll`
 and reports system/GDI/USER separately. But on this Win98 SE install the
 answer is `rsrc32.dll not present`, measured 2026-09-19 -- the Resource Meter
 is not installed, so there is no USER/GDI percentage to read without
@@ -1442,7 +1442,7 @@ the thunk is the reason it applies and `PLAN.md` marks that route
 proposes what to report instead -- our own GDI object counts plus working
 set, neither of which needs a 9x-only dynamic resolve.
 
-A probe off that lane (`win/checks/probe.c` already does it) remains
+A probe off that lane (`research/guest/probe.c` already does it) remains
 perfectly fine for anyone who installs the Resource Meter and wants a
 number. What WAS measured, with only the app running (launched
 from Start > Run, no DOS box, no Explorer window): **5208 KB free at window
@@ -1511,7 +1511,7 @@ off to diagnose a sync fault. ~~Wants its own measurement, against this
 transcript as the baseline.~~
 
 **[R -- 2026-10-14, stage 4] RE-MEASURED, AND THE CANDIDATES DO NOT NEED
-WEIGHING** -- `docs/measurements/folder-commit-vm-20261014.txt`.
+WEIGHING** -- `research/measurements/folder-commit-vm-20261014.txt`.
 
 The mechanism is intact: the folder is still committed by the first tool
 call, which is still the write, and the agent still aimed at the wrong
@@ -1822,7 +1822,7 @@ survived.
 ## 14. Stopping an exec leaked a process on Win98 -- fixed except for DOS programs
 
 **Status:** found and fixed 2026-09-26/27, measured on the VM throughout
-(`docs/measurements/execprobe-vm-*`, `execkill-vm-*`).
+(`research/measurements/execprobe-vm-*`, `execkill-vm-*`).
 
 On 98 a COMMAND.COM job given std handles is, once it starts a program,
 REDIR32.EXE (the pid CreateProcess returned) -> the DOS VM (WINOA386.MOD)
@@ -1864,7 +1864,7 @@ loaded VxD prototype (joncampbell123/doslib has Win9x VMM headers).
 
 **Open risk, one sighting:** the guest wedged in ring 0 as a Toolhelp32
 snapshot was taken (`EXECPRB --list`) on a box holding 3 of these zombies
-(`docs/measurements/wedge-vm-20260927.txt`). Against it: the same `--list`
+(`research/measurements/wedge-vm-20260927.txt`). Against it: the same `--list`
 ran cleanly many times on boxes holding 3, 20 and 22 of them
 (`execkill-vm-*`, `execprobe-vm-stops-*`). It matters because
 `stopJobTree` snapshots too, on the client's worker, and its last resort is
@@ -1913,7 +1913,7 @@ machine survived it is not finished, however green its own output is.
   copy of `vm/win98.qcow2` before a run that injects.
 - **Find out whether it reproduces.** Boot clean, run only 0.15d and 0.15f,
   and leave the machine alone for an hour. *(Note for whoever does: gate 0.15d
-  HAS been re-run with the generation word, `docs/measurements/vm-20260926.txt`
+  HAS been re-run with the generation word, `research/measurements/vm-20260926.txt`
   -- `distinct pids 2`, injection confirmed -- but 9.4 hours into an uptime and
   in the session that ended with this wedge. What stage 1 owes is the same run
   from cold, with the gates moved last and this health check behind them. Also:
@@ -1929,8 +1929,8 @@ part of an unattended sweep.
 ## 16. An agent can be told a control is occluded and have no way to fix it
 
 **Status:** found 2026-09-27 doing the Phase 6 end-to-end check
-(`docs/measurements/e2e-ui-vm-20260927.txt`); **fixed the same day**, measured
-on Win98 SE (`docs/measurements/focus-vm-20260927.txt`). The residue is at the
+(`research/measurements/e2e-ui-vm-20260927.txt`); **fixed the same day**, measured
+on Win98 SE (`research/measurements/focus-vm-20260927.txt`). The residue is at the
 bottom.
 
 `Input::clickAt` refuses when `WindowFromPoint` at the target is not the
@@ -1999,8 +1999,8 @@ our own window from a dialog it had not read.
 ## 17. Gaps found testing exec on the guest
 
 **Status:** recorded 2026-09-27 from the libexec work on the VM (probes,
-`tools/probe/execkill.py`, and an end-to-end run with a Haiku agent,
-`docs/measurements/e2e-vm-20260927.txt`). Each line says where it is owned.
+`research/probes/execkill.py`, and an end-to-end run with a Haiku agent,
+`research/measurements/e2e-vm-20260927.txt`). Each line says where it is owned.
 
 - **No way to bring a window to the front.** *Fixed 2026-09-27, same day:*
   `click` now raises a covered window and re-checks before refusing, and the
@@ -2057,13 +2057,13 @@ our own window from a dialog it had not read.
 - **No process tools for the agent.** *Fixed 2026-09-27:* machine tools
   `ps` and `kill` (PSLIST/PSKILL on the client's reader thread), verified
   end to end on the VM -- a live Notepad ended, two stuck orphans reported
-  `pending` honestly (`docs/measurements/ps-kill-vm-20260927.txt`). Told
+  `pending` honestly (`research/measurements/ps-kill-vm-20260927.txt`). Told
   "find it with ps", Haiku first ran `exec ps`; exec's description now
   names the tools. System info and reboot still have no tool (by choice).
 - **Killing a console program strands its console VM** (below), and a
   guest carrying stranded VMs later **blue-screened in VMM** releasing a
   kernel object through a stale pointer while running `start notepad`
-  (`docs/measurements/bsod-vm-20260927.txt`, one sighting; the same
+  (`research/measurements/bsod-vm-20260927.txt`, one sighting; the same
   command on a clean box returned in 2s). *Decided and done 2026-09-27:*
   `kill` refuses a process with a DOS VM below it (a console program's
   console, or a DOS session) unless `force` -- status `dos_session`, its
@@ -2088,7 +2088,7 @@ our own window from a dialog it had not read.
   a failure, because failing is what it did before.
 
   **[R -- 2026-10-14] CONFIRMED ON THE GUEST, both halves.**
-  `docs/measurements/forcekill-vm-20261014.txt`. On a freshly booted box,
+  `research/measurements/forcekill-vm-20261014.txt`. On a freshly booted box,
   run detached: `vm=1` (the WINOA386.MOD IS a descendant, so this bullet's
   premise holds), `kill=3` KILL_DOS_SESSION for the refusal, and with
   force `kill=0 vm-gone=1 vms-on-box=0` -- the program goes, the VM goes
@@ -2122,7 +2122,7 @@ our own window from a dialog it had not read.
   complete... may not have run at all".
 - **One guest wedge, cause unknown**, measured in ring-0 VMM code; the
   Toolhelp trigger first suspected was withdrawn. §14's open risk,
-  `docs/measurements/wedge-vm-20260927.txt`.
+  `research/measurements/wedge-vm-20260927.txt`.
 
 ---
 
@@ -2226,7 +2226,7 @@ two parts deliberately not done and recorded below rather than dropped.
 Screen control is not like the other tools. It moves the mouse, types, and
 since §16 it also **takes the foreground away from whoever is at the machine**
 -- 9x offers no way to raise a window without activating it
-(`docs/measurements/focus-vm-20260927.txt`). A capability like that should be
+(`research/measurements/focus-vm-20260927.txt`). A capability like that should be
 chosen, and visible while it acts.
 
 ### The standalone FOCUS op -- done 2026-09-27
@@ -2359,7 +2359,7 @@ client that never said keeps them, no new parameter on `build`, the stale
 conversation refused); `tests/python/meta/test_hello_headers.py` (declared at
 the handshake; the budget checks already cover 29 of 32 with 3 free);
 `tests/python/agent/test_machine.py` (the prompt stays honest);
-`tests/python/guest/test_guest_config.py` + `win/checks/inicheck.cpp` (the
+`tests/python/guest/test_guest_config.py` + `tests/guest/inicheck.cpp` (the
 setting round-trips, defaults on, and `automation=maybe` refuses startup).
 
 `test_agent_tools.py`'s `_registered_names` had to learn that `tools=[...]` is
@@ -2405,7 +2405,7 @@ argued:
 
 - **The strip steps aside rather than being transparent.** `HTTRANSPARENT`
   is a same-thread walk and buys nothing across a process boundary on 98 SE
-  (`docs/measurements/stripprobe-vm-20261014.txt`), so the step runner hides
+  (`research/measurements/stripprobe-vm-20261014.txt`), so the step runner hides
   it for the step when a click lands under it, and the capture path hides it
   for the shot.
 - **Stop needed the bridge.** `on_interrupt` killed pending `exec`s and
@@ -2417,7 +2417,7 @@ argued:
 
 Verified on the guest in both programs, both cancel routes, with a
 screenshot taken while it was up coming back without it
-(`docs/measurements/indicator-vm-20261014.txt`).
+(`research/measurements/indicator-vm-20261014.txt`).
 
 **What is NOT closed by it**, and belongs to the entry below rather than to
 this one: with two programs driving, two strips can be up, and neither
@@ -2438,7 +2438,7 @@ sentence true. Turning it ON still reconnects, because the bridge splices
 the screen tools in from `guest.caps` at session build time.
 
 **The tick is honest when the mid-turn prompt is declined, verified on the
-guest** -- `docs/measurements/tick-honest-vm-20261014.txt`. With a turn held
+guest** -- `research/measurements/tick-honest-vm-20261014.txt`. With a turn held
 open by the permission bar, toggling the setting raises "These settings need
 a new connection, which stops the current reply"; answering No leaves the
 transcript saying "Saved. They take effect at the next connection", the turn
@@ -2644,7 +2644,7 @@ floppy:
   `tests/python/remote/test_fs.py::test_drives_does_not_probe_removable_media_unless_asked`
   (proves the code path -- quiet by default, same letters either way -- not
   the silence; Wine has no floppy motor to prove that on) and by
-  `win/checks/fscheck.cpp`'s `caseDrives` (`drives.quiet_leaves_removable_unknown`,
+  `tests/guest/fscheck.cpp`'s `caseDrives` (`drives.quiet_leaves_removable_unknown`,
   `drives.probe_asks_what_quiet_skipped`), which also only prove the
   branch is taken.
 - **the agent's `drives` tool** (`bridge/agent/tools.py` ->
@@ -2775,7 +2775,7 @@ one. Both directions are tested
 (`tests/python/agent/test_conversations.py`,
 `tests/python/services/test_session.py`).
 
-*And the guest half is run, not read.* `win/checks/idcheck.cpp` drives the
+*And the guest half is run, not read.* `tests/guest/idcheck.cpp` drives the
 shipping `app/machineid.cpp` under Wine --
 `tests/python/guest/test_guest_machineid.py` reads its verdicts -- because
 every way this can go wrong is invisible from outside the process: a client
@@ -2916,7 +2916,7 @@ pointers into its members. `docs/REMOTE.md` has the rule and the P200 entry.
 still cannot: there is no 9x shutdown under it, no Win16Mutex, and no shell to
 produce the End Task dialog, so `appcheck` proves only the necessary condition.
 The real machine has now answered, twice and in both directions
-(`docs/measurements/shutdown-real-hw-20261002.txt`):
+(`research/measurements/shutdown-real-hw-20261002.txt`):
 
   * a shutdown the USER asked for -- the client's handler returned in **12 ms**
     and gremote's in **9 ms**, with no End Task dialog;
@@ -3107,8 +3107,8 @@ docstring lists "the request was cancelled" as a reason). So the flag reaches
 all three ops there, and **the client's `UICANCEL` now raises it for all three
 too** rather than for step lists alone.
 
-**The VM's number, 2026-10-03** (`docs/measurements/ui-cancel-vm-20261003.txt`,
-`tools/probe/cancelprobe.py`): a full MSAA-enriched desktop walk is **0.16 s
+**The VM's number, 2026-10-03** (`research/measurements/ui-cancel-vm-20261003.txt`,
+`research/probes/cancelprobe.py`): a full MSAA-enriched desktop walk is **0.16 s
 at 72 nodes and 0.58-0.71 s at 109**, well under the 8 s default deadline. So
 on an emulator a cancelled enumeration costs the next request well under a
 second -- the cheap end this entry already guessed at. A cancelled capture is
@@ -3128,7 +3128,7 @@ almost always arrives after the worker has started. A 0.16 s walk is not.
 that request already stopped: cancelled on attempt 1, in 0.00 s.
 
 **The Athlon's number, 2026-10-04**
-(`docs/measurements/ui-lane-real-hw-20261004.txt`): a full MSAA-enriched walk
+(`research/measurements/ui-lane-real-hw-20261004.txt`): a full MSAA-enriched walk
 of a freshly booted desktop, hidden windows included, is **36-37 ms**, and the
 request after a cancelled one is answered in 44 ms. This entry guessed "on the
 Athlon box a desktop tree is tens of milliseconds and on the Pentium 200 it is
@@ -3154,7 +3154,7 @@ option is on". This entry exists so that does not get re-remembered later as
 **What is actually established.** `SetThreadExecutionState` is PRESENT and
 answers on two independent machines -- the autopatched Athlon XP and the STOCK
 retail QEMU guest, which is the control that matters because the autopatcher
-could have added it (`docs/measurements/sleep-mechanisms-p200-20261002.txt`).
+could have added it (`research/measurements/sleep-mechanisms-p200-20261002.txt`).
 It is called on the hidden window's message-loop thread, which lives for the
 process, so the per-thread state cannot lapse. Both veto handlers answer
 correctly when asked: `BROADCAST_QUERY_DENY` and `PWR_FAIL`. The nudge
@@ -3262,7 +3262,7 @@ now reached. These were decided against, or deferred, on purpose:
 entry was written about was not touched. Verified on the Athlon XP, the
 machine the entry is about: self_update to 252,416 bytes, uilaneprobe 15/15,
 clipprobe 8/8, MSAA still returning real roles from the box's own oleacc.
-`docs/measurements/imagebytes-host-20261011.txt` and `flags-vm-20261011.txt`.
+`research/measurements/imagebytes-host-20261011.txt` and `flags-vm-20261011.txt`.
 
 The round also found that `[ui] msaa=0` had never done anything, which has
 its own fix. The four bullets below are each marked with what they turned
@@ -3354,7 +3354,7 @@ called, and 6,277 bytes of long-double formatting for a program with no
 floats. Those three, plus the flag answer in §2, took it from 365,497 to
 259,497 committed at load -- 29% -- without touching the ui lane the entry was
 written about. The method that found them is `tools/check/mapsize.py` and
-`docs/measurements/imagebytes-host-20261011.txt`; the lesson is the entry's own
+`research/measurements/imagebytes-host-20261011.txt`; the lesson is the entry's own
 closing line, which was right: the number had been taken on trust.
 
 **What this entry is not.** It is not a claim that the image is too large for
@@ -3382,7 +3382,7 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
 
   Verified in passing while measuring 04.35 on the guest: Haiku ran a whole
   compile-and-run turn in Auto, with all four presets offered.
-  `docs/measurements/folder-commit-vm-20261014.txt`.
+  `research/measurements/folder-commit-vm-20261014.txt`.
 
   **What would reopen it** is a mode whose work genuinely cannot be done by
   the model in force -- not a convenience, a capability gap.
@@ -3406,7 +3406,7 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
   existing is not an open item.
 - ~~**Large Fonts.** The pages are 230x170 DLU so that the sheet fits
   640x480 at Large Fonts, which was computed, not seen.~~ **SEEN
-  2026-10-14, stage 4** -- `docs/measurements/largefonts-vm-20261014.txt`.
+  2026-10-14, stage 4** -- `research/measurements/largefonts-vm-20261014.txt`.
   The figure stands: at 800x600 and 120 dpi the densest page (Permissions)
   keeps its six tabs on one row, both columns, all eight dropdowns and
   OK/Cancel/Apply. The narrowest thing on the sheet is the `Ask timeout:`
@@ -3677,7 +3677,7 @@ and answered the question it was written for: the memory is not gremote's.**
 Open as a caution about the instrument rather than as a defect in this
 program.
 
-`docs/measurements/inject-cold-vm-20261010.txt` has the run. On the QEMU
+`research/measurements/inject-cold-vm-20261010.txt` has the run. On the QEMU
 guest, with gremote answering and nothing else happening:
 
 ```
@@ -3691,7 +3691,7 @@ eleven over eight minutes cost, and idling costs almost nothing. About
 15.6 KB each, with no plateau over 21 connections.
 
 At that rate a few hundred connections is the whole of a 32MB machine's
-headroom. Every probe in `tools/probe/` opens one per run, `ship()` opens
+headroom. Every probe in `research/probes/` opens one per run, `ship()` opens
 another after the restart, and the agent's own reconnect loop opens one per
 retry -- so this is not a theoretical number of connections.
 
@@ -3734,8 +3734,8 @@ instrument, and the entry stays open to say which:
 ### What this costs elsewhere, which is the reason to keep the entry
 
 **Free physical memory is used as a proxy for a program's footprint in at
-least two places**: `tools/probe/wsprobe.py` and the method in
-`docs/measurements/workingset-vm-20261002.txt`, which §29 leans on for
+least two places**: `research/probes/wsprobe.py` and the method in
+`research/measurements/workingset-vm-20261002.txt`, which §29 leans on for
 gremote's trim. If the number drifts down with activity and does not
 recover when the process exits, a "working set" read that way is measuring
 the machine's history as much as the program. Any figure §29 relies on
@@ -3757,7 +3757,7 @@ that 21 connections never showed.
 ## 33. A `type` step said ok and typed nothing -- CLOSED 2026-10-11
 
 **Status:** found while setting up the first agent turn
-(`docs/measurements/agent-turn-ui-vm-20261011.txt`), **fixed and verified on
+(`research/measurements/agent-turn-ui-vm-20261011.txt`), **fixed and verified on
 the guest the same day.** The account below is kept because the cause is one
 the project had already paid for once.
 
@@ -3843,7 +3843,7 @@ unattributable (`tools/check/mapsize.py` reports code only, and says why).
 **What it would not buy, which is the reason this is deferred.** On Windows 98
 code is demand-paged from the image, so code nobody touches is already very
 nearly free in RAM. This project has measured exactly that:
-`docs/measurements/workingset-vm-20261004.txt` records 66 KB of added image
+`research/measurements/workingset-vm-20261004.txt` records 66 KB of added image
 costing 36 KB of resident memory *"because the sheet's pages and the inspector
 are code that is not touched until Options is opened"*. The gain is therefore
 against `COMMITTED_CAP`, and `win/Makefile`'s own note says that gate is a

@@ -7,7 +7,7 @@ step 6), so this measures what reaching the walk and the capture with it is
 worth -- and it is what found the window a cancel used to fall through, with
 the request still queued and nothing yet knowing its id.
 
-    python3 -u tools/probe/cancelprobe.py --host 127.0.0.1 --port 7890
+    python3 -u research/probes/cancelprobe.py --host 127.0.0.1 --port 7890
 
 Start it INSTEAD OF the bridge, then launch the client. It drives the desktop
 it finds and opens nothing, so it is safe on a machine somebody is using --
@@ -23,7 +23,7 @@ uses the remote mode on the P200 because the client does not have to be there
 for it, and the file it writes says which process it measured. The numbers
 from the two modes are not interchangeable.
 
-    python3 -u tools/probe/cancelprobe.py --remote 10.0.0.125:7401:secret
+    python3 -u research/probes/cancelprobe.py --remote 10.0.0.125:7401:secret
 """
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

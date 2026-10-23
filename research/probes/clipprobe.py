@@ -3,14 +3,14 @@
 Like uilaneprobe.py and unlike every other probe here, this needs no client
 and no bridge: it drives gremote directly, which is the point of the lane.
 
-    python3 -u tools/probe/clipprobe.py --remote 127.0.0.1:vm-secret
+    python3 -u research/probes/clipprobe.py --remote 127.0.0.1:vm-secret
 
 Wine answers every case in uicheck and tests/python/remote, round trip
 included. What only a real 98 settles is whether CF_TEXT means what the code
 assumes when the program on the other side of it is Notepad rather than
 ourselves -- and the first run of this list found that it does, while the
 advice the tool was giving about how to fill the clipboard did not work on
-the machine it was written for (docs/measurements/clipboard-vm-20261010.txt).
+the machine it was written for (research/measurements/clipboard-vm-20261010.txt).
 
 It closes any Notepad it finds and opens one of its own: `Notepad` as a
 selector matches every instance, so a desktop with two of them makes every

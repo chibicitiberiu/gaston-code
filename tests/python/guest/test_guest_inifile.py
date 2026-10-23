@@ -3,7 +3,7 @@
 `win/core/inifile.cpp` is the config reader for gremote.exe (docs/REMOTE.md,
 Configuration), and its whole job is to refuse: a value present but wrong
 stops startup instead of running on something nobody wrote. These diff
-`win/checks/inifilecheck.cpp`'s verdicts rather than trusting the header.
+`tests/guest/inifilecheck.cpp`'s verdicts rather than trusting the header.
 
 The cases worth naming are the ones GetPrivateProfileString gets wrong on its
 own, because nothing else in the tree would notice them.
@@ -36,7 +36,7 @@ characters for it. The same fact in both directions: nothing could come back, so
 the old sentinel never matched, so every absent key looked present. That case now
 asserts the property that is true on both platforms instead of a round trip only
 one of them performs; see its comment in inifilecheck.cpp and
-docs/measurements/inifile-absent-key-p200-20261001.txt.
+research/measurements/inifile-absent-key-p200-20261001.txt.
 """
 
 import conftest

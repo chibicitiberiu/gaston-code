@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build CORPUS.TXT: the deflate corpus that gate 0.5c has been waiting for.
 
-`win/checks/probe.c`'s deflate sample is one two-line block repeated. It
+`research/guest/probe.c`'s deflate sample is one two-line block repeated. It
 compresses about 164:1 and the comment beside it has asked for this file
 since the gate was written: "a realistic corpus (the project's own prose and
 code, which measured 2.16:1) read from a file next to the exe".
@@ -26,8 +26,10 @@ THE CEILING IS NOT ARBITRARY. `probe.c` reads this into a 256 KB static
 committed-at-load bytes on a machine with 32 MB. So the corpus is sized to
 the buffer rather than the buffer to the corpus.
 
-    python3 tools/gen/mkcorpus.py            # write vm/tools-stage/CORPUS.TXT
-    python3 tools/gen/mkcorpus.py --check    # report only, write nothing
+    # write vm/tools-stage/CORPUS.TXT
+    python3 research/deflate-speeds/mkcorpus.py
+    # report only, write nothing
+    python3 research/deflate-speeds/mkcorpus.py --check
 """
 from __future__ import annotations
 
@@ -37,6 +39,13 @@ import sys
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# TWO LEVELS, AND THE DEPTH IS LOAD-BEARING. This lived at tools/gen/ until
+# the apparatus was split out of the product; research/deflate-speeds/ is the
+# same two directories down, which is the only reason this line did not have
+# to change with the file. Checked rather than assumed, and the backstop is
+# below: every path in SOURCES is required to exist, so a REPO that is wrong
+# by a level exits with "the corpus list is stale" rather than quietly
+# building a shorter corpus and printing a crc32 for it.
 REPO = os.path.dirname(os.path.dirname(HERE))
 
 # 256 KB, matching probe.c's src[]. One byte over and the probe would have to
@@ -49,7 +58,7 @@ CEILING = 256 * 1024
 # every one is checked to exist, because a silently missing file would change
 # the corpus and nothing would say so.
 #
-# win/checks/probe.c IS DELIBERATELY NOT HERE, and it was until it bit: the
+# research/guest/probe.c IS DELIBERATELY NOT HERE, and it was until it bit: the
 # program that reads this corpus is the program whose source was in it, so
 # every edit to the probe changed the bytes the probe measures. That showed up
 # as the size moving 234,481 -> 234,505 -> 234,509 across one afternoon of

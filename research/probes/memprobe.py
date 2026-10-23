@@ -5,7 +5,7 @@ load, with and without the client running", and `REMOTE.md` wants it taken
 first so later client numbers can subtract it. Three of those four quantities
 had no instrument:
 
-  * `tools/probe/wsprobe.py` compares two CLIENT builds, idle, pointed at a
+  * `research/probes/wsprobe.py` compares two CLIENT builds, idle, pointed at a
     dead port. Useful, and not this.
   * `PS` carries pid, ppid, threads and exe (`gremote/ops.py`) -- there is no
     per-process memory on this path at all, and nothing cheap on 9x that this
@@ -40,7 +40,7 @@ interval -- so the series can legitimately contain a single point. The report
 says how many samples it got, so "one sample" is visible instead of being
 averaged into something that looks like a measurement.
 
-    .venv/bin/python tools/probe/memprobe.py --remote 10.0.0.125:7401:secret \\
+    .venv/bin/python research/probes/memprobe.py --remote 10.0.0.125:7401:secret \\
         --baseline 20416 --load idle --load tree --load shot --load exec
 """
 from __future__ import annotations
@@ -52,7 +52,8 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import toolkit
 
 toolkit.on_path()

@@ -92,7 +92,7 @@ Rules for the libraries:
   `RegisterServiceProcess` are all `GetProcAddress`. Input stays on
   `keybd_event`/`mouse_event`: `SendInput` exists on 98 but not on 95 or
   NT4 before SP3.
-- Each lib has a check exe under `win/checks/` that runs under Wine
+- Each lib has a check exe under `tests/guest/` that runs under Wine
   (`make wine-smoke`), in the style of `rpccheck`/`netcheck`.
 
 ## C++ structure
@@ -585,7 +585,7 @@ the runner reads between steps and inside every wait.
   caller more than four requests ahead gets `busy`.
 
 - **`exit` is only meaningful without a shell.** Measured on the VM
-  (`docs/measurements/execprobe-vm-gui-20260926.txt`): `COMMAND.COM /c` on 98
+  (`research/measurements/execprobe-vm-gui-20260926.txt`): `COMMAND.COM /c` on 98
   exits 0 whatever happens, even for a program that does not exist; a program
   spawned directly returns its real code. `ExecResult::viaShell` records which,
   and the Python client documents it.
@@ -627,7 +627,7 @@ nothing else. `click` and the typing verbs already raise what they need, so
 `focus` exists for the case where pressing something would be wrong -- a
 `UISHOT` of a window that is behind another. It cannot be quiet: on 9x a window
 cannot be raised across a process boundary without being activated, measured in
-`docs/measurements/focus-vm-20260927.txt`. `Input::focus` relaxes
+`research/measurements/focus-vm-20260927.txt`. `Input::focus` relaxes
 `SPI_SETFOREGROUNDLOCKTIMEOUT` around that one call and puts it back, because
 leaving it at 0 is a change to somebody's machine that outlives us.
 
@@ -966,10 +966,10 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    *Done in code 2026-09-26 (`docs/libexec-plan.md` has the steps and
    hashes):* `ExecJob`, `Processes`, `readSystemInfo`/`requestReboot` in
    `win/exec/`, the client on them, EXECKILL id-checked. A probe on the VM
-   first (`win/checks/execprobe.cpp`) found that a stop never worked on 98 --
+   first (`research/guest/execprobe.cpp`) found that a stop never worked on 98 --
    the pid exec held was `REDIR32.EXE`, which TerminateProcess cannot end
    (`BACKLOG.md` 14) -- so a stop now ends the whole tree. Verified on the
-   VM: the client passes the stub-bridge run (`tools/probe/execkill.py`),
+   VM: the client passes the stub-bridge run (`research/probes/execkill.py`),
    and a stop now kills only the Win32 side and lets the job end itself,
    which leaves nothing; only a DOS program that must be stopped still
    costs one REDIR32 (~150KB), logged (`BACKLOG.md` 14).
@@ -995,7 +995,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    ours is slirp with a hand-configured `ne2k_isa`.
    **Step 4 is complete (2026-09-27), and 5b with it**, verified on the real
    guest and not only under Wine --
-   `docs/measurements/gremote-vm-20260927.txt`. gremote answers the control,
+   `research/measurements/gremote-vm-20260927.txt`. gremote answers the control,
    job and fs lanes; the Python package drives all three; `ship()` works.
    The measurement that earns the step: **a running exe is locked on Windows
    98**, so a plain PUT over a live image is refused and ship()'s
@@ -1012,7 +1012,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    `drives` tools (`docs/libfs-plan.md`). **5b** is `ship()` and self-update,
    which need `GREMOTE.EXE` from step 4 and cannot start before it.
    **Step 5a is complete (2026-09-27)**, verified on the real guest and not
-   only under Wine -- `docs/measurements/libfs-vm-20260927.txt`.
+   only under Wine -- `research/measurements/libfs-vm-20260927.txt`.
    **5b is built inside step 4** (`docs/gremote-plan.md`), because `ship()`
    is the first thing anyone wants from gremote and it needs the fs lane that
    step now carries.
@@ -1020,7 +1020,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    MSAA, in that order. Each verified on the P200, not just Wine: window trees,
    focus and input are exactly where Wine lies.
    **Step 6 is complete (2026-10-04), on the VM and on the Athlon XP** --
-   `docs/measurements/ui-lane-real-hw-20261004.txt` is 12 of 12 on real
+   `research/measurements/ui-lane-real-hw-20261004.txt` is 12 of 12 on real
    hardware and `ui-lane-real-hw-20261004.png` is a 1280x720 capture of that
    machine's desktop, the first non-VM image in that directory. It answered
    the two questions the P200 checklist had carried since the start (a
@@ -1029,10 +1029,10 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    (37 ms, below the cost of asking for a stop), and **reversed** this
    file's own prediction about compression: `shouldCompress` declines on the
    emulator and fires on the hardware, where a 922KB screenshot goes twice
-   as fast compressed. The VM run -- `docs/measurements/ui-lane-verify-vm-20261003.txt` is eleven of
+   as fast compressed. The VM run -- `research/measurements/ui-lane-verify-vm-20261003.txt` is eleven of
    eleven on the guest, `ui-lane-vm-20261003.png` is the screenshot it took
    while the client sat beside it unable to reach its bridge, and
-   `tools/probe/uilaneprobe.py` re-runs the list. What the Athlon alone can
+   `research/probes/uilaneprobe.py` re-runs the list. What the Athlon alone can
    settle is listed at the bottom of PROGRESS.md's entry.
    *Scoped 2026-10-02.* The library landed in step 5a's wake and was proven in
    the client first, as every lib here is, so this step is the **lane**, not
@@ -1062,7 +1062,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    to a non-compressing one drops the link rather than degrading, and the only
    repair path is `ship()`, which needs the link -- so arming on send would
    brick a box reachable by CD.
-   *Measured 2026-10-03* (`docs/measurements/deflate-gremote-vm-20261003.txt`):
+   *Measured 2026-10-03* (`research/measurements/deflate-gremote-vm-20261003.txt`):
    the new Python against the OLD gremote kept a raw link and `self_update()`
    travelled over it, so the compatibility case is the path the upgrade itself
    took. A 220KB round trip is byte-exact both ways; the host-to-guest half is
@@ -1152,7 +1152,7 @@ The Phase 6 agent tools then need only handlers and bridge work.
 
 Things only the real box can answer, collected so the first session covers them.
 
-**Which box, though.** Several files in `docs/measurements/` are named
+**Which box, though.** Several files in `research/measurements/` are named
 `*-p200-*.txt` and were taken on the **Athlon XP 2000+** at 10.0.0.125 --
 `keys-named-p200-*`, `exit-codes-via-batch-p200-*`, `sleep-mechanisms-p200-*`,
 `batch-eol-and-dir-b-p200-*`, `inifile-absent-key-p200-*`, the last of which
@@ -1169,7 +1169,7 @@ matters for anything with a clock in it.
   text, toolbar) and names ("Start"), where Wine's returns the generic client
   object for every class. `HELLO msaa=` says so on every connection.
 - Foreground lock: **ANSWERED 2026-10-04 on the Athlon XP, yes**
-  (`docs/measurements/ui-lane-real-hw-20261004.txt`). With Progman in front,
+  (`research/measurements/ui-lane-real-hw-20261004.txt`). With Progman in front,
   a `focus` step asked for by gremote -- a process with no window of its own
   on the screen -- put Notepad in the foreground, and `Input::focus`'s
   AttachThreadInput fallback was not needed. The P200 itself is still a
@@ -1180,7 +1180,7 @@ matters for anything with a clock in it.
   started before anyone logged on** -- which is exactly what gremote is, and
   what its ui lane now asks on every `focus` step.
 - `COMMAND.COM /c` exit codes: is the child's errorlevel returned. *Answered
-  on the VM (2026-09-26, `docs/measurements/execprobe-vm-gui-20260926.txt`):
+  on the VM (2026-09-26, `research/measurements/execprobe-vm-gui-20260926.txt`):
   no, always 0, even for a program that does not exist; a direct spawn
   returns the real code. The P200 only needs to confirm.*
 - Handle inheritance of sockets into children on 98. *Answered on the VM
@@ -1207,7 +1207,7 @@ matters for anything with a clock in it.
   timer expires. Three runs answer it, in this order:
 
   1. ~~`probe power`~~ **-- DONE 2026-10-02 on the Athlon XP**
-     (`docs/measurements/sleep-mechanisms-p200-20261002.txt`).
+     (`research/measurements/sleep-mechanisms-p200-20261002.txt`).
      `SetThreadExecutionState` is **PRESENT** on Windows 98 SE and returned
      `80000000`, so the nudge is available and the input-faking fallback is not
      needed. Confirmed on **two** machines, because the Athlon has an
@@ -1274,7 +1274,7 @@ matters for anything with a clock in it.
   **That was half of it. The other half was leaving at all.** Not joining made
   the handler return in 40-70 ms and the machine still hung, four runs out of
   four on a clean Windows 98 guest against two builds
-  (`docs/measurements/gremote-shutdown-vm-20261001.txt`). On 9x the process
+  (`research/measurements/gremote-shutdown-vm-20261001.txt`). On 9x the process
   that calls `ExitWindowsEx` DRIVES the shutdown: the call does not return, the
   broadcast runs out of it, and the 16-bit USER code it is executing holds
   Win16Mutex between the sends. Returning promptly and then `ExitProcess`ing a
@@ -1291,7 +1291,7 @@ matters for anything with a clock in it.
   call, and clears it if the call comes back refused. A session end somebody
   ELSE asked for still quits, because there the driver is the shell's thread.
   Eight fixed runs rebooted and two unfixed runs hung, interleaved, same boot
-  pattern (`docs/measurements/gremote-shutdown-fix-vm-20261001.txt`).
+  pattern (`research/measurements/gremote-shutdown-fix-vm-20261001.txt`).
 
   **Staying brings an obligation: a session end can fail to take.**
   `mode=poweroff` on a machine with no power management runs the whole
@@ -1354,7 +1354,7 @@ matters for anything with a clock in it.
   hung on the way down with `gaston.exe` up, this was why.
 - ~~**Does `gremote` survive a LOGOFF, as `RegisterServiceProcess`
   promises?**~~ **ANSWERED 2026-10-13: no, it did not -- and it does now.**
-  `docs/measurements/logoff-vm-20261013.txt`. `RSP_SIMPLE_SERVICE` does NOT
+  `research/measurements/logoff-vm-20261013.txt`. `RSP_SIMPLE_SERVICE` does NOT
   keep a process out of the logoff broadcast on 98 SE: gremote took
   `WM_ENDSESSION` with `ENDSESSION_LOGOFF`, tore down and quit, exactly as
   the paragraph below feared. `App::survivesLogoff()` is the arm, and the
@@ -1373,7 +1373,7 @@ matters for anything with a clock in it.
 
   Found while fixing the shutdown hang, and not answered by anything here.
   *A full shutdown does reach it: the VM run of 2026-09-27
-  (`docs/measurements/gremote-vm-20260927.txt` §8) recorded its hidden window
+  (`research/measurements/gremote-vm-20260927.txt` §8) recorded its hidden window
   taking `WM_ENDSESSION` while registered as a service process, so
   registration buys no exemption there.* A logoff is the untested half. 9x
   broadcasts the same two messages at logoff, and `RSP_SIMPLE_SERVICE` is

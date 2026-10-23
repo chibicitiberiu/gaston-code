@@ -1,7 +1,7 @@
 """What a control tree says when part of it is deliberately missing.
 
 The guest never walks its own windows, and for a long time it also never
-said so. A real Haiku agent on the VM (docs/measurements/e2e-vm-20260927.txt)
+said so. A real Haiku agent on the VM (research/measurements/e2e-vm-20260927.txt)
 was asked for the client's own control tree, got a list the client was merely
 absent from, and read that as "not open" -- it looped tree, shot, tree until
 a human pressed Deny. The count is on the wire now, and these are the lines

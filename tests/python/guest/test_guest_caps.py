@@ -16,7 +16,7 @@ which meaning each side BELIEVES it has, so this cannot be proven the way
 synccheck's --limits fixture proves a length boundary by exercising real
 enforcement. What can be proven is that the two headers agree: `capscheck.exe`
 prints each `RC_*` name next to its real value, by stringifying the macro
-name rather than retyping it (win/checks/capscheck.c), and this file asserts
+name rather than retyping it (tests/guest/capscheck.c), and this file asserts
 each one equals the bridge constant of the matching name.
 """
 from __future__ import annotations

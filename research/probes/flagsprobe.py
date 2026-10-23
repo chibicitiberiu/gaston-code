@@ -1,6 +1,6 @@
 """Does -ot earn its bytes? The round trip that can answer, as a script.
 
-docs/measurements/flags-vm-20261011.txt settled the whole-program question on
+research/measurements/flags-vm-20261011.txt settled the whole-program question on
 the QEMU guest and recorded the method in prose. Stage 5 asks the remaining
 half on the real Pentium 200 -- whether -ot still earns its place in the three
 modules it is kept for -- and the method had never been a tool, so it was done
@@ -28,7 +28,7 @@ A/B/A, NOT A/B. The first arm is measured again at the end. A single pass
 cannot tell a regression from a drift: a 98 box warms its disk cache, and a
 number that only gets measured once has no way to say which it was.
 
-    .venv/bin/python tools/probe/flagsprobe.py \\
+    .venv/bin/python research/probes/flagsprobe.py \\
         --remote 10.0.0.125:7401:the-secret \\
         --arm head=build/win/gremote.exe \\
         --arm all-os=/tmp/allos/gremote.exe
@@ -50,7 +50,8 @@ import sys
 import time
 import zlib
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import toolkit
 
 toolkit.on_path()
@@ -68,15 +69,16 @@ PAYLOAD_BYTES = 377_990
 REMOTE_DIR = "C:\\TEMP\\GR"
 REMOTE_PAYLOAD = REMOTE_DIR + "\\PAYLOAD.BIN"
 
-#: The same explicit, sorted list idea as tools/gen/mkcorpus.py: a directory
-#: walk would let a new file change the payload with nothing saying so.
+#: The same explicit, sorted list idea as research/deflate-speeds/mkcorpus.py:
+#: a directory walk would let a new file change the payload with nothing
+#: saying so.
 SOURCES = [
     "docs/PLAN.md",
     "docs/PROGRESS.md",
     "docs/REMOTE.md",
     "docs/UIAUTOMATION.md",
     "docs/BACKLOG.md",
-    "win/checks/probe.c",
+    "research/guest/probe.c",
     "win/automation/input.cpp",
     "win/remote/server.cpp",
     "win/ui/uiengine.cpp",

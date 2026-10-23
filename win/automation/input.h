@@ -232,7 +232,7 @@ public:
     /* A CHORD on a character: `[Ctrl+S]`. A letter or digit is its VK
      * whatever the layout's shift state for it -- an accelerator for Ctrl+1
      * is registered against VK_1, and on AZERTY '1' needs Shift
-     * (docs/measurements/keyboard-layouts-vm-20261002.txt). Anything else
+     * (research/measurements/keyboard-layouts-vm-20261002.txt). Anything else
      * goes through VkKeyScanEx on `hkl`, its own shift folded in. */
     InputResult tapChar(unsigned char c, int mods, HKL hkl);
 

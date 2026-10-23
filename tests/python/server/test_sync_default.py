@@ -11,7 +11,7 @@ mirroring, so a bridge started without `--sync-dir` produced the worst of the
 two arrangements: a work directory on the guest, nothing converging into it,
 and every file travelling by `put_file` -- which writes bytes with no
 opinion about line endings, so a batch file written here did not run there
-(docs/measurements/batch-eol-and-dir-b-p200-20261001.txt).
+(research/measurements/batch-eol-and-dir-b-p200-20261001.txt).
 """
 
 from __future__ import annotations

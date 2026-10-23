@@ -1,7 +1,7 @@
 /* The SYNCPUT body's path parser, in a translation unit of its own.
  *
  * It belongs beside the handler that calls it, and it is not there, because
- * win/checks/synccheck drives it directly: syncrpc.h pulls in net.h and
+ * tests/guest/synccheck drives it directly: syncrpc.h pulls in net.h and
  * frameproto.h, so linking that handler into a console test binary for one
  * path parser would drag the whole net layer, libwire and Winsock in with it,
  * and put that binary under the import gate for nothing.

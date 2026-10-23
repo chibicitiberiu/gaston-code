@@ -67,7 +67,7 @@ that changed its shape, recorded so they are not re-derived:
 - **Six threads, not the five REMOTE.md's budget names** -- main loop, accept,
   `Connection`'s reader and sender, job, fs -- and `make check` cannot see any
   of them. It sums PE sections; a thread stack is not in the image. Nothing in
-  `docs/measurements/` records what a thread costs on this guest, so the stack
+  `research/measurements/` records what a thread costs on this guest, so the stack
   reserves are chosen against runtime working set on the VM.
 - **Autostart in C would fail the import gate.** ADVAPI32 is not in
   `tools/check/imports.py`'s `ALLOWED_DLLS`, so the `RunServices` key is
@@ -222,7 +222,7 @@ wine-smoke`.
     `test_guest_agreement.py` protects.
 14. Start guest runs from a clean boot. Killing a console program strands its
     DOS VM, and a guest carrying stranded VMs produced a measured BSOD in VMM
-    (`docs/measurements/bsod-vm-20260927.txt`).
+    (`research/measurements/bsod-vm-20260927.txt`).
 15. Prove the self-update rollback on the VM. Shipping a deliberately broken
     binary is the only way to test it, and on the VM a failure costs a CD
     swap.
@@ -346,7 +346,7 @@ rather than at the desk:
   "two things nothing records about it: a configured TCP/IP stack, and how
   `GREMOTE.EXE` gets there the first time." Answered by use: the Athlon XP
   2000+ at 10.0.0.125 has been driven over gremote since 2026-10-01, and
-  `tools/probe/treeprobe.py` documents the `--remote 10.0.0.125:<secret>`
+  `research/probes/treeprobe.py` documents the `--remote 10.0.0.125:<secret>`
   form. The floppy bootstrap in `tools/gen/mkw98kit.sh` was never needed.
 - **The ui lane**, which was "step 6 and unchanged by any of this" -- it is
   now step 6 and built. Its own plan is REMOTE.md step 6 plus the op table in

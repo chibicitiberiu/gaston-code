@@ -78,7 +78,7 @@ fi
 # Refuse to ship a probe older than its source. A kit built from a stale
 # exe looks identical to a fresh one and the results come back answering
 # last week's question.
-if [ "$HERE/win/checks/probe.c" -nt "$PROBE" ]; then
+if [ "$HERE/research/guest/probe.c" -nt "$PROBE" ]; then
   echo "mkw98kit: probe.c is newer than probe.exe. Run: make -C win probe" >&2
   exit 1
 fi
@@ -114,7 +114,7 @@ KIT_CRC=$(python3 -c '
 import sys, zlib
 sys.stdout.write("%08x" % (zlib.crc32(open(sys.argv[1], "rb").read()) & 0xFFFFFFFF))
 ' "$CORPUS")
-TREE_CRC=$(python3 "$HERE/tools/gen/mkcorpus.py" --check \
+TREE_CRC=$(python3 "$HERE/research/deflate-speeds/mkcorpus.py" --check \
            | sed -n 's/^mkcorpus: crc32 //p')
 if [ "$KIT_CRC" != "$TREE_CRC" ]; then
   echo "mkw98kit: $CORPUS has crc32 $KIT_CRC and this tree now produces

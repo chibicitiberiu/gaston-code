@@ -21,7 +21,7 @@
  * The result feeds the bridge's slow-link decision through the STAT frame's
  * `bps` and `deflate_bps` headers, so a wrong answer here does not crash
  * anything -- it silently turns compression on or off at the wrong time.
- * win/checks/wirecheck.cpp pins the arithmetic for that reason.
+ * tests/guest/wirecheck.cpp pins the arithmetic for that reason.
  */
 #ifndef RC_CORE_RATE_H
 #define RC_CORE_RATE_H

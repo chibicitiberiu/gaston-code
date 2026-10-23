@@ -12,7 +12,7 @@ every platform fact the clipboard work turned on and corrected the tool's own
 description in the process; the Athlon, run last once that machine was
 powered on, then corrected one of those corrections -- `[Ctrl+A]` is a fact
 about the program, not the platform. See verification item 3 and
-`docs/measurements/clipboard-athlon-20261011.txt`.
+`research/measurements/clipboard-athlon-20261011.txt`.
 
 Two defects were found along the way. BACKLOG 33 -- a `type` step reporting
 ok having typed nothing -- is fixed and verified on the guest. BACKLOG 32 --
@@ -39,14 +39,14 @@ of them contradict the roadmap I wrote an hour ago, and one contradicts
    failed." So BACKLOG 17's bullet and `ROADMAP.md:55-58` are both stale, and the
    real gap is wrapper-shaped, not `viaShell`-shaped.
 2. **Gate 0.15d has been re-run with the generation word** —
-   `docs/measurements/vm-20260926.txt:90-101`, `distinct pids 2 (neither of them
+   `research/measurements/vm-20260926.txt:90-101`, `distinct pids 2 (neither of them
    us)`, `-> INJECTION WORKS`. Not after a reboot (the generation reads ~9.4
    hours of uptime), on the VM rather than hardware, and in the same session that
    ended with the 0.15h wedge. `UIAUTOMATION.md:656-662,751`, `PROGRESS.md:74` and
    `ROADMAP.md:78-80` all say it has never been run.
 3. **The autostart `.REG` exists, ships, and pre-logon answering is proven** —
    generated at `tools/gen/mktools-iso.sh:136-142`, applied by `SETUP.BAT`
-   (`:237,:246`), and `docs/measurements/gremote-vm-20260927.txt:169-181` records
+   (`:237,:246`), and `research/measurements/gremote-vm-20260927.txt:169-181` records
    the box answering 2 s after a cold boot with nobody logged in. BACKLOG 1b and
    `ROADMAP.md:70-72` carry it as outstanding; `docs/gremote-plan.md:335-341`
    already lists it closed.
@@ -73,7 +73,7 @@ Recorded in commit 1, before any code, because stage 3 reads them.
 | **Export** | **The guest renders it.** One renderer, no drift, and `win/app/cache.cpp` already holds rendered pages, so export becomes "assemble what is cached and write it". `bridge/view/html.py:677-679` argues the exported copy must match the screen; this makes that true by construction. Replaces the three-option list in BACKLOG 13 step 2 and 31 step 5. |
 | **Vocabulary capability** | One `HELLO` key, a small integer version, bridge refuses an unknown value rather than guessing — per **client rules are declared at handshake**. Covers both 13's class names and 31's block kinds. The client has 14 free HELLO slots (`win/net/net.cpp:236` `RC_HELLO_MAX 48`, 34 in use) and `tests/python/meta/test_hello_headers.py` asserts two remain after. |
 | **Cache format** | The cache keeps holding **rendered markup**, not blocks, so a reconnect costs no re-render on a 1998 CPU; the format key gets a bump so pages written by an older renderer are discarded rather than shown. |
-| **0.15d scope** | The reboot run plus BACKLOG 15's harness. Foreign-process GDI capture (the probe's own D4, `win/checks/probe.c:2874-2883`) stays deferred **with its reason restated**, not silently. |
+| **0.15d scope** | The reboot run plus BACKLOG 15's harness. Foreign-process GDI capture (the probe's own D4, `research/guest/probe.c:2874-2883`) stays deferred **with its reason restated**, not silently. |
 
 ---
 
@@ -238,7 +238,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   refuse an oversized `set` outright, since a clipped selector-shaped string is a
   different string.
 - `uicheck.exe` gains cases through the existing `FakeUiLink`
-  (`win/checks/uicheck.cpp:533`, with `ended()`, `status()` and
+  (`tests/guest/uicheck.cpp:533`, with `ended()`, `status()` and
   `recordFrames()`): round-trip, refusal at each level, an empty clipboard, a
   body at the cap. Two cases already there are the templates —
   `tree-refused-when-automation-is-off` (`:623`) and the step list at
@@ -270,7 +270,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
 
 ### 6. The harness, and then the run
 
-`tools/`, `tools/gen/w98kit/TEST.BAT`, `win/checks/probe.c`.
+`tools/`, `tools/gen/w98kit/TEST.BAT`, `research/guest/probe.c`.
 
 - **Move the injection steps last.** They are 9-11 of 20
   (`TEST.BAT:48-53`), with nine screen/MSAA steps and the whole `AUTOCHK.EXE`
@@ -278,18 +278,18 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   prompt, and the `[1/18]` label fixed.
 - **`PROBE.EXE` with no argument runs every section including `inject`.** The 25
   sections dispatch as `if (!only || !strcmp(only, "x")) probe_x();`
-  (`win/checks/probe.c:3822-3846`), so excluding the three injection sections
+  (`research/guest/probe.c:3822-3846`), so excluding the three injection sections
   from the no-arg sweep is dropping `!only ||` from `:3842-3844`. The no-arg path
   is what an operator types, and it should not be able to reach the gates that
   wedged the box by accident.
 - **The health check goes in `autocheck.exe --health`, not in the probe.**
   `probe.c` has no input injection at all — `PostMessageA` is the most it does
   (`:217`, `:2689`) — while `autocheck.exe` links libautomation, already has
-  `--shot`, `--type-into` and `--click` (`win/checks/autocheck.cpp:2158-2162`)
+  `--shot`, `--type-into` and `--click` (`research/guest/autocheck.cpp:2158-2162`)
   and already registers its own window classes (`:271-275`, `:455-477`). So all
   three of BACKLOG 15's assertions fit one exe that is already in the kit: create
   a window, focus it, type into it with `Input`, read it back with `WM_GETTEXT`,
-  and write a file. `win/checks/focusprobe.cpp` stays what it is — a one-question
+  and write a file. `research/guest/focusprobe.cpp` stays what it is — a one-question
   measurement, not a liveness check — and does not need wiring in.
 - **A rollback script.** `virsh destroy retroclaude-win98`, copy
   `vm/win98.qcow2` to a timestamped known-good, start, run, restore on failure.
@@ -301,7 +301,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   refusal.
 - **Then the run**, cold boot, injection last, health check after, and
   `PROBE.LOG` pulled off over gremote's fs lane rather than mailed by hand.
-  Measurement into `docs/measurements/`, and the three docs that say 0.15d was
+  Measurement into `research/measurements/`, and the three docs that say 0.15d was
   never run corrected against it.
 
 ### 7. The first agent turn through the UI tier, and the kit
@@ -310,7 +310,7 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   and press a named button — then to read a list box's contents, which is
   precisely the case `PLAN.md:942` says the clipboard exists for and which
   `WM_GETTEXT` cannot answer cross-process. Only probes and gremote have ever
-  driven this tier. Transcript into `docs/measurements/`.
+  driven this tier. Transcript into `research/measurements/`.
 - **The kit, optional and cheap.** `tools/gen/mkw98kit.sh` stages 355,666 bytes
   onto a 1,474,560-byte floppy and has **no size check at all**. Add
   `GREMOTE.EXE` (356,352), `GREMOTE.INI` and `GREMOTE.REG`, and the budget check
@@ -395,17 +395,17 @@ platform:**
    string level 2 left there, so it is a real clipboard. `clip=1` is
    declared at every rung including 0 -- the capability is the build's, the
    level is the machine's.
-3. On the Athlon over gremote (`tools/probe/`, `Remote("10.0.0.125", <secret>)`),
+3. On the Athlon over gremote (`research/probes/`, `Remote("10.0.0.125", <secret>)`),
    because that is the box where the ui lane's last four bugs were found.
 
    **RUN 2026-10-11, and it earned its place.**
-   `docs/measurements/clipboard-athlon-20261011.txt`. The machine had been
+   `research/measurements/clipboard-athlon-20261011.txt`. The machine had been
    switched off for the whole stage -- four checks, "No route to host" each
    time -- and the open decision recorded here was whether to run it or move
    it to stage 5. It was run, after a `self_update()`: the copy there
    predated this build and declared no `clip` key at all.
 
-       .venv/bin/python -u tools/probe/clipprobe.py --remote 10.0.0.125:<secret>
+       .venv/bin/python -u research/probes/clipprobe.py --remote 10.0.0.125:<secret>
 
    Seven of eight agreed with the guest, including both refusals and
    `no_clip_text` on an empty clipboard. The eighth did not, and that is the

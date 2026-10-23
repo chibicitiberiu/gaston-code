@@ -124,7 +124,7 @@ int main(void)
          * it expected the platform to carry something the platform does not
          * carry, in EITHER direction, which is the same fact that made the old
          * sentinel unable to come back and every absent key look present
-         * (docs/measurements/inifile-absent-key-p200-20261001.txt).
+         * (research/measurements/inifile-absent-key-p200-20261001.txt).
          *
          * So assert the property that actually matters and is true on both: A
          * KEY THAT EXISTS NEVER READS BACK AS THE CALLER'S DEFAULT. Wine hands

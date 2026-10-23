@@ -206,7 +206,8 @@ def test_names_reached_through_bridge_server_are_declared():
     blob = "\n".join(
         p.read_text(encoding="utf-8", errors="ignore")
         for p in list((root / "tests").rglob("*.py"))
-        + list((root / "tools").rglob("*.py")))
+        + list((root / "tools").rglob("*.py"))
+        + list((root / "research").rglob("*.py")))
     reached = set(re.findall(r"\bsrv\.(\w+)", blob))
     reached |= set(re.findall(r"\bbridge\.server\.(\w+)", blob))
     undeclared = sorted(

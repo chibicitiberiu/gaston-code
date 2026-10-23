@@ -3,7 +3,7 @@ targets? Lists one control's items (UITREE acc=1) for each kind -- the desktop
 icons, an Explorer file list, its folder tree, its toolbars -- and moves the
 pointer to one item by name through `input`.
 
-    python3 -u tools/probe/itemsprobe.py --host 10.0.0.45 --port 7893 \\
+    python3 -u research/probes/itemsprobe.py --host 10.0.0.45 --port 7893 \\
         --remote 10.0.0.125:<secret>
 
 Start it INSTEAD OF the bridge, then launch the client. It opens one
@@ -17,7 +17,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

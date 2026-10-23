@@ -78,7 +78,7 @@ struct ExecResult
     bool truncated;         /* output exceeded maxOutput */
     /* The command ran through ExecOptions::shell. A fact, not a verdict on
      * exitCode: COMMAND.COM /c on 98 always exits 0 (measured,
-     * docs/measurements/execprobe-vm-gui-20260926.txt), cmd.exe passes the
+     * research/measurements/execprobe-vm-gui-20260926.txt), cmd.exe passes the
      * child's code through, and which shell ran is the caller's knowledge,
      * never this library's. */
     bool viaShell;

@@ -16,7 +16,7 @@ on the real machine, so this stands in for the bridge and runs:
      kills only the Win32 side and the job ends itself, so the log shows no
      leak for these two (the DOS program in 2 and 3 still costs one each)
 
-    python3 -u tools/probe/execkill.py --port 7891
+    python3 -u research/probes/execkill.py --port 7891
 
 Start it INSTEAD OF the bridge (on a port the guest's INI names), then launch
 the client. Afterwards `EXECPRB.EXE --list` on the guest shows what was left.
@@ -27,7 +27,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

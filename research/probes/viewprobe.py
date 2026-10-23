@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drive the real guest's TRANSCRIPT on the real machine, with no agent.
 
-WHY THIS EXISTS. tools/probe/syncprobe.py proves the sync layer against the shipping
+WHY THIS EXISTS. research/probes/syncprobe.py proves the sync layer against the shipping
 binary, and it is the only thing that does. It never sends DOC, so the HTML
 view has never been exercised on the Windows 98 box by anything but a live
 bridge with an API key -- which means the view is the one layer whose
@@ -18,8 +18,8 @@ render: HELLO, READY, DOC with the REAL stylesheet from bridge/view/html.py,
 then one block of each kind the view knows how to say. It holds the connection
 open afterwards so the window can be screenshotted.
 
-    python3 -u tools/probe/viewprobe.py            # then launch the client
-    python3 -u tools/probe/viewprobe.py --port 7890
+    python3 -u research/probes/viewprobe.py            # then launch the client
+    python3 -u research/probes/viewprobe.py --port 7890
 
 Start it INSTEAD OF the bridge. It sends no EXEC and no SYNC frame, so it
 cannot touch the guest's disk.
@@ -30,7 +30,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "tools"))
 import probelib
 import toolkit
 

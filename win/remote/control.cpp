@@ -207,7 +207,7 @@ void ControlOps::reboot(Responder &r, rc_frame *f)
      * thread is still inside it, and the handler has to already know that the
      * shutdown is OURS -- because the one thing it must not then do is end
      * this process and take the broadcast's driver with it. Four runs out of
-     * four hung that way (docs/measurements/gremote-shutdown-vm-20261001.txt,
+     * four hung that way (research/measurements/gremote-shutdown-vm-20261001.txt,
      * core/app.h). */
     m_app->noteSessionEndAsked(true);
     if (!requestReboot(which, false))

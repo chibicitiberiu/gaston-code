@@ -56,7 +56,7 @@ check:
 #   cross-language data agreements; it does NOT prove FAT32 filesystem
 #   semantics, MAX_PATH kernel clamping, or modal dialog behaviour on real
 #   Windows 98. Those require real VM testing via tools/vm/vmship.sh and
-#   tools/probe/*probe.py.
+#   research/probes/*probe.py.
 # - Headless C vs GUI: This automated gate covers headless RPC, networking,
 #   data structures, and sync transfer handlers (~40% of the guest code).
 #   The Win32 GUI layer (main.cpp, htmlview.cpp, workdlg.cpp, etc., ~60%)
@@ -126,9 +126,15 @@ RE3_ONLY = EM_SETTEXTEX EM_GETTEXTEX EM_GETTEXTLENGTHEX \
 # guarded. Neither finds the other's.
 #
 # Config lives in pyproject.toml so this target and every editor agree.
+#
+# research/ is in the list for the reason the list is spelled out at all: the
+# host-side probes were in tools/ and were linted for free, and a directory
+# that is not named here is not checked by anything. A probe is the code that
+# decides what a measurement says, so an undefined name in one is a number
+# that never arrives.
 pylint-py:
 	@echo "=== ruff (lint) ==="
-	@$(PY) -m ruff check bridge/ gremote/ tools/ tests/
+	@$(PY) -m ruff check bridge/ gremote/ tools/ tests/ research/
 	@echo "=== mypy (types) ==="
 	@$(PY) -m mypy
 

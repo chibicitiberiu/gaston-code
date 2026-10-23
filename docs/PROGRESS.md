@@ -98,7 +98,7 @@ Everything Linux-side proceeds without these.
 | 0.15 | Can a hook be installed at all, and is `WaitForInputIdle` there? | **done — PASS** | Yes, and yes — but `WaitForInputIdle` is a **USER32** export on 9x, not KERNEL32. Looking in the wrong DLL reported it absent |
 | 0.15b | Do hooks deliver, and from whose process? | **done — PASS** | `SetWinEventHook(OUTOFCONTEXT)` delivers about **other** processes with no DLL at all. A `SetWindowsHookEx` proc in an **EXE** returns a valid handle and is then never called, so a return-value check proves nothing |
 | 0.15c | Latency, granularity and completeness of the feed | **done — PARTIAL** | 20 of 20 actions produced an event across 11 event types: **completeness is settled**. The milliseconds beside it are **not** — the system's own event timestamp is discarded and the clock is read inside the callback, so they are pump latencies on a 55ms tick. Do not budget against them |
-| 0.15d | Does DLL injection work, and can GDI text be captured? | **done — PROVISIONAL** | Both halves are unsound as evidence. The GDI patch was applied by the probe **to the probe's own pid**, so nothing has ever been captured from a foreign process. And "INJECTION WORKS" tests `attaches > 1` on a counter nothing zeroes, in a named section no injected copy ever unmaps — so the count is cumulative across every run since boot. **Re-run with the generation word on 2026-09-26** (`docs/measurements/vm-20260926.txt`: counters zeroed, `distinct pids 2`, injection confirmed) -- but 9.4 hours into an uptime, in the session that ended with 0.15h's wedge, and section D was built before even that. What is owed is the same run **from cold**, with the gates last and a health check behind them (`BACKLOG.md` §15). Foreign-process GDI capture is still untested, by the probe's own design |
+| 0.15d | Does DLL injection work, and can GDI text be captured? | **done — PROVISIONAL** | Both halves are unsound as evidence. The GDI patch was applied by the probe **to the probe's own pid**, so nothing has ever been captured from a foreign process. And "INJECTION WORKS" tests `attaches > 1` on a counter nothing zeroes, in a named section no injected copy ever unmaps — so the count is cumulative across every run since boot. **Re-run with the generation word on 2026-09-26** (`research/measurements/vm-20260926.txt`: counters zeroed, `distinct pids 2`, injection confirmed) -- but 9.4 hours into an uptime, in the session that ended with 0.15h's wedge, and section D was built before even that. What is owed is the same run **from cold**, with the gates last and a health check behind them (`BACKLOG.md` §15). Foreign-process GDI capture is still untested, by the probe's own design |
 | 0.15h | **What state does the guest end up in after the injection gates?** | **open — the guest wedged** | After a session that ran 0.15d, 0.15f and the full autocheck battery, the Win98 guest was found spinning at 100% of a vCPU, processing no keyboard input (an Enter at the DOS prompt changed zero pixels) and holding no socket. The screen was exactly as the last run left it and the last successful interaction was 07:38 — the battery's own final read, which completed. **Causation is NOT established**: the gates install system-wide hooks and put a DLL into other processes, and that is the obvious suspect, but nothing was captured that pins it, and a Win98 guest can wedge on its own. What this does settle is that the gates are not safe to run unattended, and that a run needs a way to say afterwards whether the machine is still healthy. See BACKLOG §15 |
 | 0.15f | Can injection be aimed at ONE process? | **done — PASS, and it corrected the plan** | 0.15d proved a SYSTEM-WIDE `WH_CBT` hook, which is how Explorer came to be in scope and how Explorer came to die. The plan's D1 switches to `SetWindowsHookEx(WH_CALLWNDPROC, ..., targetThreadId)` and asserts as fact that this maps into one process and nowhere else; **nobody has run that**. The gate spawns Notepad, aims a hook at its window's thread, and reports the distinct pids that executed our code. Any pid beyond the target makes the "targeted" claim false whatever the documentation says. It sets **no patch target**, so the import-table risk is not taken to answer a question that does not need it. **Run on the guest 2026-09-26, and the plan's choice was wrong**: `WH_CALLWNDPROC` installs and never fires — 0 calls, 0 processes — and so do `WH_CBT` and `WH_CALLWNDPROCRET` aimed at a thread. **`WH_GETMESSAGE` delivered 23 calls into exactly one process, the target, and no other.** Had D1 been built on the documented choice the whole in-process tier would have been silently dead. `win/ui/inject.cpp` uses `WH_GETMESSAGE` and posts as well as sends, because the hook fires inside `GetMessage` |
 | 0.15g | Which text call does each drawing module actually make? | **done — PASS, and it widened the patch twice** | D4 patches `TextOutA` and `ExtTextOutA`, and its stated purpose is MSHTML. Reading an import table needs no injection, so this is the cheapest question in the section and it was never asked. Under Wine, **COMCTL32 imports `ExtTextOutW` and `TextOutW` and NEITHER A form** — so a patch covering only A would have captured nothing from the common controls, which is most of what a dialog is. The W forms were patched in response. **Then it ran on the guest, and Win98's answer is wider still**: `MSHTML.DLL` imports `TextOutW ExtTextOutW ExtTextOutA DrawTextW DrawTextA`, `COMCTL32` imports `DrawTextExA`, `COMDLG32` imports `DrawTextA`. `DrawText*` is USER32, not GDI32, and was not patched at all — so a web page and a dialog would each have been captured in part and reported as the text on screen, which is worse than capturing nothing because it looks like an answer. All eight entry points are patched now |
@@ -2697,7 +2697,7 @@ having it, not because it was hardcoded.
 
 Every run put a real window on the guest's desktop, so this compares
 successes rather than a success and a give-up. The per-call lists for all
-five runs are in `docs/measurements/`, because a number nobody can audit
+five runs are in `research/measurements/`, because a number nobody can audit
 later is a number nobody should believe.
 
 n=3 on the treatment because one run of a stochastic system is an anecdote.
@@ -3244,7 +3244,7 @@ name. What changed:
   - the libvirt domain `retroclaude-win98`, the Wine prefix
     `~/.local/share/retroclaude` and the checkout path `~/Dev/RetroAI`: live
     state outside git, renamed with the VM or not at all;
-  - history (these notes, the audits, `docs/measurements/`), which says what
+  - history (these notes, the audits, `research/measurements/`), which says what
     the files were called then.
 
 ## R9 step 4 -- `gremote.exe`, and 5b with it (2026-09-27)
@@ -3253,7 +3253,7 @@ The five libraries existed and nothing but the client consumed them. Step 4 is
 the second program: a headless Win98 server built from `libcore`, `libwire`,
 `libexec` and `libfs`, which LISTENS while Linux connects. `docs/REMOTE.md`
 has the design, `docs/gremote-plan.md` the plan and the deviations, and
-`docs/measurements/gremote-vm-20260927.txt` the guest run.
+`research/measurements/gremote-vm-20260927.txt` the guest run.
 
 It answers three lanes. Control (`SYSINFO PS KILL REBOOT`, plus `AUTH` and
 `PING`) runs inline on the reader thread; job (`EXEC LAUNCH`) and fs (`LS STAT
@@ -3364,7 +3364,7 @@ receives a HELLO. `tests/python/meta/test_hello_headers.py` now parses the
 stay free: the header list IS the capability declaration, so a full array
 means the next client rule has nowhere to go.
 
-`win/checks/idcheck.cpp` runs the shipping `MachineId` under Wine, because
+`tests/guest/idcheck.cpp` runs the shipping `MachineId` under Wine, because
 every one of its failure modes is invisible from outside the process: the
 mint, the file, the same id on the second launch, a different id in a
 different directory, trailing CRLF trimmed, garbage replaced AND the
@@ -3448,7 +3448,7 @@ The `lParam` was being thrown away (`(void)lp`). Both handlers now print
 whether it was a logoff, which is what BACKLOG/REMOTE's "does `gremote`
 survive a logoff" question needs in order to be answerable by reading a file.
 
-`win/checks/appcheck.cpp` grew eight cases (21 -> 29) and reads the log files
+`tests/guest/appcheck.cpp` grew eight cases (21 -> 29) and reads the log files
 back, because these are claims about what is IN THE FILE after the program has
 gone. They come last in that binary on purpose: everything above runs with no
 log open, so `App`'s own lines cannot land in the files being read. One
@@ -3594,7 +3594,7 @@ classifier (`bridge/files/attrs.py`, `P.classify`) and `SYNCPUTEND` carries a
 class field for exactly this. So the same batch file was runnable through one
 path and silently broken through the other.
 
-Measured (`docs/measurements/batch-eol-and-dir-b-p200-20261001.txt`):
+Measured (`research/measurements/batch-eol-and-dir-b-p200-20261001.txt`):
 
     LF.BAT    "@echo off\necho one\nset FOO=bar\necho [%FOO%]\n"  ->  "OFF"
     CRLF.BAT  the same with \r\n                                  ->  "one" "[bar]"
@@ -3949,14 +3949,14 @@ ACCESS_DENIED; a failed folder move between drive letters is `cross_volume`.
 **Memory.** COMMITTED_CAP went up once, 478,192 -> 502,768, for the whole set;
 the step code is compiled for size and Step is plain data borrowing the frame's
 own bytes (the std::string version cost 52KB). Measured on the VM, fresh and
-idle: the client holds 16-28KB more than before (docs/measurements/workingset-
+idle: the client holds 16-28KB more than before (research/measurements/workingset-
 vm-20261002.txt).
 
 **Verified on both machines.** inputprobe 12/12 (VM twice, Athlon once),
 opsprobe 21/21 (both), a live Haiku turn on each -- "Grüße Welt" typed, the
 word replaced, the result read back with `ui`, Notepad closed through its save
 prompt by selector, and a click on Gaston's own window refused.
-docs/measurements/keyboard-layouts-vm-20261002.txt,
+research/measurements/keyboard-layouts-vm-20261002.txt,
 input-and-ops-real-hw-20261002.txt. Deferred on purpose: BACKLOG 28.
 
 ### Later the same day: whole folders, the Recycle Bin, and a reviewer for Auto
@@ -4018,7 +4018,7 @@ host-side probes do reach `UITREE`, but each is a bridge stub waiting for the
 *client* to dial out, so every one of them needs a working `gaston.exe`.
 
 **The case it exists for is in the screenshot.**
-`docs/measurements/ui-lane-vm-20261003.png` is the guest's desktop,
+`research/measurements/ui-lane-vm-20261003.png` is the guest's desktop,
 photographed by gremote, with the client in the middle of it saying "Cannot
 reach 10.0.2.2:7890 - retrying". The wedge, the GPF and the shutdown hang
 were each diagnosed over QMP, and the Athlon has none.
@@ -4080,8 +4080,8 @@ which lists what to look at and in what order. `gaston.exe` ended at 511,913,
 below where this work started.
 
 **Verified on the QEMU guest, eleven of eleven**
-(`docs/measurements/ui-lane-verify-vm-20261003.txt`,
-`tools/probe/uilaneprobe.py`): a desktop tree and a per-process one, `inproc`
+(`research/measurements/ui-lane-verify-vm-20261003.txt`,
+`research/probes/uilaneprobe.py`): a desktop tree and a per-process one, `inproc`
 refused rather than quietly served, focus-type-and-read-back in one list, a
 failing list that still reports what ran, a held key released after a
 failure, a malformed list refused before it is sent, a screenshot as BMP and
@@ -4091,7 +4091,7 @@ Plus `test_ui_lane.py` under Wine, and `uicheck` 52 cases for the parts that
 need no desktop at all.
 
 **The Athlon run, 2026-10-04: 12 of 12**
-(`docs/measurements/ui-lane-real-hw-20261004.txt`,
+(`research/measurements/ui-lane-real-hw-20261004.txt`,
 `ui-lane-real-hw-20261004.png` -- a 1280x720 capture of that machine's
 desktop, the first non-VM image in that directory). Four questions, and three
 of the answers differ from the emulator's:
@@ -4143,7 +4143,7 @@ built and ran hello world with no bar, and `put_file C:\AUTOEXEC.BAT` went
 to the checker. The checker is a warm client fed a fixed header from the
 classifier, the untrusted content fenced; after tuning it was unsure on
 2 of 13 risky calls and approved none of 7 it should not
-(docs/measurements/checker-haiku-20261004.txt).
+(research/measurements/checker-haiku-20261004.txt).
 
 **The OS facts stay on the client.** Protected places, dangerous programs
 and trusted programs are compiled into `app/protect.cpp`, expanded from the
@@ -4171,7 +4171,7 @@ bridge's side; they now filter guest rows too, case-folded.
 
 **Memory.** The whole set cost 66 KB of committed image (515,056 to
 580,649; cap 585,728) and 36 KB of idle working set on the guest
-(docs/measurements/workingset-vm-20261004.txt, tools/probe/wsprobe.py).
+(research/measurements/workingset-vm-20261004.txt, research/probes/wsprobe.py).
 25 KB of that image was one `std::vector<std::string>` in config.h before it
 became a TextList.
 
@@ -4247,10 +4247,10 @@ exist yet, because the thread creating the window is 440ms behind on a 32MB
 machine. The clock never started. Every test that drove twice passed,
 including the Wine test written for this feature.
 
-Measured: `docs/measurements/stripprobe-vm-20261014.txt` (what 98 SE does
+Measured: `research/measurements/stripprobe-vm-20261014.txt` (what 98 SE does
 with somebody else's topmost window -- `HTTRANSPARENT`, the hide-to-pixels
 gap, `RegisterHotKey`, activation) and
-`docs/measurements/indicator-vm-20261014.txt` (the thing itself: both
+`research/measurements/indicator-vm-20261014.txt` (the thing itself: both
 programs, both cancel routes, the dwell, the show delay, and a screenshot
 taken while it was up coming back without it).
 
@@ -4399,7 +4399,7 @@ it, because the same field is used as a footprint proxy elsewhere.
 
 Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
 `agent-turn-ui-vm-20261011.txt` and its screenshot, `clipboard-athlon-20261011.txt`.
-Probes: `tools/probe/clipprobe.py`.
+Probes: `research/probes/clipprobe.py`.
 
 **The third place, and why holding the stage open for it paid.** The plan's
 verification named three machines and only two had been used; the Athlon was
@@ -4574,7 +4574,7 @@ MSAA returning real roles from the box's own oleacc.
 R7. `ROADMAP.md` stage 3c, planned in `docs/stage3c-plan.md`. Six commits,
 `7c81fe5..342f4cf`. The exit condition was run on the two real machines:
 both attached at 01:35:56, two conversations, two mirrors, two baselines --
-`docs/measurements/two-guests-20261013.txt`.
+`research/measurements/two-guests-20261013.txt`.
 
 **The bug it closes was live.** `ConnectionService.guest` was one slot, so
 `is_reconnect` asked whether a GuestSession existed and never whose it was.
@@ -4778,7 +4778,7 @@ agreed on the wrong thing because one of them was in its fallback.
 never the platform', and this is what that rule costs when the thing being
 proved is a round trip through somebody else's parser."* A template file is
 that round trip. 40 keys in, 40 back, 0 differences, on the VM and on the
-Athlon -- `docs/measurements/template-roundtrip-20261012.txt`. It also
+Athlon -- `research/measurements/template-roundtrip-20261012.txt`. It also
 records what the result does *not* settle: no template holds a control
 character, which is the one thing that provably cannot survive, and the
 inline marks live in the record for exactly that reason.
@@ -4857,4 +4857,4 @@ ones Wine cannot see: `view.css` renamed away gives a dialog naming
 `view.tpl` renamed away gives no dialog, a transcript of plain unstyled
 paragraphs and a bar reading "view.tpl missing - plain text"; both restored
 gives an empty bar and grey notices again.
-`docs/measurements/view-degraded-vm-20261012-*.png`.
+`research/measurements/view-degraded-vm-20261012-*.png`.

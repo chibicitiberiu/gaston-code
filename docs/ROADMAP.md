@@ -83,7 +83,7 @@ something later.
 were always stage 5's. Two of the preconditions this file listed turned out to be
 closed already: the autostart `.REG` is generated (`tools/gen/mktools-iso.sh`),
 shipped, and proven answering before anyone logs on
-(`docs/measurements/gremote-vm-20260927.txt`), and first delivery was answered by
+(`research/measurements/gremote-vm-20260927.txt`), and first delivery was answered by
 use on the Athlon. What is genuinely open is the Pentium 200 itself -- a
 different machine from the Athlon, whatever the `*-p200-*.txt` filenames say.
 
@@ -94,7 +94,7 @@ budget the script lacks.
 
 **The injection-safety loose end.** `UIAUTOMATION.md:645` says section D should
 not be scheduled before gate 0.15d is re-run; section D shipped anyway. The probe
-was fixed and **has** been re-run -- `docs/measurements/vm-20260926.txt`, with the
+was fixed and **has** been re-run -- `research/measurements/vm-20260926.txt`, with the
 generation word, `distinct pids 2`, injection confirmed -- which three documents
 still deny. Two caveats survive that run: it was 9.4 hours into an uptime rather
 than from cold, and it was the session that ended with the 0.15h wedge. Foreign-
@@ -274,7 +274,7 @@ every reconnect, on a link measured in single digits of KB/s.
 
 One page of image, measured and attributed in `win/Makefile`'s ladder. Half
 of what the stage adds is not image at all: 9,375 bytes of stylesheet and
-~5,400 of templates are files. `docs/measurements/live-before-20261012.txt`
+~5,400 of templates are files. `research/measurements/live-before-20261012.txt`
 and `live-after-20261012.txt` have the timings;
 `template-roundtrip-20261012.txt` has the one platform risk that had to be
 measured rather than reasoned about.
@@ -369,7 +369,7 @@ and §21 the question it answered. Six commits, `7c81fe5..342f4cf`.
 **Exit condition, met on the real machines:** two guests hold two mirrors and
 two baselines at once. The QEMU guest and the Athlon, attached to one bridge
 at 01:35:56, in two conversations, with two mirrors and two baselines --
-`docs/measurements/two-guests-20261013.txt`.
+`research/measurements/two-guests-20261013.txt`.
 
 **What it was.** `ConnectionService.guest` was a single slot. A second
 *simultaneous* client was refused process-wide, and a second *sequential* one
@@ -500,7 +500,7 @@ says honestly that 1,400 bytes of content bought 4,096 of padding because
   denied by a different rule, with a pid `launch` does not usefully
   return). The sibling case had been passing VACUOUSLY on the guest since
   it was written, for the first reason.
-  `docs/measurements/forcekill-vm-20261014.txt`.
+  `research/measurements/forcekill-vm-20261014.txt`.
 - **Every bullet of the plan's Verification section was executed in the
   end, and the last one took the longest to stage.** The automation tick's
   honesty when the mid-turn prompt is declined needs a toggle to land while
@@ -509,7 +509,7 @@ says honestly that 1,400 bytes of content bought 4,096 of padding because
   raised by a command that CHANGES something. Held that way it passes:
   "Saved. They take effect at the next connection", the turn still
   streaming, and no tick on a setting `m_cfg` has already stored.
-  `docs/measurements/tick-honest-vm-20261014.txt`.
+  `research/measurements/tick-honest-vm-20261014.txt`.
 - **The on-guest work found a live defect that predates the stage.** The
   client reconnects about once a second and clears file sharing each time,
   which makes it useless to the agent until restarted -- `BACKLOG.md` 38,
@@ -559,7 +559,7 @@ The decisions, as they were settled 2026-10-13:
   conclusion from a real four-band run -- deflate beat GDI's own RLE at every
   depth where both exist. The "2.8x faster and 2x larger" this section carried
   has no measurement file behind it, and its likely source is a *discarded*
-  2.7x single-band number at `win/checks/probe.c:1658`, sign flipped. Two of
+  2.7x single-band number at `research/guest/probe.c:1658`, sign flipped. Two of
   four repo documents already said no; now all four do.
 - ~~**`COMMITTED_CAP` +4,096**~~ **Closed 2026-10-11 without being taken.**
   Stage 2 freed 31,520 bytes of CONST against the 126 needed.
@@ -608,9 +608,9 @@ Stop cancels the run and does what that program's own Stop does -- an
 INTERRUPT frame in the client, the tray's "automation off" in gremote --
 because a cancel alone is undone by the next request a second later.
 
-Measured on the guest: `docs/measurements/stripprobe-vm-20261014.txt` (what 98
+Measured on the guest: `research/measurements/stripprobe-vm-20261014.txt` (what 98
 SE does with somebody else's topmost window) and
-`docs/measurements/indicator-vm-20261014.txt` (the thing itself, both
+`research/measurements/indicator-vm-20261014.txt` (the thing itself, both
 programs, both cancel routes, and the four screen/font corners finished the
 next morning -- the `indicator-vm-20261015-*.png` set). Cost: `COMMITTED_CAP` 506,617 -> 513,273 and
 `check-gremote` 263,593 -> 270,249, with no `_BSS` page slide on either.
@@ -784,7 +784,7 @@ have.
 item 12, whether gremote survives a LOGOFF, which needed one logoff on any
 real 98 box -- it did not survive, and `RunServices` runs at boot rather
 than per session, so it did not come back at the next logon either
-(`docs/measurements/logoff-vm-20261013.txt`); and item 9, the `rsrc32.dll`
+(`research/measurements/logoff-vm-20261013.txt`); and item 9, the `rsrc32.dll`
 question, settled as a no on the control lane's kernel32-and-Winsock rule,
 which no install can clear.
 

@@ -25,7 +25,7 @@ Makefile, since it is the first thing a new reader meets.
 All created with `_beginthreadex`, never `CreateThread` — required twice
 over: Watcom's multithreaded CRT allocates its per-thread block there, and
 `CreateThread(..., lpThreadId=NULL)` is rejected outright on Win95/98.
-`win/checks/probe.c:151-193` measured both.
+`research/guest/probe.c:151-193` measured both.
 
 ## Locks
 

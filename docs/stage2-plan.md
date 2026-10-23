@@ -127,7 +127,7 @@ No code. `docs/stage2-plan.md` written from this file, then:
 ### 2. The instrument, and the artefacts the "after" will need
 
 **Keep the "before" first, because no later commit can.** `build/` is gitignored and
-commit 3 rebuilds `gaston.exe` in place, while `tools/probe/wsprobe.py:54-55` needs
+commit 3 rebuilds `gaston.exe` in place, while `research/probes/wsprobe.py:54-55` needs
 `--old <path>` to exist. So this commit's first act is to copy `gaston.exe`, `gremote.exe`
 and their maps out of the tree, named by hash. `build/win/` is also partially stale right
 now (`uicheck.map` is missing although `win/Makefile:434` emits one), so the before-figures
@@ -155,7 +155,7 @@ The two 31 KB findings rest on none of this: both are bounded by explicit first 
 symbol addresses with no foreign symbol between, which is why they are the ones being acted
 on. Lint applies — `make lint` runs ruff over `tools/` (`Makefile:125`).
 
-Measurement into `docs/measurements/imagebytes-host-20261011.txt` for all five capped exes,
+Measurement into `research/measurements/imagebytes-host-20261011.txt` for all five capped exes,
 as the "before" half of the exit condition. (`-host-` because the directory's convention is
 `<topic>-<machine>-<date>` and this one has no guest in it.)
 
@@ -169,7 +169,7 @@ check exes pull it for **`IID_IUnknown` alone**, at `win/automation/calldeadline
 The codebase already has the fix, written down twice and applied twice:
 `win/automation/msaa.cpp:25-26` — *"Spelled out rather than linked from uuid.lib, so a
 toolchain whose import library lacks oleacc's IID cannot fail the link"* — and
-`win/checks/probe.c:566`. `calldeadline.cpp:13-15` spells out `RC_IID_IMessageFilter`
+`research/guest/probe.c:566`. `calldeadline.cpp:13-15` spells out `RC_IID_IMessageFilter`
 seventy-nine lines above the line that does not.
 
 - **The locals must be renamed, and this is not cosmetic.** The stock names are already
@@ -197,7 +197,7 @@ seventy-nine lines above the line that does not.
   names `comctl32.lib` at `win/Makefile:142` like every other link and does not import
   `COMCTL32.DLL`. (An earlier draft cited the map's "Libraries Used" section for this; do
   not — the two reviews disagree about what it contains, and the import table settles it
-  either way.) `win/checks/htmlspike.c:61-67,213,214,227,253` keeps referencing ten of
+  either way.) `research/guest/htmlspike.c:61-67,213,214,227,253` keeps referencing ten of
   these and keeps linking `uuid.lib`; it is a spike and is untouched.
 - **The guard is a check-exe case, not a generator.** An earlier draft proposed extracting
   the bytes from `uuid.lib` and comparing in `tests/python/meta`. Both halves were wrong:
@@ -281,7 +281,7 @@ guest, not under Wine. Wine proves the code, never the platform."* A `-os`/`-ot`
 from a Wine timing is precisely what that rule exists to stop, so Wine's only job here is
 "it runs and produces output". On the VM, for the three things that are genuinely loops:
 
-- `probe deflate` for miniz — it exists (`win/checks/probe.c:472`), discards a warm pass,
+- `probe deflate` for miniz — it exists (`research/guest/probe.c:472`), discards a warm pass,
   and documents why its corpus flatters the ratio.
 - The sync scanner's CRC pass, timed from the bridge as `SCAN` sent to `MANIFEST` received
   over a fixed corpus, so no guest instrumentation is needed. Expect the platter to
@@ -336,7 +336,7 @@ unattributable (commit 2's caveat). A `BACKLOG.md` entry, not a commit, and it l
 what the idea does *not* buy:
 
 - **On Win98 code is demand-paged from the image**, so code nobody touches is already
-  nearly free. This project measured it: `docs/measurements/workingset-vm-20261004.txt:30-32`
+  nearly free. This project measured it: `research/measurements/workingset-vm-20261004.txt:30-32`
   — 66 KB of image cost 36 KB resident *"because the sheet's pages and the inspector are
   code that is not touched until Options is opened."* The gain is against `COMMITTED_CAP`,
   and `win/Makefile:103-106` already says that gate is a proxy for the working set.
@@ -355,7 +355,7 @@ what the idea does *not* buy:
 measured before it is done.** `ui/uirec.cpp`'s `rc_uirec_inproc` and `rc_uirec_item` are 928
 bytes unreferenced in gremote, which refuses that tier (`win/remote/uiops.cpp:397-403`,
 *"`inproc` is REFUSED, not ignored"*) — but they are referenced by `win/ui/uirpc.cpp:342,347,362,367`
-and `win/checks/uicheck.cpp:231,242`, and `uirec.cpp` is linked into gaston, uicheck,
+and `tests/guest/uicheck.cpp:231,242`, and `uirec.cpp` is linked into gaston, uicheck,
 netcheck, rpccheck *and* gremote. Splitting them adds a TU to five exes to save 928 bytes in
 one, against the ~2,144 this same stage cites per TU. And `uirec.h:32`'s
 `#include "inproc/shm.h"` cannot move with them: `RC_IN_DEPTH_MAX` is used at `uirec.h:63-64`
@@ -422,7 +422,7 @@ Four prose sites quote the old caps and move with them: `ROADMAP.md:159`, `BACKL
 
 ### 11. The runtime number, and the close
 
-- **The client, on the VM:** `tools/probe/wsprobe.py --old <the exe commit 2 kept> --new
+- **The client, on the VM:** `research/probes/wsprobe.py --old <the exe commit 2 kept> --new
   build/win/gaston.exe` — the 2026-10-02 method as a tool: each build fresh from its own
   folder, idle, pointed at a dead port, five samples 2 s apart, median, alternated twice. An
   image 69 KB smaller should show as tens of KB less held; the two previous runs tracked the
@@ -432,7 +432,7 @@ Four prose sites quote the old caps and move with them: `ROADMAP.md:159`, `BACKL
   it measures through, and `control.cpp:33`'s `GastonRemoteSingleInstance` rules out a second
   copy. So: `mem_free_kb` off the **HELLO frame** (`server.cpp:141`) at a fixed point after a
   cold boot, one build per boot, old and new alternated.
-- `docs/measurements/imagebytes-host-20261011.txt` gains its "after" half; a second file for
+- `research/measurements/imagebytes-host-20261011.txt` gains its "after" half; a second file for
   the flag timings.
 - `ROADMAP.md` stage 2 → **DONE**, `BACKLOG.md` 2 and 29 closed, 19 closed on its second
   option, the DLL entry opened, `PROGRESS.md` written up with the current goal moved to
@@ -523,7 +523,7 @@ Nothing about speed is decided here.
 
 **On the Athlon over gremote**, the machine `BACKLOG.md` 29 was written about: a
 `self_update()` to the trimmed build (its own rollback is the safety net), the ui lane through
-`tools/probe/uilaneprobe.py` and `clipprobe.py` — which is also the only way
+`research/probes/uilaneprobe.py` and `clipprobe.py` — which is also the only way
 `CallDeadline::QueryInterface` and the MSAA path get exercised with a real `oleacc.dll` — and
 the HELLO `mem_free_kb` pairs for gremote's working set. `[ui] msaa=0` is tested here if
 commit 9 implements it, since this is the box where MSAA actually answers.

@@ -1,7 +1,7 @@
 """The C++ prelude's guards, run as the shipping code under Wine.
 
 A guard that is wrong is worse than no guard, because it is trusted. These
-diff `win/checks/cppcheck.cpp`'s verdicts rather than reading the header and
+diff `tests/guest/cppcheck.cpp`'s verdicts rather than reading the header and
 believing it.
 
 Every case is drawn from a bug this codebase has actually had. The one that
