@@ -4113,3 +4113,77 @@ is working exactly as designed here, and the fault is upstream of it.
 unusable until restarted, and it is almost certainly older than stage 4.
 Stage 4 found it only because the plan required running the new menu item
 on the real machine.
+
+## 39. Walking hidden windows opens the Start menu, and the ui lane lets you
+
+Reported from the keyboard of the Pentium 200, 2026-10-23, while this session
+was driving `TREE` with `hidden=1` from Linux: "that ghost opening of start
+menu bug (we saw it in the accessibility i think) is still happening."
+
+**The cause is already written down, in the program that refuses to do it.**
+`win/checks/probe.c`, above `g_uiw_all`:
+
+> Walking hidden windows MOVED the desktop: `probe msaa` left the Start menu
+> open every run while `probe screen`, same driving, never did. A closed Start
+> menu is a window that still exists and is merely hidden, and asking oleacc
+> for its accessible object appears to realise it. A tool whose job is to
+> report what is on screen must not change what is on screen, so hidden
+> windows are not walked at all.
+
+`tools/gen/w98kit/README.TXT` carries the user-facing half of the same story:
+the desktop-walk step "skips hidden windows -- an earlier version did not skip
+them and left the Start menu stuck open, which is what the skipping is for."
+
+**So probe learned this and gremote did not.** `TREE` takes `hidden=1`
+(`gremote/client.py`'s `hidden=` argument, `win/ui/uiengine.cpp`'s header), and
+with `msaa=1` -- the default in `GREMOTE.INI` -- that is precisely the
+combination `probe` banned itself from. The lane offers the hazard as an
+option, with nothing at the call site saying so. Every `hidden=True` walk this
+session ran reproduced it, which is how the person at the box came to see a
+Start menu open by itself four times in an evening.
+
+**It is a side effect, not a crash**, and that is what makes it worth an entry
+rather than a hotfix: a tool that reports what is on screen changed what is on
+screen, and a later screenshot or template match would then be of a desktop the
+walk itself altered. `probe`'s comment makes the general claim -- oleacc
+*realises* a window it is asked about -- so the Start menu is the visible case
+and not necessarily the only one.
+
+**What closing it would take.** Three options, and the measurement below
+argues for the second:
+
+1. Refuse `hidden=1` when `msaa=1`, the way `probe` refuses it outright. Honest
+   and cheap; costs the caller a capability that is occasionally wanted.
+2. Keep the window walk over hidden windows and skip only the *MSAA
+   enrichment* for them. The enrichment is the part that realises the window
+   (`probe msaa` did it, `probe screen` did not), and it is also where the time
+   goes -- see below. One condition in `TreeSink::onNode`.
+3. Leave it and document it at the call site. Cheapest, and it leaves a
+   footgun loaded in a lane whose whole purpose is to observe without
+   disturbing.
+
+**It is not only a correctness problem, which is the argument for (2).**
+Measured the same evening, same machine
+(`docs/measurements/wire-p200-20261023.txt` and the session that produced it):
+
+    tree scope=desktop msaa=1 hidden=0      315 ms      53 nodes
+    tree scope=desktop msaa=0 hidden=0       92 ms      53 nodes
+    tree scope=desktop msaa=1 hidden=1  155,410 ms     125 nodes
+
+Seventy-two extra nodes cost 155 seconds -- about 2.1 s each, which is roughly
+`call_timeout_ms` (2000 in `GREMOTE.INI`, against the 200 that
+`win/automation/tree.cpp` defaults to and `tree.h` calls "SMALL"). So the
+hidden half of the walk is both the part that moves the desktop and the part
+that takes four hundred times longer than the rest of it. Skipping enrichment
+for hidden windows would address both at once.
+
+**And it is what makes a cancel useless.** See 26: `TreeSink::onNode` reads the
+stop flag between nodes, which its comment calls "the right grain: one more
+WM_GETTEXT at a bounded timeout, not a whole walk". At 2.1 s a node that grain
+is too coarse -- a cancel accepted in 2 ms took 88 s to take effect once and
+had not taken effect at all after 300 s on an earlier attempt, with every
+`TREE` in between refused `busy`.
+
+**Not started.** Recorded at the owner's instruction -- "put it in task list,
+it's for later" -- with the three options above so the decision is not
+re-derived.
