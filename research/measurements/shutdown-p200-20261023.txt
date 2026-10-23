@@ -245,3 +245,78 @@ is reachable, so the logs cannot be read remotely either.
 wedged box is not a valid S3: that run was the wedged one, so its PRV
 measures the wedge rather than a somebody-else-asked shutdown. A clean S3 is
 still owed, on a healthy box, and should be taken after S2.
+
+
+=== S2 PASSES, and it is the cleanest reading of the evening ===
+
+Same reboot with the client running as well. Down in 6 s. Both processes
+logged their session end, and the two logs say DIFFERENT things, which is the
+whole reason REMOTE.md specifies six lines rather than two.
+
+GREMOTE.PRV -- the process that ASKED:
+
+  04:30:15.100 control: REBOOT mode=reboot
+  04:30:15.540 app: Windows asks whether the session may end (a shutdown or
+               restart); yes
+  04:30:21.800 app: Windows is ending the session (a shutdown or restart);
+               signalling every service and leaving this handler WITHOUT
+               joining any of them
+  04:30:21.800 app: the session is ending; abandoning server unjoined
+  04:30:21.850 app: every service is signalled and abandoned; cleaning up
+  04:30:21.850 === gremote exiting ===
+  04:30:21.910 app: the session-end handler is returning to Windows after
+               122 ms; **this process stays up to drive the shutdown it
+               asked for**
+
+GASTON.LOG -- the process that DID NOT ask, and all four of the `abandoning`
+lines REMOTE.md:1352 names (desktop / connection / main window / ole):
+
+  04:30:15.320 app: Windows asks whether the session may end (a shutdown or
+               restart); yes
+  04:30:21.360 app: Windows is ending the session ...; signalling every
+               service and leaving this handler WITHOUT joining any of them
+  04:30:21.360 app: the session is ending; abandoning desktop unjoined
+  04:30:21.470 desktop: worker down
+  04:30:21.470 app: the session is ending; abandoning connection unjoined
+  04:30:21.530 app: the session is ending; abandoning main window unjoined
+  04:30:21.530 app: the session is ending; abandoning ole unjoined
+  04:30:21.530 app: every service is signalled and abandoned; cleaning up
+  04:30:21.580 === gaston exiting ===
+  04:30:21.640 app: the session-end handler is returning to Windows after
+               284 ms; **nothing below this line is ours**
+
+**Both last clauses are the right one for their process**, and they differ.
+gremote asked, so it stays up to drive what it asked for; the client did not,
+so it steps aside. REMOTE.md:1329 says that clause is the one to read and
+that a REBOOT logging the wrong one is a build without the stay-alive fix.
+Two processes, two positions, two correct answers, on the hardware.
+
+N is 122 ms and 284 ms. Both small.
+
+A READING TRAP worth recording, because it cost a wrong conclusion for a few
+minutes: the client's session end is in **GASTON.LOG, not GASTON.PRV**.
+REMOTE.md says to read .PRV, and that is right for gremote -- which restarts
+at boot and rotates its log, so the run that went down becomes .PRV. The
+client does NOT restart at boot. Nothing had started it since, so no rotation
+happened and its shutdown is still the tail of .LOG, while .PRV holds the run
+BEFORE it. The rule is "read the file belonging to the run that went down",
+and which extension that is depends on whether anything started the program
+again.
+
+
+=== The open question S2 leaves: gremote did not autostart afterwards ===
+
+  gremote exited cleanly        04:30:21
+  the box came back             Windows fully up, ping 0.55 ms, port 139 open
+  gremote running               NO. 7401 refused for ~30 minutes until it was
+                                started by hand at 05:01:15
+
+The S1 boot immediately before did autostart it -- GREMOTE.PRV opens at
+04:28:49, which is RunServices working. So RunServices is not broken in
+general, and the only variable between the two boots is that the client was
+running when the machine went down.
+
+Unexplained, and it needs the screen rather than the wire: no SMB share is
+reachable, so nothing on that boot can be read remotely. Whether something
+modal was up, whether ScanDisk ran, or whether RunServices was simply skipped
+is not established, and this file does not guess.
