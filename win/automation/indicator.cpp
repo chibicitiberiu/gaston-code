@@ -44,7 +44,7 @@ class DriveIndicator::Strip : public Window
 public:
     Strip(DriveIndicator &owner)
         : m_owner(owner), m_font(0), m_shownAt(0), m_textW(0), m_btnW(0),
-          m_h(0), m_atTop(false), m_visible(false), m_hotkey(false),
+          m_h(0), m_atTop(true), m_visible(false), m_hotkey(false),
           m_ticking(false)
     {
         SetRectEmpty(&m_btn);
@@ -130,7 +130,23 @@ void DriveIndicator::Strip::place()
     if (w > work.right - work.left - EDGE * 2)
         w = work.right - work.left - EDGE * 2;
 
-    x = work.right - w - EDGE;
+    /* TOP CENTRE. Asked for at the keyboard of the Pentium 200,
+     * 2026-10-23: "let's move that indicator to top center, it's more
+     * visible and clear."
+     *
+     * It was bottom-right, which is where a notification goes -- and that is
+     * the wrong idiom for this. A notification is something you may read; a
+     * strip that says another program is driving your desktop is something
+     * you must not miss, and the bottom-right corner of a 98 desktop is
+     * where the tray, the clock and every tooltip already live. Top centre
+     * is empty on a maximised window, it is where the eye goes first, and it
+     * is the one place nothing else on this platform claims.
+     *
+     * Right-click still toggles top/bottom (WM_RBUTTONUP below), which is
+     * the escape hatch when the strip covers something that matters. */
+    x = work.left + (work.right - work.left - w) / 2;
+    if (x < work.left + EDGE)
+        x = work.left + EDGE;
     y = m_atTop ? work.top + EDGE : work.bottom - m_h - EDGE;
 
     /* OUT OF THE WAY OF THE OTHER PROGRAM'S STRIP, because both programs
@@ -140,6 +156,11 @@ void DriveIndicator::Strip::place()
      * so the wider one covered the other completely and the person was
      * told that ONE program was driving while two were -- the strip
      * failing at the one thing it is for. Each extra strip moves a row.
+     *
+     * Those coordinates are from when both strips were bottom-RIGHT. Centred
+     * they overlap more rather than less -- two centred strips share an axis
+     * -- so this loop matters more now, not less, and it still works because
+     * it moves a row vertically and never touches x.
      */
     for (HWND other = FindWindowExA(NULL, NULL, IND_CLASS, NULL); other;
          other = FindWindowExA(NULL, other, IND_CLASS, NULL))
