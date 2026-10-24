@@ -23,7 +23,7 @@ class Transcript:
     """The transcript: every record, in order, and nothing else.
 
     What `Paginator` becomes once the client asks for blocks by range
-    (`docs/stage3b-plan.md`). It is append-only and it has no opinion about
+    (`notes/stage3b-plan.md`). It is append-only and it has no opinion about
     where a page begins, because after stage 3 a record is indivisible and
     every boundary is safe -- so the only thing left to decide is how many
     records the reader wants, and the reader is the one with the memory

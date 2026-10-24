@@ -1,6 +1,6 @@
 /* Moving a file in pieces, in either direction. libfs; libcore only.
  *
- * This is the primitive docs/BACKLOG.md 6 describes. The same shape had been
+ * This is the primitive notes/BACKLOG.md 6 describes. The same shape had been
  * written three times independently -- the sync layer's PUT, the sync layer's
  * GET, and the export sink -- and each one had learned a different subset of
  * the lessons. What every version converged on is here once: an offset that

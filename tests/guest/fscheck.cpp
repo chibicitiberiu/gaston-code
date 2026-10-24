@@ -720,7 +720,7 @@ static void caseSink()
     }
     {
         /* A verifier that says no must leave the destination as it was AND
-         * leave no temp -- this is docs/mem-audit F1 as a property of the
+         * leave no temp -- this is notes/mem-audit F1 as a property of the
          * sink rather than of one caller. */
         ChunkSink s;
         AlwaysMismatch bad;

@@ -253,7 +253,7 @@ def test_the_conflict_path_agrees_with_the_sync_layer():
 # --- the inventory block ----------------------------------------------------
 #
 # What the machine has, resident in the prompt rather than behind a lookup.
-# The reason it is resident is measured and is recorded in docs/PROGRESS.md:
+# The reason it is resident is measured and is recorded in notes/PROGRESS.md:
 # the agent that typed `&` on COMMAND.COM did so with complete confidence,
 # and an agent that does not doubt `-l=nt` never goes looking for a note
 # telling it about `-l=nt_win`. A gate whose failure mode is silence is not
@@ -489,7 +489,7 @@ def test_cscript_alone_with_shell_stays_inside_budget():
 #: came from, and that is a weaker warrant than the `start` line has.
 #:
 #: Breaching 1,400 is also the trigger the plan named for revisiting skills --
-#: see docs/BACKLOG.md. This number going up again is that conversation, not
+#: see notes/BACKLOG.md. This number going up again is that conversation, not
 #: another edit here.
 #:
 #: 2026-10-01: THAT CONVERSATION HAPPENED, and what moved was the shape

@@ -1,6 +1,6 @@
 """What the client declares about how it wants to be served: the PREFS frame.
 
-PER CLIENT, NOT PER BRIDGE (docs/OPTIONS-PLAN.md). Every setting the Options
+PER CLIENT, NOT PER BRIDGE (docs/PERMISSIONS.md). Every setting the Options
 dialog changes lives in the client's own INI and arrives here, once right
 after HELLO and again whenever the person presses OK. Nothing is stored on
 this side: a reconnect brings the client's current answer, so there is no

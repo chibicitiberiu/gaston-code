@@ -232,7 +232,7 @@ static void unique_cases(void)
     }
 }
 
-/* --- TempFile, which exists for docs/mem-audit F1 ------------------------ */
+/* --- TempFile, which exists for notes/mem-audit F1 ------------------------ */
 
 static void tempfile_cases(void)
 {

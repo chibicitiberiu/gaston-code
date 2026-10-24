@@ -5,7 +5,7 @@ per-path refusal (symlinks, reserved and illegal names, MAX_PATH, a
 case-insensitive collision), and the CRC cache's read-then-write gate, all
 inline on `Pass`. It reads `(root, ignore, attrs, caps, guest_root, cache)`
 and produces `(rows, reports)` -- a pure function today in everything but
-form (docs/audit/02-bridge-python.md #4.2, fix item 2). `scan_bridge_tree`
+form (notes/audit/02-bridge-python.md #4.2, fix item 2). `scan_bridge_tree`
 below is that function; `Pass.scan_bridge` is now a three-line adapter that
 supplies `self`'s pieces and keeps the same name and signature nothing else
 had to change for -- including the bare `Pass` subclasses

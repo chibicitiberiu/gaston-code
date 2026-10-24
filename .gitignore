@@ -4,6 +4,12 @@
 build/
 tmp/
 
+# Working notes: the stage plans, the audits, PROGRESS, BACKLOG and
+# ROADMAP. Kept on disk because CLAUDE.md works from them; not
+# published, because they are how the project got here rather than how
+# it works.
+notes/
+
 # setuptools metadata, written beside pyproject.toml rather than in build/
 # because a PEP 517 backend puts it where the project is. The rule above is
 # still the rule; this is the safety net it asks for.

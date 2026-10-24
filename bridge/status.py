@@ -4,7 +4,7 @@ Each is a small closed set of ASCII tokens that travels as a frame header's
 literal value. Before this they were bare string literals at the point of
 use -- `server.py`'s `isError` set was a second, independently maintained
 literal tuple six lines from the status switch it has to agree with, so
-adding a status meant remembering to edit both. docs/audit/02-bridge-python.md
+adding a status meant remembering to edit both. notes/audit/02-bridge-python.md
 02.14.
 
 `SyncStatus` (02.38) is the sync vocabulary's turn: one enum for all four

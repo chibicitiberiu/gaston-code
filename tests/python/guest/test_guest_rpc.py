@@ -104,7 +104,7 @@ def test_exec_timeout_clamp_is_logged(verdicts):
 
 # --- a refused conditional push takes its temp file with it -----------------
 #
-# THE one user-visible bug in docs/mem-audit (F1), and the only finding there
+# THE one user-visible bug in notes/mem-audit (F1), and the only finding there
 # that fired on an ordinary action rather than on an error path.
 #
 # do_putend closes the temp file's handle before the compare-and-swap check,

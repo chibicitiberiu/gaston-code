@@ -87,7 +87,7 @@ public:
      * KILL_DOS_SESSION unless `force`: a process with a DOS VM
      * (WINOA386.MOD) below it -- a console program's console, or a DOS
      * session it runs. Ending it leaves that VM half-dead until reboot
-     * (measured, docs/BACKLOG.md 17), and a guest carrying such VMs later
+     * (measured, notes/BACKLOG.md 17), and a guest carrying such VMs later
      * blue-screened in VMM (research/measurements/bsod-vm-20260927.txt).
      * Decided 2026-09-27: no such kill without force.
      *

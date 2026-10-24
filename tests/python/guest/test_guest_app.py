@@ -146,7 +146,7 @@ def test_exit_with_zero_is_not_a_failure(verdicts):
 # Every thread in the tree started life as a bare _beginthreadex with 0 for
 # the stack, which takes the image default: MEASURED at 1 MB reserve and
 # 64 KB commit per thread. gremote has six of them on a 32 MB machine, so the
-# size became a parameter somebody chooses (docs/gremote-plan.md).
+# size became a parameter somebody chooses (notes/gremote-plan.md).
 
 def test_a_thread_runs_its_body_and_is_joined(verdicts):
     assert verdicts["thread-runs-and-joins"][0] == "pass"

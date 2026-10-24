@@ -3,7 +3,7 @@
 `first_report`, `note`, `notices_delivered` and `agent_notices_delivered`
 gather the per-`Pass` half of notice-tracking: the fingerprinting logic, the
 two durable queues (`pending_notice`/`pending_notice_agent`), and the
-`reported` fingerprint map, all on one `Baseline` (docs/audit/
+`reported` fingerprint map, all on one `Baseline` (notes/audit/
 02-bridge-python.md #4.2, fix item 4).
 
 The Bridge-lifetime half stays separate, on purpose. `Reporter` is built

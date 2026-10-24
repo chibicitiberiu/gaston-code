@@ -1,6 +1,6 @@
 """The client's settings: the PREFS frame, at the handshake and re-sent.
 
-PER CLIENT (docs/OPTIONS-PLAN.md): the client holds every setting and
+PER CLIENT (docs/PERMISSIONS.md): the client holds every setting and
 declares it at each handshake, so a reconnect is always its current answer
 and a client that sends none gets the defaults -- never the last client's.
 """

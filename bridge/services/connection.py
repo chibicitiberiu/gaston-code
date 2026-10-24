@@ -66,7 +66,7 @@ class ConnectionService:
         #: that was reachable rather than theoretical.
         #:
         #: The key is `machine`, which is an UNAUTHENTICATED ASSERTION and
-        #: is accepted as one -- `docs/BACKLOG.md` §7 and audit 04.21 asked
+        #: is accepted as one -- `notes/BACKLOG.md` §7 and audit 04.21 asked
         #: for that in writing rather than a per-client secret bolted on
         #: later. There is one shared secret and it already grants
         #: everything; a client claiming another's id inherits its

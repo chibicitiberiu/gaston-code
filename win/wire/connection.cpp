@@ -1151,7 +1151,7 @@ bool Connection::release(bool othersGone)
         }
     }
 
-    /* The codec, in halves (docs/mem-audit F3): the inflate stream and its
+    /* The codec, in halves (notes/mem-audit F3): the inflate stream and its
      * 128KB scratch are touched only by the READER; the deflate half by
      * whoever sends. */
     if (m_codec)

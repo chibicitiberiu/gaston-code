@@ -155,7 +155,7 @@ def test_what_tesseract_printed_is_what_comes_back(monkeypatch):
     assert V.to_text(b"BM bitmap") == "Setup is copying\n"
     # --psm 6 is the one argument with a reason behind it: a dialog is a
     # uniform block of text, and the default page segmentation is worse at
-    # it (docs/PLAN.md). Pinned so it is not dropped as noise.
+    # it (docs/ARCHITECTURE.md). Pinned so it is not dropped as noise.
     assert "--psm" in seen["cmd"] and "6" in seen["cmd"]
     assert seen["cmd"][2] == "stdout"
     assert seen["timeout"] == V.OCR_TIMEOUT_S

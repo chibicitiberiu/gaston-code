@@ -12,7 +12,7 @@ not audit anything: the target ran
 which PRINTS the DLL list and PRINTS the W-suffix imports. Both pipelines exit
 0 whatever they find, so the gate was a human reading scrollback, and in CI or
 under `make all` a regression went green (audit 01.29, and 04.6/03.1 from the
-other reports in docs/audit-2).
+other reports in notes/audit-2).
 
 Three assertions, in the order they matter:
 
@@ -110,7 +110,7 @@ WARN_ONLY = {"AttachThreadInput", "FlushInstructionCache"}
 # --- 3. W-suffix imports that are accepted ------------------------------
 #
 # The CRT startup calls both and discards the result; measured in
-# docs/audit/00-cpp-toolchain-measured.md and unchanged by the C++ migration.
+# notes/audit/00-cpp-toolchain-measured.md and unchanged by the C++ migration.
 ALLOWED_W = {"GetCommandLineW", "GetModuleFileNameW"}
 
 

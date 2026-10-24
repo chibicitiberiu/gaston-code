@@ -1,6 +1,6 @@
 """SyncCoordinator: the one thing that outlives a `Pass`.
 
-The audit's #1.4 (docs/audit/02-bridge-python.md) sketches a much larger
+The audit's #1.4 (notes/audit/02-bridge-python.md) sketches a much larger
 object -- the piece that decides when a pass runs, what the user and the
 agent are told, when the halt bar goes up, and who may write `base.json`.
 That is `server.py`'s `run_sync`/`sync_status_text`/`sync_resolve` and
@@ -57,7 +57,7 @@ class SyncCoordinator:
     agent. One instance per `Bridge`, constructed alongside it and never
     replaced -- matching `ConnectionService.guest`, which is also built once per
     process and reused across every reconnect.
-    docs/audit/02-bridge-python.md 02.43.
+    notes/audit/02-bridge-python.md 02.43.
     """
 
     #: The halt currently on the user's screen, if any. A halt is the
@@ -65,7 +65,7 @@ class SyncCoordinator:
     #: the keyboard; it clears when they press Continue, and never on a
     #: timer. This is not independent state -- it is a VIEW of
     #: `base.latched` on disk, and `SyncService.reconcile_halt` derives it at
-    #: every attach and at the end of every pass (docs/audit/
+    #: every attach and at the end of every pass (notes/audit/
     #: 02-bridge-python.md 02.21).
     halt_id: str = ""
     #: The paths the bar on screen was raised FOR. Continue answers those

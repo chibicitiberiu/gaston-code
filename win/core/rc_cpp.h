@@ -356,7 +356,7 @@ public:
  *
  * `Unique` covers a resource whose release takes only the resource. These
  * three do not, which is why they are classes rather than policies. Each
- * exists because the audit in docs/mem-audit found the hand-written form of
+ * exists because the audit in notes/mem-audit found the hand-written form of
  * it already going wrong, or one edit away from it.
  */
 
@@ -400,7 +400,7 @@ public:
  * that handle before the compare-and-swap check -- it has to, the commit
  * needs it closed -- and every rejection path after that point therefore
  * skips the delete and leaves the file in the user's tree. An ordinary edit
- * conflict leaks one every time. See docs/mem-audit/02-findings.md F1.
+ * conflict leaks one every time. See notes/mem-audit/02-findings.md F1.
  *
  * So this owns the NAME, not the handle. Closing the handle early cannot
  * disarm it; only `keep()` can, at the one point the file stops being ours.

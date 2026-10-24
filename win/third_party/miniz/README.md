@@ -13,7 +13,7 @@ no CMOV, imports only KERNEL32/USER32). Adds roughly 95KB to a linked binary.
 
 ## Settings this project uses
 
-See `docs/PLAN.md`. Summary: one persistent deflate stream per direction with
+See `docs/ARCHITECTURE.md`. Summary: one persistent deflate stream per direction with
 `Z_SYNC_FLUSH` per frame, 32KB window, level 6 bridge->guest and level 1
 guest->bridge. Do **not** deflate each frame independently -- measured 1.27x
 worse.

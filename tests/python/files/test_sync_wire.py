@@ -332,7 +332,7 @@ async def test_an_oversized_file_is_skipped_with_a_reason(harness, tmp_path):
 
 
 async def test_sync_frames_are_never_re_delivered_on_reconnect(harness, tmp_path):
-    """There is no wire replay any more (docs/BACKLOG.md #5) -- nothing
+    """There is no wire replay any more (notes/BACKLOG.md #5) -- nothing
     resends a frame from a log. The one thing that DOES re-send state after
     a reconnect is the explicit reissue path, and a re-delivered SYNCPUT
     would rewrite a file that has already finished writing -- so SYNC*
@@ -1034,7 +1034,7 @@ async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
     the user's screen (and is cleared from the user's durable queue), and the
     bridge is replaced -- a crash, a redeploy -- before the agent's next
     turn. Before this, Bridge._agent_notices (now Bridge.synccoord's
-    agent_notices, docs/audit/02-bridge-python.md 02.43) was memory-only, so
+    agent_notices, notes/audit/02-bridge-python.md 02.43) was memory-only, so
     the news the agent most needed (a conflict that latched its writes) was
     the one that did not survive.
     """

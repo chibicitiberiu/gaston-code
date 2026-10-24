@@ -12,7 +12,7 @@ const char *const RC_CAT_NAMES[RC_CATS] = {
     "bridge_shell", "web",
 };
 
-/* THE PLAN'S TABLE (docs/OPTIONS-PLAN.md), letter for letter in the order
+/* THE PLAN'S TABLE (docs/PERMISSIONS.md), letter for letter in the order
  * above. The agreement test parses these lines; keep each preset on one. */
 const Preset RC_PRESETS[RC_PRESETS_N] = {
     { "manual",     "Ask first",           "aaaaaaayayaaa", false },

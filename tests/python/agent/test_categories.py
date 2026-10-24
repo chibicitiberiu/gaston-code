@@ -1,6 +1,6 @@
 r"""Which categories a call lands in -- the table the execution modes stand on.
 
-Each row is a case the plan's reviews raised (docs/OPTIONS-PLAN.md): the red
+Each row is a case the plan's reviews raised (docs/PERMISSIONS.md): the red
 team's bypasses, the workflow simulation's needless prompts, and the reads
 that must stay reads. A row that moves is a behaviour change somebody has to
 look at, which is the point of writing them down.

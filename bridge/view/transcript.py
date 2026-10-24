@@ -1,6 +1,6 @@
 """TranscriptView: what one guest is watching and how much of it fits.
 
-docs/audit/02-bridge-python.md 02.2 groups `GuestSession`'s 30 fields into
+notes/audit/02-bridge-python.md 02.2 groups `GuestSession`'s 30 fields into
 seven, by who reads them; this is the "View" group -- `pages`, `parse`,
 `coalescers`, `view_live` and the window size the client declared,
 guest's RAM at handshake. `GuestLink` (bridge/wire/link.py) already moved
@@ -87,7 +87,7 @@ class TranscriptView:
         `_new_session` and `_switch` each rebuilt this by hand, with their
         own copy of the default page limits -- one of them written as
         `guest.view.page_bytes or None or 16384`, where `or None` did
-        nothing at all (docs/audit/02-bridge-python.md 02.17/02.18). There
+        nothing at all (notes/audit/02-bridge-python.md 02.17/02.18). There
         are no limits to copy wrongly now: a transcript is a list.
         """
         self.pages = Transcript()

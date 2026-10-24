@@ -16,7 +16,7 @@
  * the caller its whole budget and tells it nothing.
  *
  * CANCEL, AND WHAT ITS ACK MEANS. 9P's Tflush, copied rather than
- * re-derived (docs/BACKLOG.md 6): the ack means the cancelled request will
+ * re-derived (notes/BACKLOG.md 6): the ack means the cancelled request will
  * NEVER be answered, and the caller may reuse its id once the ack arrives.
  * The hard half is the race -- did the cancel beat the reply? -- and the
  * answer here is a mark rather than a wait. An id marked cancelled has its

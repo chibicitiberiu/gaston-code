@@ -1,6 +1,6 @@
 """AttachmentService: validation, fetching, conversion and multimodal formatting.
 
-Enforces strict path containment on workspace attachments (docs/BACKLOG.md 04.24),
+Enforces strict path containment on workspace attachments (notes/BACKLOG.md 04.24),
 fetches external attachments via ATTGET streaming (SyncTransport), converts
 non-native images (BMP, PCX, etc.) to PNG via Pillow, inlines text/code files
 under declared client caps, and packages image/text content blocks for Claude SDK turns.

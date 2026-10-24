@@ -356,7 +356,7 @@ void Session::toLane(LaneWorker &lane, rc_frame *f, bool continues)
     rc_frame_delete(f);
 }
 
-/* 9P's Tflush, copied rather than re-derived (docs/BACKLOG.md 6). The ack
+/* 9P's Tflush, copied rather than re-derived (notes/BACKLOG.md 6). The ack
  * means the cancelled request will never be answered, and the caller may
  * reuse its id the moment the ack arrives: a lane runs one request at a
  * time, so nothing bearing that id can start until the old work has cleared.

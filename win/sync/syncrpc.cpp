@@ -104,7 +104,7 @@ const char *rc_syncrpc_root(void) { return g_root; }
  * applied, read on another thread while HELLO's headers are built. It had
  * none of that hardening. Sharing g_root_lock rather than adding a second
  * one keeps the ordering trivially free of deadlock -- there is only ever
- * one lock in this module. See docs/mem-audit F7. */
+ * one lock in this module. See notes/mem-audit F7. */
 void rc_syncrpc_set_home(const char *home)
 {
     root_lock_init();
@@ -353,7 +353,7 @@ static void put_fail(rc_net *net, const char *id, const char *why)
     rc_net_send(net, "SYNCPUTACK", keys, vals, 2, NULL, 0);
 
     /* ONE cleanup for every refusal, whether or not the handle is still open.
-     * There used to be two, and the split was the bug (docs/mem-audit F1):
+     * There used to be two, and the split was the bug (notes/mem-audit F1):
      * this one was keyed on the handle being live, do_putend closes the
      * handle before its compare-and-swap check because the commit needs it
      * closed, and so every refusal after that point left a fully-written

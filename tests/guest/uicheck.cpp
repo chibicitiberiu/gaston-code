@@ -670,7 +670,7 @@ static bool mkFrame(rc_frame &f, char *raw, unsigned rawCap, const char *type,
  * working clipboard -- a headless Wine may not -- so the round trip asserts
  * that the two halves AGREE about that rather than asserting the answer, and
  * says in its detail which way it went. A real clipboard is the guest's case
- * (docs/stage1-plan.md), not Wine's.
+ * (notes/stage1-plan.md), not Wine's.
  */
 static void clipboard(void)
 {

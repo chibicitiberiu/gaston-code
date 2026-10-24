@@ -18,7 +18,7 @@
  *   writes into an address that means something else in our address space,
  *   or nothing at all. NT's answer is VirtualAllocEx in the target, which
  *   does not exist on 9x. Inside the target there is nothing to place: the
- *   pointer is already theirs. `docs/PLAN.md` recorded list contents as an
+ *   pointer is already theirs. `docs/ARCHITECTURE.md` recorded list contents as an
  *   MSAA-or-OCR problem, and that is true from outside and false from here.
  *
  * This is the argument for the whole in-process tier and it rests on no

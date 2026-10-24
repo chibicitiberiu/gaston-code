@@ -58,7 +58,7 @@ _PREFERRED = ("command", "file_path", "path", "pattern", "url", "prompt",
 # belong in a row, not as the short label everything else is built from.
 # render_request's `desc` fallback, `summary`'s bar text, and
 # server._summarise's activity-pane line all read this one table instead of
-# picking their own order by hand. docs/audit/02-bridge-python.md 02.15.
+# picking their own order by hand. notes/audit/02-bridge-python.md 02.15.
 _SUMMARY_KEYS = ("command", "file_path", "pattern", "path", "url", "prompt")
 
 

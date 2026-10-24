@@ -325,7 +325,7 @@ async def test_a_reconnect_resets_the_compressor_and_keeps_the_session(
 
     Used to matter twice over -- a resume-from-seq (`from=`) landing on the
     reset stream would have replayed frames from a compressor that no
-    longer existed. There is no such resume any more (docs/BACKLOG.md #5:
+    longer existed. There is no such resume any more (notes/BACKLOG.md #5:
     the guest never sent `from=`, and the replay buffer it would have
     driven is retired), so the only two things left to prove are that the
     reset actually happens and that reconnecting does not lose the session.
@@ -1928,7 +1928,7 @@ async def test_disconnect_holds_the_prompt_then_denies(harness):
 
 async def test_prompt_is_reissued_after_reconnect(harness):
     """Nothing re-sends anything from a log on reconnect (there is no wire
-    replay any more -- docs/BACKLOG.md #5). Without an explicit re-issue the
+    replay any more -- notes/BACKLOG.md #5). Without an explicit re-issue the
     guest would reconnect with no bar while the bridge still holds a live
     future, and the turn hangs until the answer deadline."""
     harness.bridge.config.perm_grace_s = 30.0      # comfortably inside the grace
@@ -2152,7 +2152,7 @@ async def test_exec_refuses_wire_overlong_cwd(harness):
 
 
 async def test_exec_is_never_re_delivered(harness):
-    """There is no wire replay any more (docs/BACKLOG.md #5) -- nothing
+    """There is no wire replay any more (notes/BACKLOG.md #5) -- nothing
     resends a frame from a log; every frame is sent once, when it is sent.
     The one thing that DOES re-send state after a reconnect is the explicit
     reissue path (`_reissue_halt`, `_reissue_turn`,
@@ -2932,7 +2932,7 @@ async def test_an_unavailable_context_reading_is_absent_not_zero(harness):
 # TOOLS frame sent right after connect would land after the prompt every
 # single time, and the feature would look like it worked while doing nothing.
 #
-# docs/PLAN.md already blessed this channel, rejecting a `sysinfo` TOOL with
+# docs/ARCHITECTURE.md already blessed this channel, rejecting a `sysinfo` TOOL with
 # the reason "HELLO already sends it and the system prompt already states
 # it".
 
@@ -3156,7 +3156,7 @@ async def test_the_folder_reaches_the_client_in_the_option_row_it_already_has(
     OPTIONSEND handler hands it to `rc_workdir_apply`
     (`win/app/mainwindow.cpp` -> `win/app/workdir.cpp`), which creates it
     parents and all and makes it that side's live work root. A new frame
-    would have had to pass the exec test in docs/PLAN.md 3.1 to buy
+    would have had to pass the exec test in docs/ARCHITECTURE.md 3.1 to buy
     something this already does."""
     r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
     await harness.recv_until(r, {"OPTIONSEND"})

@@ -275,7 +275,7 @@ class GuestServer:
     `ini` is written beside a copy of the exe in `workdir`, under BOTH the
     long name and the 8.3 one -- not because Wine needs it, but because the
     guest does and a test that only ever writes one name would not catch the
-    day that changes (docs/gremote-plan.md, trap 1).
+    day that changes (notes/gremote-plan.md, trap 1).
     """
 
     def __init__(self, exe_name: str, workdir, ini: str, port: int,

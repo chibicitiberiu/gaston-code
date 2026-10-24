@@ -203,7 +203,7 @@ static void emit_wire(void *ctx, const char *rel, const rc_sync_stat *st)
  * could not be re-read right after its own close left a fully-written
  * .gaston-tmp in the user's tree. The scanner skips those names, so nothing
  * reported it and nothing removed it until the next recovery pass on
- * start-up. See docs/mem-audit F2.
+ * start-up. See notes/mem-audit F2.
  *
  * Driven through commitInto (fs/writer.h) rather than through a FileWriter,
  * and deliberately: two of these cases have to interfere with the temp file

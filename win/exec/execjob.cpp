@@ -68,7 +68,7 @@ void ExecJob::cancel()
  * TerminateProcess on the pid CreateProcess returned is what this used to
  * be, and on 98 it does nothing for a piped COMMAND.COM job: that pid is
  * REDIR32.EXE, the call returns TRUE, the command runs on and REDIR32 stays
- * as a zombie (docs/BACKLOG.md 14, measured). Processes::stopJobTree stops
+ * as a zombie (notes/BACKLOG.md 14, measured). Processes::stopJobTree stops
  * the Win32 side of the tree and lets the job end itself, which leaves
  * nothing; only a DOS program that will not end costs the VM and a zombie.
  * Without Toolhelp (NT 4) there is no tree to walk, and TerminateProcess on

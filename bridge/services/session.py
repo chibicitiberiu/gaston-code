@@ -79,7 +79,7 @@ def _summarise(args: dict) -> str:
 
     perms.telling_argument is the one place "which argument matters" is
     decided now -- this used to be a fourth, independently-ordered copy of
-    the same list. See docs/audit/02-bridge-python.md 02.15.
+    the same list. See notes/audit/02-bridge-python.md 02.15.
     """
     told = perms.telling_argument(args)
     if told:

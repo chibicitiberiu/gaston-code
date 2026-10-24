@@ -3,7 +3,7 @@ is actually interrupted.
 
 The last half is the user's own complaint made into a test -- "setting auto
 and still getting permission prompts is annoying". Five sessions the
-workflow review simulated call by call (docs/OPTIONS-PLAN.md) are replayed
+workflow review simulated call by call (docs/PERMISSIONS.md) are replayed
 through the real desk under each preset, and the bars and checks counted.
 """
 from __future__ import annotations

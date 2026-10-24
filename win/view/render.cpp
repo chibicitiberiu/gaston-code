@@ -2,7 +2,7 @@
  *
  * ONE TRANSLATION UNIT with the substituter beside it (templates.cpp is the
  * second and last), because -xs costs about 2,144 bytes per TU and
- * docs/PROGRESS.md:4012-4018 is the precedent for absorbing a file rather
+ * notes/PROGRESS.md:4012-4018 is the precedent for absorbing a file rather
  * than paying that twice for tidiness.
  *
  * The parser uses the cursor-by-reference idiom of

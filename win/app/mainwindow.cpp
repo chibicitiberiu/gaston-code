@@ -1795,7 +1795,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         }
 
         case IDM_OPTIONS:
-            /* Everything a person can set, per client (docs/OPTIONS-PLAN.md).
+            /* Everything a person can set, per client (docs/PERMISSIONS.md).
              * optionsApply below does the saving and the telling. */
             rc_options_run(hwnd, m_inst, *m_cfg, m_exeDir, this,
                            RC_OPT_CONNECTION);

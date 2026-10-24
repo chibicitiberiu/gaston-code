@@ -179,7 +179,7 @@ def load(root: str) -> Attrs:
     One walk, not two: `_sources` used to re-walk the whole tree afterwards
     just to name the files `load` had already opened, so a single sync pass
     paid for this tree twice before `ignores.load` or `scan_bridge` had even
-    started theirs. docs/audit/02-bridge-python.md 02.17(c).
+    started theirs. notes/audit/02-bridge-python.md 02.17(c).
     """
     rules: list = []
     sources: list[str] = []

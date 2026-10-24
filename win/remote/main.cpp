@@ -2,7 +2,7 @@
  *
  * The reverse of the client: this listens and the caller connects. It exists
  * because the real Pentium 200 has no QMP and no ssh, so every measurement
- * on it has meant burning a floppy and reading COM1 (docs/BACKLOG.md 1b).
+ * on it has meant burning a floppy and reading COM1 (notes/BACKLOG.md 1b).
  *
  * GremoteApp is the composition root, the same shape as the client's
  * ClientApp: App runs the lifecycle and this fills in each phase.

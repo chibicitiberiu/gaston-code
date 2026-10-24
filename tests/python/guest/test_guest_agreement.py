@@ -362,7 +362,7 @@ def test_sync_status_vocabulary_matches_the_guest():
     this module (and inherits its `needs_guest` skip) rather than a plain
     unit test file, because the property it checks is specifically an
     agreement between this package and that one, the same family as every
-    other test here. win/rpc/rpc.h was read too (docs/audit/02-bridge-python.md
+    other test here. win/rpc/rpc.h was read too (notes/audit/02-bridge-python.md
     02.38 names it alongside syncrpc.cpp): it is the RPC worker's routing
     header, and defines no status vocabulary of its own -- SYNCSCAN/PUT/
     MKDIR/GET are routed through it to syncrpc.cpp's handlers, which are
@@ -407,7 +407,7 @@ def test_sync_status_vocabulary_matches_the_guest():
     # way. There were two: do_putend closes the temp file's handle before the
     # compare-and-swap check, which made put_fail's handle-keyed DeleteFileA
     # unreachable, so every refusal after that point had to remove the temp by
-    # name instead (docs/mem-audit F1). libfs closed that by construction --
+    # name instead (notes/mem-audit F1). libfs closed that by construction --
     # the sink owns the temp by name, so one cleanup covers both -- and
     # putend_fail went with it. The `end` stays optional in this pattern
     # because the shape is the thing being matched, not one function's name.
@@ -585,7 +585,7 @@ def test_the_data_offset_is_where_the_content_starts(guest_putpath):
 #
 # Four of its five failure returns deleted the temp file first; the fifth --
 # the `got.type != 'f'` verification right after the handle is closed -- did
-# not. That asymmetry is now fixed (docs/mem-audit F2).
+# not. That asymmetry is now fixed (notes/mem-audit F2).
 #
 # BE CLEAR ABOUT WHAT THESE TESTS DO AND DO NOT CATCH. They were written to
 # guard F2 and they DO NOT: reintroducing the bug leaves all four of them

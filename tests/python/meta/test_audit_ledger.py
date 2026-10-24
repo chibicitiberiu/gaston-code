@@ -1,7 +1,7 @@
 """Verifies the audit ledger invariants: valid verdict tokens, sequence continuity, and no dropped findings.
 
-Findings in docs/audit/*.md and docs/audit-2/*.md must use one of the four
-verdict tokens: Fixed, Stale, Deferred, Partial (see docs/audit-2/00-audit-method.md:136-139).
+Findings in notes/audit/*.md and notes/audit-2/*.md must use one of the four
+verdict tokens: Fixed, Stale, Deferred, Partial (see notes/audit-2/00-audit-method.md:136-139).
 Deferred findings must cite the BACKLOG section they were moved to.
 Finding IDs within each audit document must form a continuous sequence with no gaps
 (closing finding 00.2, which caught 01.5 and 01.9 missing from the ledger).
@@ -14,9 +14,18 @@ import re
 import conftest
 import pytest
 
-DOCS = os.path.join(conftest.REPO, "docs")
-AUDIT_DIR = os.path.join(DOCS, "audit")
-AUDIT2_DIR = os.path.join(DOCS, "audit-2")
+# The audits are working notes rather than published docs, so they live in
+# the gitignored `notes/` tree. A fresh clone has no `notes/`, and these
+# tests then skip instead of failing: they police a document that is not
+# part of what ships.
+NOTES = os.path.join(conftest.REPO, "notes")
+AUDIT_DIR = os.path.join(NOTES, "audit")
+AUDIT2_DIR = os.path.join(NOTES, "audit-2")
+
+pytestmark = pytest.mark.skipif(
+    not os.path.isdir(AUDIT2_DIR),
+    reason="notes/audit-2 is not in this checkout; the audits are not published",
+)
 
 VALID_TOKENS = {"Fixed", "Stale", "Deferred", "Partial"}
 
@@ -43,8 +52,8 @@ AUDIT2_HEADER_RANGES = {
 
 
 def test_audit_verdict_tokens():
-    """Every finding resolution line across docs/audit and docs/audit-2 must use a valid token."""
-    pattern = os.path.join(DOCS, "audit*", "*.md")
+    """Every finding resolution line across notes/audit and notes/audit-2 must use a valid token."""
+    pattern = os.path.join(NOTES, "audit*", "*.md")
     files = sorted(glob.glob(pattern))
     assert len(files) >= 10, f"Expected audit markdown files, found {len(files)}"
 
@@ -63,7 +72,7 @@ def test_audit_verdict_tokens():
 
 def test_deferred_findings_cite_backlog():
     """Every Deferred: finding line must cite BACKLOG (per 00-audit-method.md:136-139)."""
-    pattern = os.path.join(DOCS, "audit*", "*.md")
+    pattern = os.path.join(NOTES, "audit*", "*.md")
     for path in sorted(glob.glob(pattern)):
         rel = os.path.relpath(path, conftest.REPO)
         with open(path, encoding="utf-8") as f:
@@ -110,7 +119,7 @@ def test_audit_ledger_sequence_continuity(filename, config):
 
 @pytest.mark.parametrize("filename,config", sorted(AUDIT2_HEADER_RANGES.items()))
 def test_audit2_findings_sequence_continuity(filename, config):
-    """Findings headers in docs/audit-2/*.md must form a continuous sequence with no gaps."""
+    """Findings headers in notes/audit-2/*.md must form a continuous sequence with no gaps."""
     prefix, min_id, max_id = config
     path = os.path.join(AUDIT2_DIR, filename)
     assert os.path.exists(path), f"File {filename} missing"

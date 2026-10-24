@@ -250,7 +250,7 @@ void rc_net_set_prefs(rc_net *n, const char *body, unsigned len)
  * Both failure paths used to do their own partial teardown. The reader's
  * closed the socket BEFORE joining the sender, which was still inside
  * send() on it, and discarded the join's result -- the two things
- * rc_net_stop exists to get right (docs/wire-connection-plan.md, invariant
+ * rc_net_stop exists to get right (notes/wire-connection-plan.md, invariant
  * 8). _beginthreadex fails under the same USER/GDI and thread pressure that
  * makes CreateWindowExA fail, which is not a theoretical condition on this
  * machine.

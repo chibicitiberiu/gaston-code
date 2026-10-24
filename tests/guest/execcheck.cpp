@@ -8,7 +8,7 @@
  * shell COMSPEC names -- cmd.exe under Wine, COMMAND.COM on 98 -- so the
  * same cases hold on both and nothing depends on a shell's own syntax. On
  * 98 the grandchild case is the REDIR32 regression test: a Win32 program
- * under COMMAND.COM, stopped, and nothing left behind (docs/BACKLOG.md 14).
+ * under COMMAND.COM, stopped, and nothing left behind (notes/BACKLOG.md 14).
  *
  * (Formerly: Wine has no COMMAND.COM, so the
  * commands that needed a shell named cmd.exe in the body and left `shell`
@@ -514,7 +514,7 @@ static void processes()
          * is a descendant, the kill ends it within the wait, and the outer
          * one then ENDS BY ITSELF. It is not killed: on 98 the outer is a
          * console program, and killing one leaves its console's DOS VM
-         * half-dead (measured, docs/BACKLOG.md 17). Hidden, never
+         * half-dead (measured, notes/BACKLOG.md 17). Hidden, never
          * inheriting anything of ours. */
         DWORD outer = 0, err = 0;
         char parentCmd[MAX_PATH + 32];

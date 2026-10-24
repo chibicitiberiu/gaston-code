@@ -87,7 +87,7 @@ def test_the_two_known_w_imports_are_still_accepted(gate, baseline,
                                                     monkeypatch):
     """GetCommandLineW and GetModuleFileNameW are called by the CRT startup
     and their results discarded -- measured in
-    docs/audit/00-cpp-toolchain-measured.md and unchanged by the C++
+    notes/audit/00-cpp-toolchain-measured.md and unchanged by the C++
     migration. They must not start failing the build."""
     d, s = baseline
     assert {"GetCommandLineW", "GetModuleFileNameW"} <= s

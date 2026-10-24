@@ -1,6 +1,6 @@
 """CANCEL, on 9P's Tflush contract.
 
-docs/BACKLOG.md 6 deferred this for years with a clear reason: it had no
+notes/BACKLOG.md 6 deferred this for years with a clear reason: it had no
 caller, and "the hard half of Cancel is not the message, it is the race --
 did the cancel beat the reply, and when may the id be reused? 9P specifies
 that away, and the rule is worth copying verbatim."

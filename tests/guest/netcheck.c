@@ -69,7 +69,7 @@ static LRESULT CALLBACK sink_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 
 /* ------------------------------------------------------- slowsend scenario
  *
- * docs/BACKLOG.md #1 names two weaknesses in the outbound queue that only a
+ * notes/BACKLOG.md #1 names two weaknesses in the outbound queue that only a
  * stalled or throttled link exercises, and LAN-speed Wine runs never have:
  * the byte cap is documented as SOFT (a writer that waits its limit enqueues
  * anyway), and rc_net_send can block up to 5s (50 x 100ms) doing it. Neither
@@ -190,7 +190,7 @@ static int slowsend_main(int argc, char **argv)
            max_ms, max_outq, stop_ms);
 
     /* The three invariants this scenario exists to guarantee -- see
-     * docs/BACKLOG.md #1 and tests/python/test_guest_net.py. */
+     * notes/BACKLOG.md #1 and tests/python/test_guest_net.py. */
     if (slow_seen == 0) {
         printf("FAIL: nothing ever slowed down -- the stalled reader never "
                "produced backpressure, so this scenario proved nothing\n");

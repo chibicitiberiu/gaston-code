@@ -13,7 +13,7 @@
  * THE MARKUP IS NOT IN THIS FILE. It is in win/resources/view.tpl, beside
  * the exe, so that changing how a block looks is an edit and a restart
  * rather than a rebuild -- a 4-minute iteration into a 30-second one, which
- * docs/PROGRESS.md:955 records the value of. The same argument the
+ * notes/PROGRESS.md:955 records the value of. The same argument the
  * stylesheet already won. A missing or malformed file DEGRADES to a
  * compiled-in last resort rather than refusing to start, because the box is
  * updated by hand with COPY and a half-updated one is a real state.

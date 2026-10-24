@@ -15,7 +15,7 @@ recursion, `_tail`'s bandwidth policy -- and it is also what makes a block
 ADDRESSABLE. A client asking for blocks 120..160 needs something that knows
 where block 120 begins, and only a parser does. Markdown on the wire would
 move ~180 lines of this into C on a machine with 3KB of image slack and give
-up range-serving in the same move. See docs/stage3-plan.md §1.
+up range-serving in the same move. See notes/stage3-plan.md §1.
 
 THE PAYLOAD SHAPE IS THE WIRE SHAPE. A `Block` carries `(tag, text)` pairs,
 one per line, because that is literally what A5 serialises: a tag letter, a

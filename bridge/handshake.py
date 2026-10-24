@@ -15,7 +15,7 @@ Deliberately NOT here: the busy check (`ConnectionService.guest and
 ConnectionService.guest.connected`). It answers "is another client already holding
 THIS bridge's one session", which is live process state, not a fact about
 the HELLO frame -- and it is also exactly the check R7 (multi-client) has to
-grow a `client_id` lookup into (docs/audit/02-bridge-python.md #7.1), so it
+grow a `client_id` lookup into (notes/audit/02-bridge-python.md #7.1), so it
 stays with `_attach`, the session-lifecycle half, rather than moving here
 with the stateless half. One consequence worth stating plainly: negotiation
 now runs to completion (including the caps parse) before the busy check
@@ -23,7 +23,7 @@ does, where the caps parse used to run after it. Nothing tests the order
 between "busy" and "bad_caps", and no client can usefully tell them apart --
 both mean "try again, but not like that" -- so the reorder is judged safe
 rather than proven so.
-docs/audit/02-bridge-python.md #1.2.
+notes/audit/02-bridge-python.md #1.2.
 """
 
 from __future__ import annotations

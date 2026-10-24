@@ -85,7 +85,7 @@ class SyncTransport:
         # `stamp=True`, which every send here was `stamp=False` against on
         # purpose (a replayed SYNCPUT would re-write the file; a replayed
         # SYNCSCAN would re-run a scan that can legitimately take minutes).
-        # The replay buffer that guarded against is retired (docs/BACKLOG.md
+        # The replay buffer that guarded against is retired (notes/BACKLOG.md
         # #5), and with it `stamp=`; `GuestLink.send` still takes `guest` for
         # a reason unrelated to sync -- see its own docstring.
         self._guest = guest

@@ -65,7 +65,7 @@ CEILING = 256 * 1024
 # working on the probe itself. scanner.cpp stands in: real project code, and
 # not the file whose edits correlate with running this measurement.
 SOURCES = [
-    "docs/PLAN.md",
+    "docs/ARCHITECTURE.md",
     "docs/REMOTE.md",
     "docs/UIAUTOMATION.md",
     "win/net/caps.h",
@@ -83,7 +83,7 @@ def build() -> tuple[bytes, list[tuple[str, int]]]:
     """Concatenate a bounded slice of each source, CRLF, under the ceiling.
 
     EACH FILE GETS AN EQUAL BUDGET rather than the list being read until it
-    runs out. Read in order, `docs/PLAN.md` alone fills half the buffer and
+    runs out. Read in order, `docs/ARCHITECTURE.md` alone fills half the buffer and
     nothing past the third file ever appears -- which would make the list a
     lie and the corpus pure prose, when the thing being measured is prose AND
     code. A per-file budget costs nothing and keeps every listed file in.

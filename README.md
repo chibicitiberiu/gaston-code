@@ -42,8 +42,8 @@ rather than a copy of Franquin's art.
 ## Layout
 
 ```
-docs/       PLAN.md the design, PROGRESS.md what was built, BACKLOG.md
-            what was deferred, ROADMAP.md the order of the rest
+docs/       ARCHITECTURE.md, REMOTE.md (gremote), PERMISSIONS.md,
+            UIAUTOMATION.md, FORKED.md
 make/       ow.mk -- shared Open Watcom rules
 win/        the guest executables -- GASTON.EXE, GREMOTE.EXE, GUPDATE.EXE
 bridge/     Python: Agent SDK, MCP tools, pagination, markdown, compression
@@ -88,7 +88,7 @@ Phases 0 through 5 are built and demonstrated on real hardware; phase 6 is
 part-built. As of 2026-10-23 it runs on a physical Pentium 200 MMX under
 Windows 98 SE, installed over the network, driving a tool-calling turn end
 to end. What is left is a clean install by somebody who is not the author,
-and publishing. See `docs/PROGRESS.md` and `docs/ROADMAP.md`.
+and publishing. See `notes/PROGRESS.md` and `notes/ROADMAP.md`.
 
 ## Build
 

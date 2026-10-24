@@ -215,7 +215,7 @@ public:
     /* Screen automation off, from any thread: Stop on the driving
      * indicator. gremote has no turn to interrupt and no Stop button of
      * its own, so this menu item IS its Stop button -- see
-     * docs/stage4b-plan.md. Posts; the tip and the menu ticks are this
+     * notes/stage4b-plan.md. Posts; the tip and the menu ticks are this
      * service's own thread's business. */
     void requestAutomationOff();
 

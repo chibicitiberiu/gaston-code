@@ -8,7 +8,7 @@
  *
  * THREADS. run() blocks on the caller's thread for the life of the command;
  * the exe provides that thread (the client's RPC worker, gremote's job lane).
- * cancel() is for any other thread. docs/libexec-plan.md has the design and
+ * cancel() is for any other thread. notes/libexec-plan.md has the design and
  * the guest measurements behind it.
  *
  * One command per object: a job is made for a request and deleted after it,
@@ -84,7 +84,7 @@ struct ExecResult
     bool viaShell;
     /* The command was stopped (timeout, cancel, reader gone) and the process
      * run() started was still there afterwards. On 98 that is REDIR32.EXE,
-     * which nothing short of a reboot removes (docs/BACKLOG.md 14); the
+     * which nothing short of a reboot removes (notes/BACKLOG.md 14); the
      * caller logs it. */
     bool stopLeaked;
 

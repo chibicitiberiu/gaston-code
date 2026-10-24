@@ -155,7 +155,7 @@ OCR_TIMEOUT_S = 30
 def to_text(bmp: bytes) -> str | None:
     """A guest BMP as the text Tesseract can find in it.
 
-    THE THIRD RUNG OF THE LADDER, NEVER THE FIRST (docs/PLAN.md). The
+    THE THIRD RUNG OF THE LADDER, NEVER THE FIRST (docs/ARCHITECTURE.md). The
     control tree is exact and free where it can see, MSAA is next, and OCR
     earns its keep only where neither can -- a DOS full-screen box, a
     custom-drawn installer, a setup progress bar. OCR on a dialog whose text

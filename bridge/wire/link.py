@@ -70,7 +70,7 @@ class GuestLink:
 
         `guest` is currently unused here -- it used to be how this reached
         `guest.replay` to stamp a seq, which was retired with the buffer
-        itself (docs/BACKLOG.md #5). It stays on the signature anyway:
+        itself (notes/BACKLOG.md #5). It stays on the signature anyway:
         `GuestLink` is deliberately reachable only through the owning
         `GuestSession` -- see `TranscriptView`'s docstring (bridge/view/
         transcript.py) for why that boundary exists independently of

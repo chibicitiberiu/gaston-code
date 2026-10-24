@@ -12,7 +12,7 @@ run under Wine against a synthetic tree, and its bytes go straight into
 `toolrep.parse_rows`. Wine cannot model a FAT directory or Win9x's INI
 caching, but `GetPrivateProfileStringA` and `GetFileAttributesA` are exactly
 what it does model well, which is all this needs. The things it cannot check
-are on the guest: `docs/PROGRESS.md` has the run.
+are on the guest: `notes/PROGRESS.md` has the run.
 """
 
 

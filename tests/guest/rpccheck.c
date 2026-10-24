@@ -466,7 +466,7 @@ static void exec_timeout_clamp_is_logged(void)
 /* Does a REFUSED conditional push take its temp file with it?
  *
  * It did not, and this is the regression test for the one user-visible bug
- * in docs/mem-audit (F1). do_putend closes the temp's handle before the
+ * in notes/mem-audit (F1). do_putend closes the temp's handle before the
  * compare-and-swap check -- it must, the commit needs it closed -- and
  * put_fail's cleanup was keyed on that handle still being live, so every
  * refusal after that point left a fully-written .gaston-tmp in the user's

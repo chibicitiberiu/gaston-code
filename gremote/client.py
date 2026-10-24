@@ -18,7 +18,7 @@ that belong to the client's protocol and not to this one.
 DEFLATE IS OFF. The server reports `deflate=0` in HELLO and this never sets
 `enc=deflate`; a compressing peer talking to a non-compressing one has the
 link dropped under it rather than degrading, so the two ends agree by not
-trying. See docs/gremote-plan.md.
+trying. See notes/gremote-plan.md.
 """
 
 from __future__ import annotations

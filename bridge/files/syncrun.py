@@ -242,7 +242,7 @@ class Pass:
     # --- the bridge's half -------------------------------------------------
 
     def scan_bridge(self, ignore=None, attrs=None) -> dict[str, S.Entry]:
-        """Thin adapter over `scanner.scan_bridge_tree` (docs/audit/
+        """Thin adapter over `scanner.scan_bridge_tree` (notes/audit/
         02-bridge-python.md 02.40): supplies this Pass's root, caps and
         guest_root, the CRC cache from `self.base` (defensive `getattr`
         because `test_sync_wire.py` builds bare `Pass` subclasses that skip

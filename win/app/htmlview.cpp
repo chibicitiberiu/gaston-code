@@ -344,7 +344,7 @@ struct rc_html_impl {
      * being tested is 5ms per update. So the fallback here REFUSES rather
      * than degrades -- a measurement that cannot resolve the thing it is
      * measuring is worse than none, because it reads like data.
-     * docs/PROGRESS.md:87 is the standing rule ("Do not budget against
+     * notes/PROGRESS.md:87 is the standing rule ("Do not budget against
      * them").
      *
      * `liveRenderUs` is zero until stage 3's C2 gives this path something to

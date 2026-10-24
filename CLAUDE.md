@@ -3,11 +3,18 @@
 A native Windows 98 GUI client for Claude Code (`win/`, C++98, Open Watcom) talking
 to a Python bridge (`bridge/`) on Linux over one TCP socket.
 
-`docs/PLAN.md` is the design. `docs/PROGRESS.md` is what is built and why
-decisions were made. `docs/BACKLOG.md` is what was deliberately deferred and
-what it would take to close -- check it before assuming something was
-forgotten, and before starting late-phase work. `docs/ROADMAP.md` is the order
-the rest of it gets done in, and which decisions gate which stage.
+`docs/` is published and describes how the system works:
+`ARCHITECTURE.md`, `REMOTE.md` (gremote), `PERMISSIONS.md`,
+`UIAUTOMATION.md`, `FORKED.md`.
+
+`notes/` is gitignored working state, not published. `notes/PROGRESS.md` is
+what is built and why decisions were made. `notes/BACKLOG.md` is what was
+deliberately deferred and what it would take to close -- check it before
+assuming something was forgotten. `notes/ROADMAP.md` is the order the rest
+gets done in. The stage plans and the audits are there too.
+
+Keep it that way: how it works goes in `docs/`, how it got here goes in
+`notes/`.
 
 ## Standing rules
 
@@ -17,7 +24,7 @@ binary is OS-specific; the bridge, the protocol and the tool surface should
 survive being pointed at MS-DOS, Windows 3.1 or NT 4. Where the OS genuinely
 matters it is a runtime branch, not a name (the bridge picks `command.com` or
 `cmd.exe` per call from the HELLO inventory, `bridge/agent/toolrules.py`
-`shell_command()`). `docs/FEASIBILITY.md`'s `win98_*` sketch is
+`shell_command()`). `notes/FEASIBILITY.md`'s `win98_*` sketch is
 superseded.
 
 **The client declares OS facts; the bridge holds none.** Protected system paths,
@@ -26,10 +33,10 @@ compiled into the client (or its INIs) and sent at handshake; the bridge
 matches them as opaque patterns. The per-shell grammar in
 `bridge/profiles/<shell>.toml` is the one accepted exception: shell data the
 bridge already selects from the HELLO inventory. Do not add Windows paths,
-8.3 rules or program names to bridge Python. `docs/OPTIONS-PLAN.md`.
+8.3 rules or program names to bridge Python. `docs/PERMISSIONS.md`.
 
 **A tool earns its place only if `exec` does the job badly.** Every tool costs
-context on every request. See "the exec test" in `docs/PLAN.md` §3.1.
+context on every request. See "the exec test" in `docs/ARCHITECTURE.md`.
 
 **The guest transforms nothing.** Markdown, pagination, encoding folds, image
 diffing, OCR and JSON all happen on the bridge. The guest makes syscalls and
@@ -39,7 +46,7 @@ tests) are the two deliberate exceptions.
 
 **Memory is the binding constraint.** Every allocation must be bounded. On a
 32MB guest, physical memory and GDI/USER heaps are tight; keep buffers capped
-and static allocations minimal (see `docs/mem-audit/`). Bounded does not mean
+and static allocations minimal (see `notes/mem-audit/`). Bounded does not mean
 fixed at the maximum: a container sized to what is actually there beats a
 `MAX_*` table held full at worst case, as long as anything the wire or the
 disk can grow is still refused past an explicit cap.
@@ -142,7 +149,7 @@ already in front of it:
 - **A step the plan calls a keyboard step is one for a reason.** Overriding
   that is overriding the plan, not just the guard.
 
-**Nothing untested reaches the box.** This is `docs/stage5-plan.md`'s first
+**Nothing untested reaches the box.** This is `notes/stage5-plan.md`'s first
 design principle and it keeps paying: `trayprobe.py` was correct by
 inspection and had two defects in its only interesting path, both found by
 running it against the QEMU guest and pulling the connection out from under

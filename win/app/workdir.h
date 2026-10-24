@@ -1,6 +1,6 @@
 /* The conversation's work directory, on this machine.
  *
- * ONE MIRROR PER CONVERSATION (docs/BACKLOG.md 7). The directory a chat works
+ * ONE MIRROR PER CONVERSATION (notes/BACKLOG.md 7). The directory a chat works
  * in IS the tree that is mirrored for it: files the assistant writes appear
  * there and files put there reach it. So changing it is not a preference, it
  * is re-pointing the sync layer -- which is why this is its own module rather

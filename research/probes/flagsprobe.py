@@ -73,11 +73,11 @@ REMOTE_PAYLOAD = REMOTE_DIR + "\\PAYLOAD.BIN"
 #: a directory walk would let a new file change the payload with nothing
 #: saying so.
 SOURCES = [
-    "docs/PLAN.md",
-    "docs/PROGRESS.md",
+    "docs/ARCHITECTURE.md",
+    "notes/PROGRESS.md",
     "docs/REMOTE.md",
     "docs/UIAUTOMATION.md",
-    "docs/BACKLOG.md",
+    "notes/BACKLOG.md",
     "research/guest/probe.c",
     "win/automation/input.cpp",
     "win/remote/server.cpp",

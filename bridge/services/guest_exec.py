@@ -343,7 +343,7 @@ class GuestExecService:
         # research/measurements/execprobe-vm-gui-20260926.txt); a program spawned
         # with no shell reports its real code. So a zero here proves nothing
         # on that shell, which is why only a non-zero code is ever said.
-        # docs/BACKLOG.md 14.
+        # notes/BACKLOG.md 14.
         #
         # THE WRAPPER CLOSES THAT, for a shell that loses the code and a
         # command that is not a builtin: `if errorlevel` inside a batch file

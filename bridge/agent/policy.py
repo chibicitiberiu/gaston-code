@@ -16,7 +16,7 @@ and every decision about the person's machine is made here. The CLI's own
 refuses Haiku outright; `acceptEdits` approved edits the bridge never saw.
 Both made the rules view a description of somebody else's behaviour.
 
-THE PRESETS ARE THE PLAN'S TABLE (docs/OPTIONS-PLAN.md), and a full-matrix
+THE PRESETS ARE THE PLAN'S TABLE (docs/PERMISSIONS.md), and a full-matrix
 agreement test holds the client's copy to this one, because the client shows
 them and must not show different ones.
 """

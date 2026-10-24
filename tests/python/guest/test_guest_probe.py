@@ -9,7 +9,7 @@ project -- "Wine proves the code, never the platform" cuts both ways, and
 that rule exists for: MSHTML hosting cost, directory-change notifications and
 BI_RLE8 support are real Win98 behaviour that a Wine prefix has no reason to
 reproduce, so a driver asserting on them would fail on Wine's platform
-differences and prove nothing about the guest's code. See docs/PROGRESS.md
+differences and prove nothing about the guest's code. See notes/PROGRESS.md
 and research/guest/probe.c's own section comments for why each section exists.
 
 `probe deflate` is the one section that is pure code: it round-trips the

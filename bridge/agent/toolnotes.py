@@ -17,7 +17,7 @@ becomes optional is the day the first unmeasured note arrives.
 `measured` NAMES A DATE FOR A REASON. A fact does not stay true. The corpus
 that produced these contained a correctly-measured `PATH` that had since
 become false, because installing a toolchain changed it -- and it was written
-into a prompt as fact before anyone re-checked. See `docs/PROGRESS.md`.
+into a prompt as fact before anyone re-checked. See `notes/PROGRESS.md`.
 
 A NOTE IS ABOUT A VERSION, NOT ABOUT A PRODUCT, and until 2026-10-01 there
 was nowhere to say so. The only defence against describing a toolchain the

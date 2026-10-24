@@ -3,7 +3,7 @@
  * transport, shared by the client (net/net.cpp, to the bridge) and gremote
  * (to its Python client). What the frames MEAN stays with each program: the
  * client's HELLO, its RPC worker and its window messages are in net.cpp.
- * docs/wire-connection-plan.md has the split and the invariants.
+ * notes/wire-connection-plan.md has the split and the invariants.
  *
  * THREADS. Three touch a Connection: the owner (connect, start, send, the
  * stop sequence), the reader (FrameSink::onFrame) and the sender (the only

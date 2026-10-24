@@ -1,33 +1,8 @@
 # Reading and driving the Win98 desktop
 
-Design for `libautomation`, written after the Phase 6 probes rather than
-before them. Every number here was measured on the guest; where a number is
-from the emulator and not the P200 it says so, because the emulator runs on
-a modern CPU and its milliseconds are a statement about a Ryzen.
-
-`docs/PLAN.md` Phase 6 has the product argument for why the control tree
-beats a screenshot. This file is the mechanism.
-
-## What the probes settled
-
-| | result | probe |
-|---|---|---|
-| `oleacc.dll` on Win98 SE | present, `AccessibleObjectFromWindow` works | 0.13 |
-| MSAA object to ask for | **`OBJID_CLIENT`**, never `OBJID_WINDOW` | 0.13c |
-| `SetWinEventHook` | present, delivers **cross-process, no DLL** | 0.15/0.15b |
-| WinEvent completeness | **20 of 20** creates produced their event | 0.15c |
-| WinEvent granularity | 11 distinct semantic types in one app lifetime | 0.15c |
-| system-wide hook, proc in an EXE | installs, **delivers nothing** | 0.15b |
-| system-wide hook, proc in a DLL | **injects**; 3 processes mapped it | 0.15d |
-| cross-process channel | named file mapping, works from inside the DLL | 0.15d |
-| `WaitForInputIdle` | present — in **USER32**, not KERNEL32 | 0.15 |
-| walking hidden windows | **moves the desktop**; walk visible only | 0.13c |
-
-Two of those are traps rather than features and are worth stating twice.
-`SetWindowsHookEx` returns a valid handle for a hook proc in an EXE and then
-never calls it, so a return-value check proves nothing. And asking MSAA for
-`OBJID_WINDOW` reports role 9 for every node on the desktop, which reads
-exactly like "MSAA knows nothing here".
+How `libautomation` works: what a node record holds and where each field
+comes from, how controls are addressed, what the platform allows, and which
+side of the wire does what.
 
 ## The node
 
@@ -66,7 +41,7 @@ node and are fetched **lazily** — see Enrichment.
    by USER32, unlike `GetWindowText` which returns only a caption.
    **`LB_GETTEXT`, `LVM_GETITEMTEXT` and `TVM_GETITEM` are not marshalled**
    and `VirtualAllocEx` does not exist on 9x, so list *contents* are never
-   a message problem (`PLAN.md`).
+   a message problem.
 3. **MSAA, `OBJID_CLIENT`.** Roles, values, default actions. This is where
    a list box's items live, and where a checkbox's checked state lives.
 
@@ -107,78 +82,34 @@ for the candidate nodes only, not the whole tree.
 
 ## Enrichment without wrecking the machine
 
-Measured on the P200, and the ordering is not what the emulator said.
-
-| traversal | us/node |
-|---|---|
-| `AccessibleObjectFromWindow` per HWND | 8500 |
-| one root + `AccessibleChildren` | **2078** |
-| one root + `IEnumVARIANT::Next` | 2555 |
-
-**Walk from one root.** That is the 4x, and it is the single
-`AccessibleObjectFromWindow` that buys it, not the batching call underneath
--- oleacc's own helper beat an explicit enumerator here, where the emulator
-had said the reverse. It also returns more: 228 nodes against 48 windows,
-because the accessible tree holds simple elements that have no HWND, which
-is where list and menu items live.
+**Walk from one root.** One `AccessibleObjectFromWindow` per root buys the
+whole subtree, and oleacc's own helper beats an explicit enumerator. It also
+returns *more* than the window tree does, because the accessible tree holds
+simple elements with no HWND -- which is where list and menu items live.
 
 **Ask Win32 first.** A control's class and style bits are free, and for a
-Button the style IS the role. With a dialog on screen that classified 46 of
-82 windows at 731 us/node against MSAA's 3048 for the same set. The
-unclassified remainder is custom classes, which is exactly where MSAA earns
-its cost.
-
-**Treat a single measurement as noise.** MSAA came out at 18.3, 8.5, 5.7 and
-3.0 us/node across four runs on the same machine, depending on what was on
-screen. Ratios measured inside one run are the only comparable thing.
-
-**And this document broke its own rule.** Corrected 2026-09-26, after a
-review went back to the raw files.
-
-The claim was "MSAA does not get faster on a faster machine" -- 250 ms on
-the P200 against 289 ms on a machine with four times the inflate throughput
--- and the whole case for in-process injection was hung on it. Those two
-numbers are probe 0.13g on two different runs, on desktops with different
-window counts (82 against 79) and different applications open. That is
-exactly the cross-run ratio the paragraph above forbids.
-
-Every other MSAA pair in the same two files says the opposite:
-
-| probe | P200 | XP 2000+ | ratio |
-|---|---|---|---|
-| 0.13b `E + msaa`, the whole walk | 467 ms / 82 | **88 ms / 79** | **5.3x** |
-| 0.13f A, per-HWND | 8500 us/node | 4460 us/node | 1.9x |
-| 0.13f C, `IEnumVARIANT` | 2555 us/node | 463 us/node | 5.5x |
-| 0.13e A, create + release | 10 ms | 1 ms | ~10x |
-
-0.13b E and 0.13g measure nearly the same thing and disagree by five times.
-Worse, 0.13f A and 0.13g are both per-HWND `AccessibleObjectFromWindow` **on
-the same machine in the same session** and differ by 2.8x. The honest
-reading is that MSAA does scale with the processor, roughly two to five
-times, and that 0.13g on the P200 caught an unusually light desktop.
-
-So **"the boundary, not the processor" is not established**, and nothing
-should be built on it until a probe runs 0.13f and 0.13g back to back in one
-invocation, on a scripted identical set of windows, and reports the ratio
-measured *inside* that run.
-
-What this does NOT weaken is the reason to get inside a process at all:
-`LB_GETTEXT`, `LVM_GETITEMTEXT` and `TVM_GETITEM` are **not marshalled on
-9x at any clock speed**. List, tree and list-view contents are unreachable
-from outside however fast the machine is. That is a capability argument, it
-depends on no timing, and it is the one to lead with.
-
+Button the style *is* the role. That classifies about half the windows on a
+dialog at roughly a quarter of MSAA's per-node cost. The unclassified
+remainder is custom classes, which is exactly where MSAA earns its price.
 
 MSAA costs roughly as much as everything else in a walk put together, and
 returned a name for well under half the nodes on a plain Win32 desktop. So:
 
 - **Never on the whole tree.** Enrich the nodes a selector is actually
   deciding between, and the node a caller asked about.
-- **`OBJID_CLIENT`.** `OBJID_WINDOW` is the frame and carries nothing.
+- **`OBJID_CLIENT`.** `OBJID_WINDOW` is the frame and carries nothing: ask
+  for it and every node on the desktop comes back as role 9, which reads
+  exactly like "MSAA knows nothing on this machine".
 - **Visible windows only.** Not an optimisation — walking hidden windows
   left the Start menu stuck open, painted but owned by nothing, and only a
   click on Start itself would clear it. A tool that reports what is on
-  screen must not change what is on screen. It also halves the work: 45 of
+  screen must not change what is on screen.
+
+  It is also not a cost but a hang. On a Pentium 200 the same desktop walks
+  in about 90 ms visible-only and takes **155 seconds** with hidden windows
+  included, because asking oleacc about a hidden window can block without
+  bound. MSAA itself is only about 3-4x a Win32-only walk; this is a
+  different thing entirely. It also halves the work: 45 of
   83 nodes on one measured desktop were invisible.
 
 ## Hung windows
@@ -212,8 +143,8 @@ the cap was never the thing doing the work.
 
 WinEvents, and they are better than the filesystem watcher this project
 already has: `FindFirstChangeNotification` only says something under here
-changed, so `PROGRESS.md` settled on "polling is the mechanism, the watcher
-is an accelerator". WinEvents say **what** changed, **which window**, and
+changed, so the sync layer treats polling as the mechanism and the watcher
+is an accelerator. WinEvents say **what** changed, **which window**, and
 **when**. For the UI, subscription is the mechanism and a rescan is the
 fallback.
 
@@ -245,6 +176,9 @@ WaitForGone(selector, timeout)      DESTROY, HIDE
 WaitForIdle(pid, timeout)           WaitForInputIdle — USER32
 ```
 
+`WaitForInputIdle` is present on Windows 98, but it lives in **USER32, not
+KERNEL32**, which is where every example puts it.
+
 Every one returns why it ended — matched, timed out, or the target died —
 never a bare boolean. A timeout returns the tree as it stood, so the caller
 can see what was there instead.
@@ -273,6 +207,12 @@ foreground lock — measured at 15000 ms — and
 startup mitigation works and `AttachThreadInput` is the fallback, not the
 primary.
 
+**Activation is the only route.** `SetForegroundWindow` works from a
+background process with no window of its own, and the raised window really
+is on top. `BringWindowToTop` and `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)`
+are ignored across a process boundary — so the two "quiet raise" calls a
+contributor reaches for first do nothing here.
+
 `click` resolves a selector to its rect centre and then performs the same
 real `mouse_event` as a coordinate click — one execution path, not two —
 then checks `WindowFromPoint` and refuses if something else is on top.
@@ -282,15 +222,13 @@ then checks `WindowFromPoint` and refuses if something else is on top.
 Capture at `min(screen_bpp, max_bpp)`, wrap in a BMP, deflate, send. The
 bridge does depth reduction, palette work, diffing, OCR and PNG.
 
-Measured over four bands of one screen, deflate beat GDI's own RLE at every
-depth where both exist, and deflate on raw 16bpp beat RLE8 on quantised
-8bpp outright. So `enc=rle8` is not needed and `BACKLOG.md` §8 closes as a
-no. **It took until 2026-10-13 for §8 to agree**, because this paragraph was
-the only place the conclusion was written and the entry was being read on its
-own — see §8's ruling for what that cost. `max_bpp` remains as a quality knob — 4bpp for driving, native for
-looking — and never as a codec choice.
-
 Region capture is the default; full screen is the exception.
+
+**The wire compresses at level 1.** Deflate beats GDI's own RLE at every
+depth where both exist, so there is no `enc=rle8`; and level 6 would be a
+2.2x pessimisation on a 200 MHz CPU, where compression is slower than the
+10 Mbit link. `max_bpp` stays as a quality knob — 4bpp for driving, native
+for looking — and never as a codec choice.
 
 ## ImageClick
 
@@ -303,17 +241,21 @@ name, addressable as `[name="Start"]`.
 **The scan runs on the bridge.** The guest captures and clicks. A template
 search is a transform, the bridge has the memory and the CPU, and the P200
 does not. 0.16 measures the guest-side cost anyway, so the decision rests
-on a number; it picks the most varied block on screen to time against,
-because a flat one matches at the first position and reports a meaningless
-zero.
 
 ## Injection
 
 It works, and it is not the default path.
 
-A system-wide hook needs its proc in a DLL — with the proc in an EXE, Win98
-installs the hook and never calls it. With a DLL, three processes mapped it
-and two ran the proc. A named file mapping carries data back, since a DLL's
+A hook needs its proc in a DLL. With the proc in an EXE, Win98 installs the
+hook, **returns a valid handle, and never calls it** — so a return-value
+check proves nothing here. With a DLL, three processes mapped it and two ran
+the proc.
+
+**`WH_GETMESSAGE` is the hook type that works.** Of the four tried
+(`WH_CALLWNDPROC`, `WH_GETMESSAGE`, `WH_CBT`, `WH_CALLWNDPROCRET`) only
+`WH_GETMESSAGE` ever delivered; the other three installed cleanly and
+produced nothing. It also fires inside `GetMessage`, so the controller has
+to *post* as well as send — a sent message alone never wakes it. A named file mapping carries data back, since a DLL's
 globals are per-process.
 
 What that buys, now that WinEvents have taken change detection off the list:
@@ -322,12 +264,14 @@ What that buys, now that WinEvents have taken change detection off the list:
   contents, where 9x marshals nothing and `VirtualAllocEx` does not exist.
   Inside the process those are ordinary sends.
 - **Readiness**, more precisely than `WaitForInputIdle`.
-- **GDI text**, by patching `TextOutA`/`ExtTextOutA` in the target's import
-  table — the text as drawn, for owner-drawn controls that answer no
-  message at all. Built and working: a draw came back as
-  `pid … @7,9 "GASTON-SELFTEST"`.
-
-Two things that cost an Explorer to learn.
+- **GDI text**, by patching the target's import table — the text as drawn,
+  for owner-drawn controls that answer no message at all. **Eight entry
+  points**: `TextOutA`/`W` and `ExtTextOutA`/`W` from GDI32, and
+  `DrawTextA`/`W` and `DrawTextExA`/`W` from USER32 (`win/inproc/hookdll.c`).
+  The W forms and `DrawText*` matter because MSHTML — the one target this
+  exists for — draws through `TextOutW`, `ExtTextOutW`, `DrawTextW` and
+  `DrawTextA`, and an A-only patch would have captured a web page in part.
+  Partial capture is worse than none, because it looks like an answer.
 
 **Unpatch on `DLL_PROCESS_DETACH`, always.** A patched import table points
 into this DLL. Remove the hook and the system unmaps us from every process
@@ -384,92 +328,7 @@ alternative is streaming 83 records per event across a link the project
 budgets at 5 KB/s. The compiled selector goes down as a small struct, the
 same shape as the sync layer's existing filters.
 
-## What only the P200 can answer — **all five, 2026-10-23**
-
-Every millisecond above is from the emulator. These were the five questions,
-and the Pentium 200 at 10.0.0.158 answered them over gremote rather than from
-the floppy kit this section anticipated:
-
-- ~~the walk, with and without MSAA, at a real clock~~ **315 ms with MSAA and
-  92 ms without, for the identical 53 nodes** — so MSAA costs **3.4x** on this
-  CPU, against the Athlon's 36-37 ms for the whole walk. And with hidden
-  windows included it is **155 SECONDS** for 125 nodes, which is a different
-  finding and became BACKLOG 39.
-  (`research/measurements/ui-cancel-p200-20261023.txt`)
-- ~~WinEvent latency when the CPU is the bottleneck~~ **22 ms on OBJ_CREATE,
-  2 ms on OBJ_NAMECHANGE, 0 on destroy — and the two clocks AGREE on every
-  line**, where the QEMU guest diverged by 3 ms. So the message pump adds
-  nothing measurable here and those are platform figures, not ours. 20 of 20
-  creates produced an event. (`deflate-p200-20261023.txt`)
-- ~~deflate throughput~~ **gate 0.5c is closed**: L1 1027 KB/s, L6 296 KB/s,
-  inflate 3580 KB/s against the probe's own ~750 KB/s LAN threshold. The wire
-  compresses at level 1, so the shipped choice is vindicated and level 6 would
-  have been a 2.2x pessimisation. (`deflate-p200-20261023.txt`)
-- ~~whether a template scan is tolerable on the guest after all~~ **yes.**
-  Hit 6 ms naive / 0 ms filtered; the MISS — the case a wait pays on every
-  poll — is 111 ms naive / **29 ms filtered**, with the absent template
-  constructed from a histogram so a miss is certain. All 600 rows fit the
-  buffer at 800x600. (`deflate-p200-20261023.txt`)
-- ~~the foreground lock, and injection~~ **both yes.**
-  `SetForegroundWindow` works from a background process and the raised window
-  is on top at its own centre; `BringWindowToTop` and
-  `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are ignored across a process
-  boundary exactly as under TCG, so activation is the only route
-  (`focus-p200-20261023.txt`, BACKLOG 9 closed).
-
-  **Injection works on real silicon and can be aimed**, measured by
-  `TEST.BAT` part three run last and alone, with `AUTOCHK --health` between
-  each step so a wedge would have had one suspect. Neither the Explorer kill
-  nor the September spin recurred. Two findings came with it, and both are
-  things reasoning would have got wrong:
-  **`WH_GETMESSAGE` was the only one of four hook types that delivered** —
-  the other three installed cleanly and produced nothing — and the deny list
-  holds case-insensitively, which is the comparison that matters.
-  And a finding **against** D4: MSHTML, the one target the GDI text patch
-  exists for, imports `TextOutW`, `ExtTextOutW`, `DrawTextW` and `DrawTextA`,
-  none of which D4 patches.
-  (`research/measurements/inject-p200-20261023.txt`)
-
 ## The tool surface
-
-Decided with the user on 2026-09-26, before any of it was built, because the
-shape of the MCP tools decides what the guest has to put on the wire.
-
-Four tools go into the existing `machine` server beside `exec`,
-`sync_status` and `sync_resolve`:
-
-```
-ui     scope=desktop|foreground|pid|<selector>, max_nodes, text, wait_for, timeout
-click  target=<selector>, button, double, settle
-keys   target=<selector>, text
-shot   rect, scale
-```
-
-**A control is addressed by a selector the bridge computed, never by a
-handle.** Each node record carries a `sel=` field: the minimal selector that
-resolves to that one control and nothing else. The model copies it verbatim
-into `click`. An HWND is meaningless across a session and 9x reuses them, so
-letting one out means a stale reference can click whatever inherited that
-handle -- silently, and on somebody's real desktop. With a selector a stale
-reference is a clean "not found". Computing it on the bridge keeps the rule
-that the guest transforms nothing.
-
-**The waits are parameters, not a fifth tool.** `WaitForControl`, `Text`,
-`Gone` and `Idle` exist in the library (`win/automation/wait.h`), but the
-agent reaches them through `click(target, settle=true)` and
-`ui(wait_for=..., timeout=...)`. The loop an agent actually runs is "do a
-thing, then look", and folding the wait into both ends of it turns three
-round trips into one. On a 200MHz guest behind a socket, a round trip is the
-expensive part.
-
-**`shot` returns the image.** That is what it is for, and the tree is what
-keeps it from being needed: a 640x480 frame costs more tokens than a whole
-control tree and says less about it. The system prompt steers to `ui` first,
-so `shot` is what you reach for when the tree came back empty -- a
-custom-drawn control, a game, an installer that is one big window.
-
-
-### Superseded 2026-10-02: one `input` tool, a list of steps
 
 `click`, `keys` and `focus` are gone. A client that declares `automation=2`
 gets three screen tools:
@@ -516,11 +375,7 @@ key then Space, else Alt+Numpad 0nnn (`research/measurements/keyboard-layouts-
 vm-20261002.txt`). Key names are a frozen, versioned table
 (`bridge/agent/keynames.py`, HELLO `keys=`).
 
-
 ## The node record, and why it has three identity fields
-
-Settled 2026-09-26, before the first byte went on the wire, because a record
-format is the one thing that cannot be changed quietly later.
 
 There are **three kinds of thing** this library can find, and only the first
 is a window:
@@ -566,14 +421,6 @@ and it is the right place for the other reason too: the bridge has the whole
 tree in hand and can tell whether `Button[text="OK"]` is unique or needs a
 parent step in front of it. The guest, streaming one record at a time, cannot.
 
-**Why this is written before section B and not during it.** `src` and `child`
-cost nothing today — every record is `src=win` until the in-process collector
-lands — and adding them later would mean re-cutting the wire format, the op
-table, the bridge's tree assembler, the `sel` computation and every selector
-an agent has already learned, all at once. The fields go in now so that the
-tier that needs them is a new value in an existing field rather than a flag
-day.
-
 What is **not** settled, and is deliberately left open: the selector grammar
 has no way to name an `acc` element yet, so those records are readable and
 not yet clickable. That is a grammar addition (a step that carries a child
@@ -581,9 +428,6 @@ id) and it can happen without touching the record format, which is the whole
 point of doing this in this order.
 
 ## Where this runs in the client, and what can block it
-
-Settled 2026-09-26. Two rules, both of which the first draft of the plan got
-wrong.
 
 **A dedicated ui worker, never the paint thread.** `REMOTE.md` already says
 so ("ui worker (message queue, `CoInitialize`d)") and the plan quietly
@@ -618,11 +462,7 @@ the ui thread whose `MessagePending` returns `PENDINGMSG_CANCELCALL` past the
 deadline, with a `SetTimer` so it is called at all. Never `IsHungAppWindow`,
 which is 2000+.
 
-This is the gap `A5` does *not* cover. A5 wedges a thread and proves the
-window walk survives it, which is worth having; the walk was never the
-unbounded part.
-
-### Two callers, one engine (2026-10-02, REMOTE.md step 6)
+### Two callers, one engine
 
 The handlers are no longer the client's. `gremote.exe` answers the same three
 ops on its own wire, so `win/ui/uirpc.cpp`'s TREE and RUN moved into
@@ -687,68 +527,6 @@ the duplication. Both copies gained the same four lines in stage 4b, which is
 the duplication being paid rather than regretted: the strip is taken out of
 the frame before the capture and put back after.
 
-
-## What is built, and what the guest still has to answer
-
-As of 2026-09-26.
-
-**Built and green** (`make -C win check`, `make test`, 126 autocheck cases
-under Wine):
-
-| | where |
-|---|---|
-| selector grammar, resolver, ancestry, `:nth`, ambiguity | `automation/select.*`, `automation/resolve.*` |
-| role from class and style, free | `automation/tree.cpp` |
-| MSAA enrichment, batched accessible walk | `automation/msaa.*` |
-| event feed, four waits with a backstop | `automation/watch.*`, `automation/wait.*` |
-| a deadline that interrupts a call in flight | `automation/calldeadline.*` |
-| the desktop worker, its lane and its four ops | `win/ui/`, `net/frameproto.cpp` |
-| the record, and the parser it agrees with | `win/ui/uirec.*`, `bridge/wire/uirec.py` |
-| `ui`, `click`, `keys`, `shot` | `bridge/agent/tools.py` |
-
-**Wine settles the grammar and nothing else.** It proves the C logic, the
-data structures and the cross-language agreements. It does not prove the
-platform, and three of its answers are known to differ: its oleacc returns
-the generic client object for every window class, so state, default action
-and the Win32 class proxies report rather than assert; it emits
-`EVENT_OBJECT_CREATE` and never `EVENT_OBJECT_DESTROY` for a hidden popup,
-which is what the wait backstop exists for; and it honours
-`WINEVENT_SKIPOWNPROCESS` in name only.
-
-**Still owed by the real machines**, and section D should not be scheduled
-before the first two:
-
-- **0.15d, re-run from cold.** *[Corrected 2026-10-10: it HAS been re-run.]*
-  Both halves were unsound as evidence: the GDI patch was applied by the probe
-  to the probe's own pid, so nothing has ever been captured from a foreign
-  process; and the injection verdict read a counter nothing zeroed, in a section
-  no injected copy unmaps, so it was cumulative since boot. Both were fixed, and
-  the fixed probe ran -- `research/measurements/vm-20260926.txt`, `generation
-  33779831, counters zeroed`, `distinct pids 2 (neither of them us)`,
-  `-> INJECTION WORKS`. Two caveats survive, which is why this line stays: that
-  generation is 9.4 hours into an uptime rather than a cold boot, and it was the
-  session that ended in the 0.15h wedge. The GDI half is still self-captured **by
-  design** -- the probe now says so in its own output and defers foreign-process
-  capture to D4 -- so "nothing has been captured from a foreign process" remains
-  true, and the fix made it honest rather than false.
-- **0.15f, which has never run at all.** D1 asserts that
-  `WH_CALLWNDPROC` aimed at one thread maps into one process and nowhere
-  else. That is the assumption everything after it rests on.
-- **The MSAA scaling question**, per "And this document broke its own rule"
-  above: 0.13f and 0.13g back to back in one invocation, on a scripted
-  identical set of windows, reporting the ratio measured *inside* that run.
-- **Which browsers answer.** 0.13d now finds the document by MSAA role and
-  prints the class that carried it. Run it against every browser on the
-  machines; a browser that answers nothing is not a failure, it is the
-  boundary between this tier and GDI capture.
-- **The hung-thread tiers on hardware.** Measured under Wine at 205ms for
-  four wedged windows against a naive 800, and 754ms for the two-thread
-  case against a naive 1200. Both are the right shape; neither is a
-  9x number.
-- **One end-to-end turn**: ask the agent to read a dialog and click a named
-  button on the guest, through the bridge.
-
-
 ## The in-process tier, as built
 
 Section D. Opt-in per request, off by default, and it does **not** fall back
@@ -777,12 +555,13 @@ see "And this document broke its own rule". It was never needed.
 
 **What keeps it from being a liability:**
 
-- **One thread**, via `WH_CALLWNDPROC` aimed at the target's own. Not the
-  system-wide `WH_CBT` of gate 0.15d, which reaches every process that sees
-  a CBT event -- that is how Explorer came to be in scope and how Explorer
-  came to die.
-- **A deny list with no force escape.** `REMOTE.md:344` lets `KILL` take
-  Explorer with `force=1`; there is deliberately no equivalent here, because
+- **One thread**, via `WH_GETMESSAGE` aimed at the target's own. Not a
+  system-wide `WH_CBT`, which reaches every process that sees a CBT event --
+  that is how Explorer came to be in scope, and how Explorer came to die.
+- **A deny list with no force escape**, compared case-insensitively, which
+  is the comparison that matters -- `strcmp` would let `explorer.exe`
+  through. `KILL` in gremote has a `force=1`; there is deliberately no
+  equivalent here, because
   a bad kill is immediate and visible where a bad injection shows up later
   and belongs to the host.
 - **Pid and basename.** A 9x pid is an obfuscated pointer into the process
@@ -798,30 +577,17 @@ see "And this document broke its own rule". It was never needed.
   no capacity, so the only defence against a long row is refusing it. Getting
   that wrong is a stack overwrite inside another program.
 
-**Run on the guest, 2026-09-26, and it corrected the design twice.**
+## Testing
 
-`WH_CALLWNDPROC` -- the hook the plan specified -- **installs and never
-fires**. Zero calls, zero processes. So do `WH_CBT` and `WH_CALLWNDPROCRET`
-when aimed at a thread. `WH_GETMESSAGE` delivered 23 calls into exactly one
-process: the target, and no other. Gate 0.15f asked the question and the
-documented answer was wrong; had this been built on it, the whole
-in-process tier would have been silently dead, and it would have looked
-like a bug in the collector.
+**Wine settles the grammar and nothing else.** It proves the C logic, the
+data structures and the cross-language agreements. It does not prove the
+platform, and three divergences are known:
 
-It also fires inside `GetMessage`, so the controller posts as well as
-sends -- a sent message alone never wakes it.
+- its oleacc returns the generic client object for every window class, so
+  roles and names look wrong in a way the real 98 does not;
+- it emits `EVENT_OBJECT_CREATE` and never `EVENT_OBJECT_DESTROY` for a
+  hidden popup, which is what the wait backstop exists for;
+- it honours `WINEVENT_SKIPOWNPROCESS` in name only.
 
-And the GDI patch list was twice too narrow. Under Wine, COMCTL32 imports
-only the W forms of `TextOut`/`ExtTextOut`; on the guest, `MSHTML.DLL`
-imports `DrawTextW` and `DrawTextA`, `COMCTL32` imports `DrawTextExA` and
-`COMDLG32` imports `DrawTextA` -- and `DrawText*` is USER32, not GDI32, so
-it was not in the patch at all. A web page and a dialog would each have
-been captured in part and reported as the text on screen, which is worse
-than capturing nothing because it looks like an answer. Eight entry points
-are patched now.
-
-What is still owed: `0.15d` **from a cold boot** (it has been re-run with the
-generation word, on the VM, 9.4 hours into an uptime --
-`research/measurements/vm-20260926.txt`), with the injection gates moved last and a
-health check behind them (`BACKLOG.md` 15, and the check goes in
-`autocheck.exe --health`); and one end-to-end turn through the bridge.
+Anything about timing, the foreground lock, MSAA costs or hidden windows has
+to come off real hardware.

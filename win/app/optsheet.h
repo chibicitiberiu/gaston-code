@@ -1,5 +1,5 @@
 /* Configure > Options...: one property sheet for every per-client setting
- * (docs/OPTIONS-PLAN.md).
+ * (docs/PERMISSIONS.md).
  *
  * The sheet works on a COPY of the configuration. Pages write their fields
  * into the copy when the sheet applies; once every page that was opened has

@@ -37,7 +37,7 @@ esac
 
 rm -f "$VM/qmp.sock"
 
-# Hardware choices, all from the compatibility notes in docs/PLAN.md:
+# Hardware choices, all from the compatibility notes in docs/ARCHITECTURE.md:
 #   i440fx    -- not q35; Win98 predates it
 #   pentium2  -- matches the target class and avoids the fast-CPU loop bug
 #   pcnet     -- the NIC most consistently reported working on Win98, AND NOT

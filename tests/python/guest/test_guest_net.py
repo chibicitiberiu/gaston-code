@@ -108,7 +108,7 @@ def test_netcheck_reports_no_leaked_frames(netcheck_result):
 
 # --------------------------------------------------------- slow-reader gate
 #
-# docs/BACKLOG.md #1's throttled-link gate (`tc netem rate 40kbit`) needs root
+# notes/BACKLOG.md #1's throttled-link gate (`tc netem rate 40kbit`) needs root
 # and has never run. The cheaper fallback the plan itself names -- and the one
 # used here -- is a deliberate slow reader: rather than throttle the wire, it
 # fills the guest's outbound queue directly by refusing to drain it, which is

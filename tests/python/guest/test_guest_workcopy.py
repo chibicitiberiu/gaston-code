@@ -13,7 +13,7 @@ folder while the one they were warned about went live. Nothing about reading
 the code establishes which way round it is.
 
 Wine proves the code and never the platform, so the same binary is run on the
-Win98 guest by hand at least once per change to it; see docs/PROGRESS.md.
+Win98 guest by hand at least once per change to it; see notes/PROGRESS.md.
 """
 
 

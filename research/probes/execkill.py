@@ -3,7 +3,7 @@
 
 WHY. On Windows 98 a piped `COMMAND.COM /c` job is REDIR32.EXE -> the DOS VM
 -> the program, and TerminateProcess on the pid exec held did nothing: every
-timeout and EXECKILL leaked a REDIR32 (docs/BACKLOG.md 14). libexec stops the
+timeout and EXECKILL leaked a REDIR32 (notes/BACKLOG.md 14). libexec stops the
 whole tree now, and EXECKILL names the command it kills. Both are only real
 on the real machine, so this stands in for the bridge and runs:
 

@@ -83,7 +83,7 @@ def test_outside_cwd_is_still_refused_and_says_so_differently(tmp_path):
 # location -- not the outside-cwd containment check, not the `.gaston/`
 # refusal. This is documented, deliberate, and NOT a bug these tests are
 # proposing to fix: server.py:2619 and permissions.py:224/304 all note it in
-# comments, and docs/PLAN.md 3.4d / docs/BACKLOG.md are explicit that the
+# comments, and docs/ARCHITECTURE.md 3.4d / notes/BACKLOG.md are explicit that the
 # real close is a sandbox around Bash's execution, not a regex over command
 # lines written inside a hardening pass.
 #
@@ -107,7 +107,7 @@ def test_bash_reaching_outside_cwd_is_not_refused(tmp_path):
     (see test_outside_cwd_is_still_refused_and_says_so_differently above);
     the identical target through Bash is not, because off_limits never
     inspects `command`. Not a fix -- the fix is a sandbox around Bash's
-    execution (docs/BACKLOG.md), not parsing this string."""
+    execution (notes/BACKLOG.md), not parsing this string."""
     wd = str(tmp_path / "work")
     os.makedirs(wd)
     why = off_limits("Bash", {"command": "cd /etc && cat hostname"}, wd)
@@ -119,7 +119,7 @@ def test_bash_touching_gaston_is_not_refused(tmp_path):
     _inside_gaston (see test_writing_into_gaston_is_refused above); the same
     write done through Bash is not, because Bash is absent from
     _PATH_TOOLS and _inside_gaston is never reached. Not a fix -- the fix is
-    a sandbox around Bash's execution (docs/BACKLOG.md), not parsing this
+    a sandbox around Bash's execution (notes/BACKLOG.md), not parsing this
     string."""
     wd = str(tmp_path)
     target = os.path.join(wd, ".gaston", "conflict", "a.txt", "mine.1")

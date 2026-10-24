@@ -2,7 +2,7 @@
 
 This used to be ~250 lines spread across `Bridge`, all of it reading or
 writing exactly two fields, `guest.perms.pending` and `guest.perms.queue` --
-the audit's "Prompts" `GuestSession` group (docs/audit/02-bridge-python.md
+the audit's "Prompts" `GuestSession` group (notes/audit/02-bridge-python.md
 #2, #1.3). Nothing else in `Bridge` has a reason to reach into them directly
 any more.
 

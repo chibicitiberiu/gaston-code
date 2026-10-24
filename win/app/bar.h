@@ -5,14 +5,14 @@
  * Continue, shown when the bridge has STOPPED the agent for a conflicting
  * edit). They used to be arbitrated pairwise -- four uncoordinated functions
  * in main.c, each hand-checking the other's state -- and that arbitration
- * shipped four data-loss bugs (docs/audit/04-planned-features.md finding
+ * shipped four data-loss bugs (notes/audit/04-planned-features.md finding
  * 04.6). This module replaces the pairwise checks with one bounded stack of
  * pending requests and one descriptor per kind, so the visible bar is always
  * DERIVED (the highest-priority entry on the stack) rather than stored
  * redundantly in satellite booleans that can disagree with each other.
  *
  * Phase 6 is expected to add a third kind (an agent action awaiting
- * confirmation, per docs/PLAN.md) that has no answer button at all -- see
+ * confirmation, per docs/ARCHITECTURE.md) that has no answer button at all -- see
  * audit findings 01.55 and 04.6. Adding it is meant to be one descriptor row
  * plus one BAR_* constant, not a new pairwise interaction with the two that
  * exist today; that is the reason this exists as a stack up front rather than

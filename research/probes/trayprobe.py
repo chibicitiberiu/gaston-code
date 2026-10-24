@@ -1,6 +1,6 @@
 """Watch gremote's tray lines while somebody works the keyboard.
 
-docs/stage5-plan.md's K2 is a sitting at the machine: the icon is a
+notes/stage5-plan.md's K2 is a sitting at the machine: the icon is a
 judgement, the standby timer needs a real idle box, and Explorer has to be
 ended by hand -- BACKLOG 40 is what happened when that last one was tried
 over the wire instead. None of that is drivable. What IS drivable is the

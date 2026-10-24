@@ -12,10 +12,10 @@
  *   6. Which running processes and C:\WINDOWS exes are 16-bit (NE).
  *   7. Does CreateProcess' show value reach a DOS box, and does the window
  *      outlive its process?
- *   8. --stops (docs/libexec-plan.md step 0b): probes for a CLEAN stop of a
+ *   8. --stops (notes/libexec-plan.md step 0b): probes for a CLEAN stop of a
  *      piped COMMAND.COM /c spawn, since TerminateProcess on the returned
  *      pid (REDIR32 on 98) does nothing and TerminateProcess on the DOS VM
- *      (WINOA386.MOD) still leaves REDIR32 a zombie (docs/BACKLOG.md #14).
+ *      (WINOA386.MOD) still leaves REDIR32 a zombie (notes/BACKLOG.md #14).
  *      Five strategies (close our pipes; GenerateConsoleCtrlEvent; WM_CLOSE
  *      to the hidden "tty" window, with its confirmation dialog if any;
  *      Ctrl+C keystrokes to that window; kill the VM and just wait) each run
@@ -720,7 +720,7 @@ static void launch(const char *key, const char *cmdline, WORD show,
     sweep(key, base);
 }
 
-/* ---- 8. probe for a clean stop (docs/libexec-plan.md step 0b) ---- */
+/* ---- 8. probe for a clean stop (notes/libexec-plan.md step 0b) ---- */
 
 /* The family's hidden DOS-box window, if any -- class "tty", owned by a pid
  * in `fam`. There is at most one per job; the first match is enough. */
@@ -901,7 +901,7 @@ static bool stratVmThenWait(const char *key, Child &c,
 }
 
 /* Kills whatever of our family is left except REDIR32, which a
- * TerminateProcess never actually stops (docs/BACKLOG.md #14) -- leaving it
+ * TerminateProcess never actually stops (notes/BACKLOG.md #14) -- leaving it
  * is the point of this probe, not a bug, so it is recorded, not swept. */
 static void cleanupStops(const char *key, const std::vector<Proc> &base)
 {
