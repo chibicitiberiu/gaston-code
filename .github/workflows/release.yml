@@ -76,7 +76,19 @@ jobs:
             "https://github.com/open-watcom/open-watcom-v2/releases/download/${OW_TAG}/ow-snapshot.tar.xz"
           sudo mkdir -p "$WATCOM"
           sudo tar -xf /tmp/ow.tar.xz -C "$WATCOM"
-          "$WATCOM/binl64/wcc386" 2>&1 | sed -n '2p'
+          # ASSERT ON THE BANNER, NOT THE EXIT STATUS. wcc386 with no input
+          # file prints its version and exits 1, which is correct and is
+          # fatal under `set -euo pipefail` -- so this step failed on the
+          # first run of this workflow that ever happened, immediately
+          # after printing the line that proved the toolchain works. The
+          # step only runs on a cache miss and the cache had never been
+          # populated, so it would have failed on every run until this.
+          VER=$("$WATCOM/binl64/wcc386" 2>&1 | sed -n '2p' || true)
+          echo "$VER"
+          case "$VER" in
+            *Version*) ;;
+            *) echo "::error::wcc386 did not run: $VER"; exit 1 ;;
+          esac
 
       - uses: actions/setup-python@v7
         with:
