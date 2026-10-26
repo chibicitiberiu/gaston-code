@@ -67,22 +67,25 @@ the variable is `UV_NO_BINARY_PACKAGE` and the command is
 ### Why the variable
 
 Without it you get the agent SDK's platform wheel, which carries its own
-copy of Claude Code -- 219 MB of binary you have already installed. The
-variable asks for the SDK's source package instead, which carries none,
-and the SDK then uses the `claude` on your machine. The install is about
-70 MB with it and about 290 MB without.
+copy of Claude Code -- 219 MB of binary you have already installed, and
+the SDK would use that copy in preference to yours. The variable asks
+for the SDK's source package instead, which carries none.
 
-It is needed only for this one install. It does not affect anything else
-on your system.
+Measured: 75 MB installed with it, 290 MB without. It affects this one
+install and nothing else on your system.
 
 ### If your Python is too old
 
-`uv` will fetch one:
+`uv` downloads one rather than making you install it:
 
 ```
-uv tool install --python 3.13 --no-binary-package claude-agent-sdk \
+uv tool install --python 3.13 \
+    --no-binary-package claude-agent-sdk \
     gaston_code_bridge-0.4.0-py3-none-any.whl
 ```
+
+That is the answer for a stable distribution whose system Python is
+3.10 or older.
 
 ## 3. Run the bridge
 
