@@ -215,3 +215,22 @@ def test_the_floor_matches_what_the_sdk_documents():
 
 def test_the_sdk_reports_what_it_was_built_against():
     assert claudecli.sdk_cli_version() is not None
+
+
+def test_the_bundled_lookup_names_the_path_the_sdk_looks_in():
+    """`_bundled()` reaches the SDK's package by its public __file__ rather
+    than importing the private transport, so the two could drift apart in
+    silence -- and the documented fat install, where somebody wants one
+    artefact and no prerequisite, depends on them agreeing. Confirmed with
+    a planted binary once; this is the part that keeps working afterwards.
+    """
+    import pathlib
+    import platform
+
+    import claude_agent_sdk
+    from claude_agent_sdk._internal.transport import subprocess_cli as sdk
+
+    name = "claude.exe" if platform.system() == "Windows" else "claude"
+    theirs = pathlib.Path(sdk.__file__).parent.parent.parent / "_bundled" / name
+    mine = pathlib.Path(claude_agent_sdk.__file__).parent / "_bundled" / name
+    assert theirs.resolve() == mine.resolve()
