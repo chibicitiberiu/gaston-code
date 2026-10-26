@@ -13,12 +13,21 @@ but its client is a console REPL; [retro-agent](https://github.com/voidsstr/retr
 has a complete guest tool surface and a hardened protocol but is headless and
 drives the Agent SDK rather than Claude Code.
 
+![Gaston Code writing, compiling and running a Win32 app on a Windows 98 machine](docs/images/demo-athlon.webp)
+
+*Real hardware, 6x speed. Asked for a Fahrenheit/Celsius converter in C++
+with no mention of a compiler, the agent found Visual C++ 6.0 on the
+machine, wrote `tempconv.cpp` and a `build.bat` that sets the paths by hand
+"because vcvars32.bat doesn't work in this shell", compiled it, launched it,
+and typed 212 into it to check. 97 seconds, $0.13. The banner across the top
+is the client telling you the desktop is being driven, with the key that
+stops it.*
+
 ![Gaston Code on a Pentium 200, running a VBScript it just wrote](docs/images/p200-converter.png)
 
-*A Pentium 200 MMX under Windows 98 SE. Asked for a Fahrenheit/Celsius
-converter with a UI, the agent wrote `TEMPCONV.VBS`, launched it, drove its
-dialogs from the keyboard to check both directions, and reported what it had
-not tested. The dialog in front is that script running.*
+*The same question on a Pentium 200 MMX with 32 MB, which has no C compiler:
+it wrote `TEMPCONV.VBS` instead, drove its dialogs from the keyboard to check
+both directions, and reported what it had not tested.*
 
 ## Why "Gaston Code"?
 

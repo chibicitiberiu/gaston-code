@@ -26,7 +26,10 @@ README can have a moving picture in it.
 import argparse
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,28 +49,63 @@ def secret_from(path):
     return found.group(1)
 
 
-def frames(remote, seconds, every, crop):
-    """Capture until the clock runs out, returning PIL images.
+def capture(remote, seconds, every, crop, into):
+    """Write one PNG per frame into `into`, and return how many.
+
+    STRAIGHT TO DISK, AND NOT THROUGH PIL. `shot` already returns PNG
+    bytes, so decoding each frame into an Image only to re-encode it later
+    buys nothing and costs everything: an earlier version of this held
+    every frame in memory and reached 12.7 GB resident on a five-minute
+    capture before it was killed. Five minutes at 14 fps is four thousand
+    frames, and 640x480x3 each is 3.7 GB of pixels before Python's
+    overhead. On disk they are about 20 KB each.
 
     Captures as fast as the link allows and sleeps only the remainder, so
-    a slow machine degrades the frame rate rather than the duration.
+    a slow machine loses frame rate rather than duration.
     """
-    import io
-
-    from PIL import Image
-
-    out, started, n = [], time.time(), 0
+    started, n = time.time(), 0
     while time.time() - started < seconds:
         due = started + n * every
         png = (remote.shot(x=crop[0], y=crop[1],
                            w=crop[2] - crop[0], h=crop[3] - crop[1])
                if crop else remote.png())
-        out.append(Image.open(io.BytesIO(png)).convert("RGB"))
+        with open(os.path.join(into, "f%06d.png" % n), "wb") as f:
+            f.write(png)
         n += 1
         behind = due + every - time.time()
         if behind > 0:
             time.sleep(behind)
-    return out
+    return n, time.time() - started
+
+
+def encode(into, count, fps, out):
+    """ffmpeg over the PNG sequence. It streams; nothing is held in RAM.
+
+    GIF goes through palettegen/paletteuse rather than ffmpeg's default
+    quantiser: a Win98 desktop is system greys plus one photograph, and
+    the default palette dithers the greys into noise that doubles the
+    file for a worse picture.
+    """
+    pattern = os.path.join(into, "f%06d.png")
+    common = ["ffmpeg", "-y", "-loglevel", "error",
+              "-framerate", "%.4f" % fps, "-i", pattern]
+    if out.lower().endswith(".gif"):
+        palette = os.path.join(into, "palette.png")
+        subprocess.run([*common, "-vf", "palettegen=stats_mode=diff",
+                                 palette], check=True)
+        subprocess.run([*common, "-i", palette, "-lavfi",
+                                 "paletteuse=dither=bayer:bayer_scale=5:"
+                                 "diff_mode=rectangle", out], check=True)
+    elif out.lower().endswith(".webp"):
+        # Lossless because this is UI, not photography: lossy WebP rings
+        # around 8pt text, which is most of a screen recording.
+        subprocess.run([*common, "-loop", "0", "-lossless", "1",
+                                 "-compression_level", "4", out], check=True)
+    else:
+        # yuv420p and an even size, or the file will not play in a browser.
+        subprocess.run([*common, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                                 "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                                 "-movflags", "+faststart", out], check=True)
 
 
 def main(argv=None):
@@ -92,41 +130,28 @@ def main(argv=None):
     if crop and len(crop) != 4:
         raise SystemExit("record: --crop takes x1,y1,x2,y2")
 
+    if not shutil.which("ffmpeg"):
+        raise SystemExit("record: needs ffmpeg on PATH to encode the frames")
+
     secret = secret_from(args.secret_file)
-    with Remote(args.host, secret, port=args.port) as r:
-        started = time.time()
-        shots = frames(r, args.seconds, 1.0 / args.fps, crop)
-    took = time.time() - started
+    work = tempfile.mkdtemp(prefix="gremote-rec-")
+    try:
+        with Remote(args.host, secret, port=args.port) as r:
+            count, took = capture(r, args.seconds, 1.0 / args.fps, crop, work)
+        if not count:
+            raise SystemExit("record: no frames captured")
+        rate = count / took
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        # Play back at what was ACHIEVED times the speed asked for. A file
+        # claiming 5fps over frames taken at 2 plays at double speed and
+        # makes every pause look like a dropped frame.
+        encode(work, count, rate * args.speed, args.out)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
-    if not shots:
-        raise SystemExit("record: no frames captured")
-
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    rate = len(shots) / took
-    # The GIF plays at what was ACHIEVED, not what was asked for: a file
-    # whose frame delay claims 5fps while the frames were taken at 2 runs
-    # at double speed and makes every pause look like a dropped frame.
-    delay = max(20, round(1000.0 / (rate * args.speed)))
-    if args.out.lower().endswith(".webp"):
-        # Animated WebP renders in GitHub markdown through a plain
-        # `![](x.webp)` and keeps every colour, where a GIF has 256 and
-        # dithers the rest. Lossless because this is UI, not photography:
-        # lossy WebP puts ringing around 8pt text, which is most of what a
-        # screen recording of a text editor contains.
-        shots[0].save(args.out, save_all=True, append_images=shots[1:],
-                      duration=delay, loop=0, lossless=True, method=4)
-    else:
-        # 256 colours, and an adaptive palette rather than the web one: a
-        # Win98 desktop is mostly system greys plus one photograph, and the
-        # fixed palette dithers the greys into noise that triples the size.
-        quantized = [im.quantize(colors=256, method=2) for im in shots]
-        quantized[0].save(args.out, save_all=True,
-                          append_images=quantized[1:],
-                          duration=delay, loop=0, optimize=True)
-
-    print("%s  --  %d frames, %.1f fps captured, %d ms/frame playback, "
-          "%d bytes" % (args.out, len(shots), rate, delay,
-                        os.path.getsize(args.out)))
+    print("%s  --  %d frames, %.1f fps captured, %.1f fps playback, %d bytes"
+          % (args.out, count, rate, rate * args.speed,
+             os.path.getsize(args.out)))
 
 
 if __name__ == "__main__":
