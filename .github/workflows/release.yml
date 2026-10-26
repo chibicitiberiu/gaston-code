@@ -1,17 +1,23 @@
-# The release build: four artefacts, one tag.
+# The release build: five artefacts, one tag.
 #
 # WHAT THIS FILE IS AND IS NOT. Every piece of packaging logic lives in a
 # script that runs on a developer's machine -- tools/gen/mkrelease.sh,
-# mkwheel.sh and mkguide.py, which `make release` runs in order. This file
+# mkwheel.sh, mkgremote.sh and mkguide.py, which `make release` runs in
+# order. This file
 # installs the toolchains, calls them, and publishes what they produced.
 # When a release is wrong it is wrong in one of those scripts, where it can
 # be run again in four seconds instead of pushed and watched.
 #
-# THE FOUR:
+# THE FIVE:
 #   gaston-<ver>-win98.zip                       the Windows 98 GUI client
 #   gremote-<ver>-win98.zip                      the Win98 remote server
 #   gaston_code_bridge-<ver>-py3-none-any.whl    the host half, every host
+#   gremote_client-<ver>-py3-none-any.whl        what drives the Win98 server
 #   gaston-code-<ver>-guide.zip                  the user guide
+#
+# THE TWO WHEELS ARE THE TWO HOST HALVES OF TWO DIFFERENT PAIRS. The bridge
+# talks to GASTON.EXE on 7890; gremote-client talks to GREMOTE.EXE on 7401.
+# 0.4.0 shipped the second server with no client at all, which is BACKLOG 45.
 #
 # ONE WHEEL REPLACED THREE HOST ARTEFACTS -- an AppImage, a Windows zip and
 # a container image. All three existed because claude-agent-sdk's platform
@@ -168,9 +174,11 @@ jobs:
       # into a second one and asks it for --help -- including a check that
       # the SDK beside it is the source build and carries no CLI.
       - run: ./tools/gen/mkwheel.sh
+      - run: ./tools/gen/mkgremote.sh
 
-      # *.whl, NOT build/release/*. The build also emits an sdist, which is
-      # a build artefact rather than a fifth release asset.
+      # *.whl, NOT build/release/*. Each build also emits an sdist, which is
+      # a build artefact rather than a release asset. The glob takes both
+      # wheels.
       - uses: actions/upload-artifact@v7
         with:
           name: bridge
@@ -237,10 +245,10 @@ jobs:
           rm -f SHA256SUMS
           sha256sum ./* | sed 's|\./||' | tee SHA256SUMS
           ls -la
-          # Four assets, no more and no less. `merge-multiple: true`
+          # Five assets, no more and no less. `merge-multiple: true`
           # flattens every artifact into this one directory, so a name
           # colliding between two jobs would pick a winner in silence.
-          test "$(ls -1 | grep -vc '^SHA256SUMS$')" = 4
+          test "$(ls -1 | grep -vc '^SHA256SUMS$')" = 5
 
       # DRAFT AS WELL AS PRERELEASE, and draft is the one that matters.
       # `prerelease` publishes immediately with a label on it; `draft`
@@ -269,7 +277,8 @@ jobs:
             - `gremote-${{ needs.guest.outputs.version }}-win98.zip` — optional, and a separate decision: it opens a port that lets another machine drive this one.
 
             **On the modern machine**
-            - `gaston_code_bridge-${{ needs.guest.outputs.version }}-py3-none-any.whl` — Linux, macOS or Windows.
+            - `gaston_code_bridge-${{ needs.guest.outputs.version }}-py3-none-any.whl` — the bridge. Linux, macOS or Windows.
+            - `gremote_client-${{ needs.guest.outputs.version }}-py3-none-any.whl` — optional, and only if you took gremote above: it is what drives that server from here.
 
             ## Claude Code is a prerequisite
 
@@ -292,4 +301,4 @@ jobs:
             The guide explains both lines, and what to do when your Python
             is older than 3.11.
 
-            Checksums for all four assets are in `SHA256SUMS`.
+            Checksums for all five assets are in `SHA256SUMS`.

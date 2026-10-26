@@ -29,7 +29,7 @@ help:
 	@echo "test-fast   python tests except the Wine suites (~15s) -- the inner loop"
 	@echo "lint        ruff + mypy on the Python, and the guest RichEdit grep"
 	@echo "gates       run all verification gates together (check, test, lint)"
-	@echo "release     build all four release assets into build/release"
+	@echo "release     build all five release assets into build/release"
 	@echo "clean       remove build/ and tmp/ entirely"
 
 all: guest
@@ -177,11 +177,11 @@ test-fast: guest-gaston
 gates: check test lint
 	@echo "All verification gates passed."
 
-# THE FOUR ASSETS, IN ORDER, WITH ONE SUMS FILE OVER ALL OF THEM.
+# THE FIVE ASSETS, IN ORDER, WITH ONE SUMS FILE OVER ALL OF THEM.
 #
-# They come from three scripts that write into one directory, and the
+# They come from four scripts that write into one directory, and the
 # checksums have to cover everything or they are worse than nothing --
-# a SHA256SUMS listing three of four assets looks complete. mkrelease.sh
+# a SHA256SUMS listing four of five assets looks complete. mkrelease.sh
 # used to write one over `*.zip`, which after the wheel joined the release
 # would have hashed the guide and missed the wheel entirely, because .whl
 # is not *.zip. So no script writes it any more and this does, last.
@@ -195,11 +195,12 @@ gates: check test lint
 release:
 	./tools/gen/mkrelease.sh
 	./tools/gen/mkwheel.sh
+	./tools/gen/mkgremote.sh
 	$(PY) tools/gen/mkguide.py
 	@cd build/release && rm -f SHA256SUMS && \
 	  sha256sum ./* | sed 's|\./||' > SHA256SUMS && cat SHA256SUMS
 	@echo
-	@echo "release: four assets and SHA256SUMS in build/release"
+	@echo "release: five assets and SHA256SUMS in build/release"
 
 clean:
 	@$(MAKE) -C win clean

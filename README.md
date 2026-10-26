@@ -82,6 +82,7 @@ zip with the release so it can be read on the machine being set up.
 | `gaston-<ver>-win98.zip` | the GUI client, for the Windows 98 machine |
 | `gremote-<ver>-win98.zip` | optional: lets another machine drive that one. A separate download because it opens a port |
 | `gaston_code_bridge-<ver>-py3-none-any.whl` | the bridge, for Linux, macOS or Windows |
+| `gremote_client-<ver>-py3-none-any.whl` | what drives the gremote server, if you took it |
 
 **Claude Code is a prerequisite.** The bridge runs the copy on your
 machine rather than carrying its own, so install it and sign in first.
