@@ -51,13 +51,13 @@ against.
 
 ## 2. The bridge
 
-Download `gaston_code_bridge-0.4.1-py3-none-any.whl` from the
+Download `gaston_code_bridge-0.4.2-py3-none-any.whl` from the
 [releases page](https://github.com/chibicitiberiu/gaston-code/releases),
 then:
 
 ```
 export PIP_NO_BINARY=claude-agent-sdk
-pipx install gaston_code_bridge-0.4.1-py3-none-any.whl
+pipx install gaston_code_bridge-0.4.2-py3-none-any.whl
 ```
 
 On Windows use `set` instead of `export`. With `uv` instead of `pipx`,
@@ -81,7 +81,7 @@ install and nothing else on your system.
 ```
 uv tool install --python 3.13 \
     --no-binary-package claude-agent-sdk \
-    gaston_code_bridge-0.4.1-py3-none-any.whl
+    gaston_code_bridge-0.4.2-py3-none-any.whl
 ```
 
 That is the answer for a stable distribution whose system Python is
@@ -128,7 +128,7 @@ what was wrong with each.
 
 ## 4. The client
 
-Download `gaston-0.4.1-win98.zip`, copy it onto the Windows 98 machine
+Download `gaston-0.4.2-win98.zip`, copy it onto the Windows 98 machine
 and unpack it:
 
 ```
@@ -178,7 +178,7 @@ often you are asked; `Manual` asks every time, and is where to start.
 
 ## 6. gremote, which is optional
 
-`gremote-0.4.1-win98.zip` is a separate download and a separate
+`gremote-0.4.2-win98.zip` is a separate download and a separate
 decision. It lets another machine drive this one -- type into it, click
 in it, read its screen -- which is how this project is developed and
 tested.

@@ -21,7 +21,7 @@ name = "gaston-code-bridge"
 # win/app/resource.h, because that is what the linker stamps into the image,
 # and tools/gen/mkrelease.sh refuses a mismatch between it and the tag. These
 # two are released together and carry the same number.
-version = "0.4.1"
+version = "0.4.2"
 description = "The modern-host half of Gaston Code: runs Claude Code and speaks the wire protocol to a Windows 98 client"
 readme = "README.md"
 requires-python = ">=3.11"
