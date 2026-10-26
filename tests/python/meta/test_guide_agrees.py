@@ -96,6 +96,25 @@ def test_every_image_the_guide_shows_is_tracked(guide):
         assert os.path.isfile(path), name
 
 
+def test_the_guide_names_the_version_that_is_being_released(guide):
+    """The guide writes asset filenames out in full -- `pipx install
+    gaston_code_bridge-0.4.1-py3-none-any.whl` -- because a reader types
+    them. That makes it the ninth place the version lives, and the one
+    nobody thinks to bump: a guide telling people to install a file the
+    release page does not have is worse than no guide.
+    """
+    version = re.search(r'^version = "([^"]+)"',
+                        _read(os.path.join(conftest.REPO, "pyproject.toml")),
+                        re.M)
+    assert version, "pyproject.toml has no version"
+    stale = re.findall(r"gaston[-_][a-z_]*-(\d+\.\d+\.\d+)", guide)
+    assert stale, "the guide names no versioned asset at all any more"
+    wrong = sorted({v for v in stale if v != version.group(1)})
+    assert not wrong, (
+        "docs/GUIDE.md names version(s) %s but pyproject.toml says %s"
+        % (wrong, version.group(1)))
+
+
 def test_the_guide_install_line_asks_for_the_source_sdk(guide):
     """Without the variable the user downloads 219 MB of Claude Code they
     already have, and the SDK runs that copy instead of theirs -- which is
