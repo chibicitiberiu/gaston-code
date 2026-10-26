@@ -15,9 +15,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import ipaddress
 import logging
 import os
+import socket
 import tempfile
+from typing import NoReturn
 
 from .agent import permissions as perms
 from .agent import sessions as sesslist
@@ -72,6 +75,7 @@ __all__ = [
     "Session",
     "Transcript",
     "TranscriptView",
+    "binds_loopback",
     "init_logging",
     "load_config",
     "main",
@@ -664,6 +668,77 @@ def default_sync_root() -> str:
     return os.path.join(base, "work")
 
 
+#: What both ends ship with, and the reason this file refuses it.
+#: win/app/config.cpp:9 compiles the same string as the CLIENT's default
+#: and does not refuse it, so a client whose ini has lost its `secret=`
+#: line and a bridge with no GASTON_SECRET agree on a value published in
+#: this repository and connect, authenticated by nothing.
+#: win/remote/config.cpp:210-214 is the shape copied here: gremote refuses
+#: an absent secret AND refuses the shipped default, and has since it was
+#: written.
+DEV_SECRET = "dev-secret"
+
+
+def binds_loopback(host: str, port: int) -> bool:
+    """True when every address this bind would accept on is loopback.
+
+    RESOLVE, DO NOT PARSE. `ipaddress.ip_address` leaks in both directions
+    here, which is why this is eight lines instead of one. `--host ""` and
+    `--host 0` listen on every interface and raise ValueError; `localhost`
+    and `127.1` are loopback and raise ValueError too. So a parse-only test
+    refuses the two spellings that are safe and waves through the two that
+    are not.
+
+    `host or None` is what CPython itself passes to getaddrinfo for the
+    empty-string case, so this asks the question the way the bind will
+    answer it. A wildcard comes back as 0.0.0.0 or ::, neither loopback.
+    """
+    try:
+        infos = socket.getaddrinfo(host or None, port,
+                                   type=socket.SOCK_STREAM,
+                                   flags=socket.AI_PASSIVE)
+    except OSError:
+        # A name that does not resolve is not this function's problem to
+        # report: the bind is about to fail and say so in its own words.
+        # Answering "loopback" here declines to refuse, and nothing is
+        # exposed by a listener that never starts.
+        return True
+    for info in infos:
+        # str() because a sockaddr is typed `str | int` -- the port
+        # field of the same tuple is the int, this one never is.
+        addr = str(info[4][0]).split("%")[0]   # strip a v6 scope id
+        try:
+            if not ipaddress.ip_address(addr).is_loopback:
+                return False
+        except ValueError:
+            return False
+    return bool(infos)
+
+
+def _no_secret(host: str) -> NoReturn:
+    raise SystemExit(
+        "GASTON_SECRET is not set and --host %s accepts connections from "
+        "the network.\n\n"
+        "The secret is not one control among several -- it is the only "
+        "one. A peer that completes the handshake sends its own permission "
+        "modes in the PREFS frame, and the bridge honours them, so it can "
+        "declare a mode that allows bridge_shell and run commands on this "
+        "machine without a prompt.\n\n"
+        "Set GASTON_SECRET to something nobody can guess, and put the same "
+        "value in the client's gaston.ini. Or drop --host and serve "
+        "loopback only." % host)
+
+
+def _default_secret(host: str) -> NoReturn:
+    raise SystemExit(
+        "GASTON_SECRET is %r -- the placeholder shipped in this "
+        "repository -- and --host %s accepts connections from the "
+        "network.\n\n"
+        "Anyone who can reach that address can read that value on GitHub. "
+        "Set a secret of your own, and the same value in the client's "
+        "gaston.ini." % (DEV_SECRET, host))
+
+
 def load_config(args: argparse.Namespace) -> BridgeConfig:
     """Command line plus environment, validated, or `SystemExit`.
 
@@ -671,10 +746,15 @@ def load_config(args: argparse.Namespace) -> BridgeConfig:
     command line is readable by every process on the box.
     """
     secret = os.environ.get("GASTON_SECRET")
+    loopback = binds_loopback(args.host, args.port)
     if not secret:
-        secret = "dev-secret"
+        if not loopback:
+            _no_secret(args.host)
+        secret = DEV_SECRET
         log.warning("GASTON_SECRET unset; using %r (development only)",
                     secret)
+    elif secret == DEV_SECRET and not loopback:
+        _default_secret(args.host)
     # `--no-sync` is the only way to get the old behaviour, and it has to be
     # asked for: see `default_sync_root` for why "off" is the wrong default.
     sync_dir = args.sync_dir
