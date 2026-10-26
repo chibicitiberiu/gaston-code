@@ -40,9 +40,15 @@ class DummyGuest:
 
 
 def test_turn_verdict():
-    # Success, no degradation
-    assert turn_verdict(True, "", False, "success") == (True, "success")
+    # Success, no degradation -- but only if it actually said something.
+    # An ok turn that produced nothing is `no_output`, because that is the
+    # shape a Claude Code which is installed but not logged in takes, and
+    # it used to reach the guest as `done 0s $?` (BACKLOG 46).
+    assert turn_verdict(True, "", False, "success") == (False, "no_output")
     assert turn_verdict(True, "", True, "success") == (True, "success")
+    # A slash command is output-less by design and stays a success.
+    assert turn_verdict(True, "", False, "success", was_command=True) == (
+        True, "success")
 
     # Degraded and produced nothing -> reported as failure
     assert turn_verdict(True, "rate_limited", False, "success") == (False, "rate_limited")

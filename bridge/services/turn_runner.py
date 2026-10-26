@@ -26,7 +26,7 @@ log = logging.getLogger("bridge.turn")
 
 def turn_verdict(
     ok: bool, degraded: str, produced: bool, subtype: str,
-    stopped: bool = False,
+    stopped: bool = False, was_command: bool = False,
 ) -> tuple[bool, str]:
     """What the status bar should say when a turn ends.
 
@@ -41,6 +41,30 @@ def turn_verdict(
     tool call was cut short), so the guest can say "stopped" rather than
     report a failure the user asked for.
 
+    AND A TURN THAT SUCCEEDED WITHOUT SAYING ANYTHING IS NOT A SUCCESS.
+    win/app/turn.cpp already carries the argument for the `ok=0` shape of
+    this -- "a turn that came back not-ok is not a quiet success", written
+    after a user reported "i'm just getting interrupted with no message
+    nothing". This is the same failure wearing `ok=1`, and it was found by
+    pointing a client at a bridge whose Claude Code was installed but NOT
+    LOGGED IN (BACKLOG 46). `claude -v` exits 0 without credentials, so the
+    startup preflight passes; the session CONNECTS, so the guard at the
+    attach site never fires; and the turn then returns ok with no content
+    at all. The Windows 98 client showed the user their own message and
+    `done 0s $?` -- a turn reported complete, in no time, for no money.
+    They would retype it, or decide the model had nothing to say.
+
+    Reported not-ok, the guest already renders "The request did not
+    complete: no_output. Nothing was returned -- it may not have run at
+    all." That path has existed since 03.50, so this needs no protocol
+    change and no caps bump, and an older client handles it too.
+
+    EXCEPT FOR A SLASH COMMAND, which is output-less by design: `/compact`
+    and `/rename` change the session and print nothing, and the caller
+    below already explains that in a notice. Marking those failed would
+    make the common case cry wolf, which is the mistake the comment at the
+    foot of tests/python/agent/test_sdk_events.py was written about.
+
     Returns (ok, subtype). `subtype` is the raw string for the TURN frame;
     the guest maps it to a localized line.
     """
@@ -48,6 +72,8 @@ def turn_verdict(
         return False, "stopped"
     if degraded and not produced:
         return False, degraded
+    if ok and not produced and not was_command:
+        return False, "no_output"
     return ok, subtype
 
 
@@ -355,7 +381,8 @@ class TurnRunner:
         stopped, guest.turn_stopped = guest.turn_stopped, False
         guest.last_turn_stopped = stopped
         ok, subtype = turn_verdict(
-            turn.ok, degraded, guest.turn_produced, turn.subtype, stopped
+            turn.ok, degraded, guest.turn_produced, turn.subtype, stopped,
+            was_command,
         )
         if ok and was_command and not guest.turn_produced:
             await self.presentation.write_block(

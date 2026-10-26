@@ -103,11 +103,44 @@ def test_a_bridge_notice_does_not_count_as_the_model_answering():
     assert turn_verdict(True, "_SomeUnknownEvent", False, "success")[0] is False
 
 
-def test_an_undegraded_turn_keeps_the_sdk_verdict():
+def test_an_undegraded_turn_that_answered_keeps_the_sdk_verdict():
     from bridge.server import turn_verdict
-    assert turn_verdict(True, "", False, "success") == (True, "success")
+    assert turn_verdict(True, "", True, "success") == (True, "success")
     assert turn_verdict(False, "", True, "error_max_turns") == (
         False, "error_max_turns")
+
+
+def test_a_turn_that_succeeded_without_saying_anything_is_not_a_success():
+    """Found by pointing a client at a bridge whose Claude Code was
+    installed but NOT LOGGED IN (BACKLOG 46). `claude -v` exits 0 without
+    credentials so the preflight passes, the session CONNECTS so the guard
+    at the attach site never fires, and the turn returns ok with no content
+    at all. The Windows 98 client showed the user their own message and
+    `done 0s $?` -- complete, in no time, for no money.
+
+    This line used to assert the opposite, which is how the hole survived:
+    `turn_verdict(True, "", False, "success") == (True, "success")`.
+    """
+    from bridge.server import turn_verdict
+    assert turn_verdict(True, "", False, "success") == (False, "no_output")
+
+
+def test_a_slash_command_may_finish_without_output():
+    """`/compact` and `/rename` change the session and print nothing, and
+    the caller writes a notice saying so. Marking those failed would make
+    the common case cry wolf."""
+    from bridge.server import turn_verdict
+    assert turn_verdict(True, "", False, "success", was_command=True) == (
+        True, "success")
+
+
+def test_stopping_still_beats_the_no_output_rule():
+    """A turn the user stopped produced nothing by their own choice, and
+    `stopped` is the honest word for it -- not a failure they have to
+    wonder about."""
+    from bridge.server import turn_verdict
+    assert turn_verdict(True, "", False, "success", stopped=True) == (
+        False, "stopped")
 
 
 # --- the over-correction, and what replaced it -------------------------------
