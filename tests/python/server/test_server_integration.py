@@ -3379,3 +3379,40 @@ async def test_a_session_that_will_not_start_does_not_kill_the_attach(
     assert [f for f in frames if f.type == "READY"], [f.type for f in frames]
     assert harness.bridge.connection.guest.claude is None
     await harness.close(writer)
+
+
+async def test_opening_a_conversation_pushes_a_window_of_its_history(
+        harness, monkeypatch):
+    """Otherwise the transcript stays empty and the guest never knows.
+
+    Reported from the Athlon on 2026-10-27: clicking an older conversation
+    left "Loading conversation..." notices stacked under the empty-session
+    text, the page bar still reading "Page 1/1 (Live)", and -- the tell --
+    the status bar CLEAR, which only happens once SWITCHED has arrived. So
+    the switch finished, the blocks were in the paginator, and nothing had
+    told the guest to fetch them.
+
+    The history is written with notify=False on purpose: a conversation
+    restores as dozens of blocks and a frame per block is waste. But
+    SWITCHED stopped carrying a page total at stage 3b, the chat list's
+    handler only re-marks the row, and MainWindow::onSwitched only clears
+    the status -- so "the pages themselves arrive immediately afterwards"
+    was an expectation with nothing behind it.
+    """
+    from bridge.view import html as H
+
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+
+    history = [H.notice("an older turn"), H.notice("and another")]
+    frames = await _switch_to(harness, monkeypatch, r, w, "sid-older", history)
+    kinds = [f.type for f in frames]
+
+    assert "SWITCHED" in kinds, kinds
+    assert "RANGE" in kinds, (
+        "SWITCHED arrived but no window followed it, so the guest has an "
+        "empty transcript and no reason to ask: %s" % kinds)
+    assert kinds.index("RANGE") > kinds.index("SWITCHED"), (
+        "the window must follow SWITCHED -- before it, the guest has not "
+        "yet pointed its cache at the conversation the pages belong to")
+    await harness.close(w)
