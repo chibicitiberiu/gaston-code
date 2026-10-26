@@ -15,7 +15,8 @@ drives the Agent SDK rather than Claude Code.
 
 ![Gaston Code writing, compiling and running a Win32 app on a Windows 98 machine](docs/images/demo-athlon.webp)
 
-*Real hardware, 6x speed. Asked for a Fahrenheit/Celsius converter in C++
+*Real hardware, real time -- a 1998 machine works at the speed it works.
+Asked for a Fahrenheit/Celsius converter in C++
 with no mention of a compiler, the agent found Visual C++ 6.0 on the
 machine, wrote `tempconv.cpp` and a `build.bat` that sets the paths by hand
 "because vcvars32.bat doesn't work in this shell", compiled it, launched it,

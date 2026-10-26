@@ -119,9 +119,14 @@ def main(argv=None):
                     help="target; the link decides what is actually reached")
     ap.add_argument("--crop", default="",
                     help="x1,y1,x2,y2 -- a smaller box is a faster capture")
+    # DEFAULT 1.0, AND THINK BEFORE CHANGING IT. A sped-up clip of a 1998
+    # machine tells the viewer the wrong thing: the whole point is how long
+    # a Pentium actually takes, and fast-forward edits that out. Raise it
+    # only for something genuinely too long to watch, and say in the
+    # caption that you did.
     ap.add_argument("--speed", type=float, default=1.0,
-                    help="playback multiplier; 5 turns four minutes of "
-                         "building into a clip somebody will watch")
+                    help="playback multiplier; 1 is real time, which is "
+                         "almost always what you want here")
     ap.add_argument("--out", default="tmp/demo.gif",
                     help="extension picks the format: .gif or .webp")
     args = ap.parse_args(argv)
