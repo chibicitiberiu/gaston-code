@@ -146,6 +146,7 @@ class Session:
         cwd: str | None = None,
         model: str | None = None,
         effort: str | None = None,
+        cli_path: str | None = None,
         system_prompt=None,
         resume: str | None = None,
         fork: bool = False,
@@ -168,6 +169,11 @@ class Session:
         self._opts = ClaudeAgentOptions(
             cwd=cwd,
             model=model,
+            # Which Claude Code, decided once at startup by
+            # bridge.claudecli and carried here so the version in the
+            # startup line is the version that runs. None hands the
+            # question back to the SDK, which is what every test does.
+            cli_path=cli_path,
             # None, never "". OptionsService.effective_effort ends in `or ""`
             # so a per-guest setting can fall back to the CLI default, but an
             # empty string handed straight through made the CLI print

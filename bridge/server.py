@@ -22,6 +22,7 @@ import socket
 import tempfile
 from typing import NoReturn
 
+from . import claudecli
 from .agent import permissions as perms
 from .agent import sessions as sesslist
 from .agent.conversations import Conversations
@@ -81,6 +82,7 @@ __all__ = [
     "main",
     "notice",
     "parse_args",
+    "preflight",
     "prepare_state",
     "serve",
     "sesslist",
@@ -416,7 +418,25 @@ class Bridge:
     async def _post_attach(self, guest: GuestSession, is_reconnect: bool) -> None:
         reopen = self._conversation_to_reopen(guest, is_reconnect)
         if guest.claude is None and not guest.pending_resume and not reopen:
-            guest.claude = await self.session.make_session(guest)
+            # THE STARTUP PREFLIGHT CANNOT COVER THIS, so the attach path
+            # has to. `claude -v` exits 0 with no credentials at all, so
+            # "installed but not logged in" passes `claudecli.resolve` --
+            # and once a guide tells people to install Claude Code, that is
+            # at least as likely as "not installed". The CLI can also be
+            # removed, self-updated or de-authenticated while the bridge is
+            # running, which no startup check could ever see.
+            #
+            # Unguarded, every one of those was an exception out of the
+            # admission path: a traceback here and a dropped socket there,
+            # on a machine whose only diagnostic surface is a line of text.
+            # Attaching without a session is survivable -- the client shows
+            # the reason and the next message tries again.
+            try:
+                guest.claude = await self.session.make_session(guest)
+            except Exception as exc:
+                log.exception("could not start the agent session")
+                await self.presentation.write_block(guest, H.error(
+                    "Could not start Claude Code: " + str(exc)[:200]))
 
         await self.connection.send(guest, ready(
             guest.sess_id,
@@ -592,6 +612,13 @@ def _summarise(args: dict) -> str:
 # flat `main` hides it. Each does one thing and nothing before it needs to have
 # happened except what the signature asks for -- so `load_config` can be called
 # by a test, and `serve` can be called by anything that already has a config.
+#
+# ONE PRECONDITION, since `preflight` joined them: a caller that skips it gets
+# SDK-default CLI resolution rather than the resolved path, because
+# `config.claude_cli_path` is still None. That is deliberate for the suite,
+# which builds `Bridge(...)` directly and never spawns a real CLI -- but an
+# embedder serving real traffic wants `preflight(config)` first, or the
+# startup line that says which Claude Code is in play does not exist.
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -624,6 +651,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--sync-state", default=None,
                     help="where the baseline lives; MUST be outside --sync-dir, "
                          "or it is mirrored to the guest and recurses")
+    ap.add_argument("--claude-cli", default=None,
+                    help="path to the Claude Code executable (default: find it)")
     ap.add_argument("--link-bps", type=float, default=None,
                     help="assume this link speed in bytes/sec (testing: "
                          "5000 simulates dialup and forces the slow-link path)")
@@ -781,6 +810,7 @@ def load_config(args: argparse.Namespace) -> BridgeConfig:
         model=args.model,
         effort=args.effort,
         link_bps=args.link_bps,
+        claude_cli_path=args.claude_cli,
         sync_dir=sync_dir,
         sync_state=args.sync_state,
     )
@@ -789,6 +819,31 @@ def load_config(args: argparse.Namespace) -> BridgeConfig:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     return config
+
+
+def preflight(config: BridgeConfig) -> None:
+    """Settle which Claude Code runs, before anything can connect.
+
+    NOT IN `load_config`, and the reason is concrete:
+    tests/python/server/test_sync_default.py calls
+    `load_config(parse_args(argv))` directly and seven tests do. Resolving
+    in there would spawn a subprocess in each, find no `claude` on the slim
+    CI this release creates, and raise SystemExit -- breaking the contract
+    stated above this block, that load_config can be called by a test.
+
+    So it is a phase of its own in `main`, beside the `prepare_state` that
+    already occupies exactly this slot. It still fails before the socket
+    opens, and it leaves `load_config` pure.
+
+    The resolved path is written BACK onto the config, which is how every
+    SDK spawn in the process ends up on the copy the startup line named --
+    rather than each one searching again and possibly disagreeing.
+    """
+    try:
+        found = claudecli.resolve(config.claude_cli_path)
+    except claudecli.ClaudeCliError as exc:
+        raise SystemExit(str(exc)) from exc
+    config.claude_cli_path = found.path
 
 
 def prepare_state(config: BridgeConfig) -> None:
@@ -824,6 +879,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     init_logging(args.verbose)
     config = load_config(args)
+    preflight(config)
     prepare_state(config)
     try:
         asyncio.run(serve(config))

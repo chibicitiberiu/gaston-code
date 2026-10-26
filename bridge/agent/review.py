@@ -139,8 +139,17 @@ def action_text(tool_name: str, args: dict, finding: str = "",
 
 async def review(guest, tool_name: str, args: dict,
                  preview_text: str = "", *, finding: str = "",
-                 category: str = "") -> tuple[bool, str]:
-    """(approved, reason). Never raises; any failure is (False, why)."""
+                 category: str = "",
+                 cli_path: str | None = None) -> tuple[bool, str]:
+    """(approved, reason). Never raises; any failure is (False, why).
+
+    `cli_path` is threaded from the config rather than read from a module
+    global. A global would be mutable cross-test state, and if it were ever
+    left unset -- an embedder calling `serve()`, a test importing this
+    module first -- this reviewer would silently fall back to the SDK's own
+    search while the main session used the resolved path. The mechanism
+    chosen to stop the two disagreeing would be the thing that made them.
+    """
     requests: list[str] = [str(r) for r in
                            getattr(guest, "recent_prompts", ()) or ()]
     first = str(getattr(guest, "first_prompt", "") or "")
@@ -153,7 +162,8 @@ async def review(guest, tool_name: str, args: dict,
     if preview_text:
         parts.append(prompts.text("review.touches", preview=preview_text))
     try:
-        text = await asyncio.wait_for(_ask("\n\n".join(parts)), REVIEW_S)
+        text = await asyncio.wait_for(
+            _ask("\n\n".join(parts), cli_path), REVIEW_S)
     except Exception as exc:
         log.warning("reviewer failed: %s", exc)
         return False, prompts.text("review.unreachable")
@@ -165,11 +175,12 @@ async def review(guest, tool_name: str, args: dict,
     return False, reason or prompts.text("review.unsure")
 
 
-def _options():
+def _options(cli_path: str | None = None):
     from claude_agent_sdk import ClaudeAgentOptions
     return ClaudeAgentOptions(model=REVIEW_MODEL,
                               system_prompt=prompts.text("review.system"),
                               tools=[], allowed_tools=[], max_turns=1,
+                              cli_path=cli_path,
                               setting_sources=[], strict_mcp_config=True)
 
 
@@ -187,17 +198,17 @@ class _Warm:
     def __init__(self) -> None:
         self._next: asyncio.Task | None = None
 
-    def _start(self) -> asyncio.Task:
+    def _start(self, cli_path: str | None = None) -> asyncio.Task:
         async def connect():
             from claude_agent_sdk import ClaudeSDKClient
-            client = ClaudeSDKClient(options=_options())
+            client = ClaudeSDKClient(options=_options(cli_path))
             await client.connect()
             return client
         return asyncio.ensure_future(connect())
 
-    async def ask(self, prompt: str) -> str:
+    async def ask(self, prompt: str, cli_path: str | None = None) -> str:
         from claude_agent_sdk import AssistantMessage, TextBlock
-        task, self._next = self._next or self._start(), None
+        task, self._next = self._next or self._start(cli_path), None
         client = await task
         try:
             await client.query(prompt)
@@ -208,28 +219,28 @@ class _Warm:
                             if isinstance(b, TextBlock)]
             return "\n".join(out)
         finally:
-            self._next = self._start()
+            self._next = self._start(cli_path)
             try:
                 await client.disconnect()
             except Exception:                     # it answered; that is all
                 log.debug("reviewer disconnect", exc_info=True)
 
-    def warm(self) -> None:
+    def warm(self, cli_path: str | None = None) -> None:
         """Start the next reviewer now, if none is starting."""
         if self._next is None:
-            self._next = self._start()
+            self._next = self._start(cli_path)
 
 
 _WARM = _Warm()
 
 
-def warm() -> None:
+def warm(cli_path: str | None = None) -> None:
     """Called when a mode that checks is chosen, so the first check of the
     session does not pay the cold start either."""
     with contextlib.suppress(RuntimeError):       # no running loop (tests)
-        _WARM.warm()
+        _WARM.warm(cli_path)
 
 
-async def _ask(prompt: str) -> str:
+async def _ask(prompt: str, cli_path: str | None = None) -> str:
     """One answer from a model with no tools. Separate so tests replace it."""
-    return await _WARM.ask(prompt)
+    return await _WARM.ask(prompt, cli_path)

@@ -229,7 +229,10 @@ def test_the_reviewer_approves_only_on_safe(monkeypatch):
     from bridge.agent import review
 
     async def said(text):
-        async def _ask(prompt):
+        # cli_path arrived with the bring-your-own-Claude-Code change:
+        # review.review threads it through to the reviewer rather than
+        # reading a module global, so the real `_ask` takes it too.
+        async def _ask(prompt, cli_path=None):
             return text
         return _ask
 
@@ -247,7 +250,7 @@ def test_the_reviewer_approves_only_on_safe(monkeypatch):
 def test_a_reviewer_that_fails_hands_it_to_the_person(monkeypatch):
     from bridge.agent import review
 
-    async def boom(prompt):
+    async def boom(prompt, cli_path=None):
         raise RuntimeError("no network")
     monkeypatch.setattr(review, "_ask", boom)
     approved, why = asyncio.run(review.review(

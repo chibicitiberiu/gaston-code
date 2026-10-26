@@ -21,6 +21,11 @@ class BridgeConfig:
     model: str | None = None
     effort: str | None = None
     link_bps: float | None = None
+    #: Which Claude Code to run, when the user named one with --claude-cli.
+    #: None means "search", which `bridge.claudecli.resolve` does once at
+    #: startup -- the resolved path is written back here by `preflight`, so
+    #: every SDK spawn in the process uses the copy the startup line named.
+    claude_cli_path: str | None = None
     sync_dir: str | None = None
     sync_state: str | None = None
     sync_sweep_s: float = 120.0

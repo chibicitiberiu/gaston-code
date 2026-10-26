@@ -319,7 +319,7 @@ class OptionsService:
                 return
         log.info("execution mode -> %s", new.id)
         if any(new.value(c) == policy.CHECK for c in new.values):
-            review.warm()
+            review.warm(getattr(self.config, "claude_cli_path", None))
         if self.write_block:
             await self.write_block(guest, H.notice(
                 new.label + ": " + policy.summary(new)))

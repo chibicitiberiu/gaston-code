@@ -117,6 +117,9 @@ class PermissionService:
                 fetch=lambda kind, path: self._fetch(guest, kind, path),
                 on_mode=((lambda: self.on_mode(guest))
                          if self.on_mode else None),
+                cli_path=getattr(
+                    getattr(self.workspace, "config", None),
+                    "claude_cli_path", None),
             )
         return guest.perms
 

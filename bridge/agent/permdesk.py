@@ -116,8 +116,11 @@ class PermissionDesk:
 
     def __init__(self, guest, *, cwd: str | None, write_block, send,
                 spawn, ensure_work=None, preview=None, fetch=None,
-                on_mode=None) -> None:
+                on_mode=None, cli_path: str | None = None) -> None:
         self._guest = guest
+        #: Which Claude Code the CHECK reviewer spawns, threaded from the
+        #: config so it cannot differ from the one the session runs.
+        self._cli_path = cli_path
         #: `async (kind, path) -> names | bytes | None`: what the classifier
         #: asks to see before it can judge a program ("ls" a folder, "get"
         #: a script). None: anything it asks for is doubt.
@@ -391,7 +394,8 @@ class PermissionDesk:
                     self._guest, tool_name, args, preview_text,
                     finding="; ".join(h.rule for h in verdict.hits),
                     category=(prompts.text(f"policy.cat.{cat}")
-                              if cat else ""))
+                              if cat else ""),
+                    cli_path=self._cli_path)
                 if approved:
                     log.info("checker approved %s: %s", tool_name, why)
                     await self._write_block(H.notice(prompts.text(

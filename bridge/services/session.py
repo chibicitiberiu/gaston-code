@@ -422,6 +422,11 @@ class SessionService:
         s = session_cls(
             tools=[t for t in TOOLS if policy.offered(mode, t)],
             cwd=work_dir,
+            # The same guard the two reads above use, and for the same
+            # reason: a bare self.workspace.config raises on every
+            # workspace fake in the suite.
+            cli_path=(getattr(self.workspace.config, "claude_cli_path", None)
+                      if hasattr(self.workspace, "config") else None),
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
