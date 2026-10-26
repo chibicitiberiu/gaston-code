@@ -42,8 +42,8 @@ rather than a copy of Franquin's art.
 ## Layout
 
 ```
-docs/       ARCHITECTURE.md, REMOTE.md (gremote), PERMISSIONS.md,
-            UIAUTOMATION.md, FORKED.md
+docs/       GUIDE.md (how to set it up), ARCHITECTURE.md, REMOTE.md
+            (gremote), PERMISSIONS.md, UIAUTOMATION.md, FORKED.md
 make/       ow.mk -- shared Open Watcom rules
 win/        the guest executables -- GASTON.EXE, GREMOTE.EXE, GUPDATE.EXE
 bridge/     Python: Agent SDK, MCP tools, pagination, markdown, compression
@@ -66,29 +66,42 @@ one directory name that said neither.
 
 Released builds are on the
 [releases page](https://github.com/chibicitiberiu/gaston-code/releases).
-You need two things: the client for the Windows 98 machine, and the bridge
-for a modern one.
+**[docs/GUIDE.md](docs/GUIDE.md) is how to set it up**, and it ships as a
+zip with the release so it can be read on the machine being set up.
 
 | | |
 |---|---|
+| `gaston-code-<ver>-guide.zip` | the guide. Start here |
 | `gaston-<ver>-win98.zip` | the GUI client, for the Windows 98 machine |
 | `gremote-<ver>-win98.zip` | optional: lets another machine drive that one. A separate download because it opens a port |
-| `gaston-bridge-<ver>-x86_64.AppImage` | the bridge, Linux, one file |
-| `gaston-bridge-<ver>-windows-x64.zip` | the bridge, Windows, carries its own Python |
-| `docker pull chibicitiberiu/gaston-bridge` | the bridge, container, amd64 and arm64 |
+| `gaston_code_bridge-<ver>-py3-none-any.whl` | the bridge, for Linux, macOS or Windows |
 
-Claude Code itself is inside all three bridge artefacts — the agent SDK's
-platform wheels carry it — so there is nothing extra to install. You do
-have to supply credentials: `ANTHROPIC_API_KEY`, or an authenticated
-`~/.claude`. Each zip has a README with the install steps.
+**Claude Code is a prerequisite.** The bridge runs the copy on your
+machine rather than carrying its own, so install it and sign in first.
+Then install the bridge with the agent SDK built from source:
+
+```sh
+export PIP_NO_BINARY=claude-agent-sdk
+pipx install gaston_code_bridge-<ver>-py3-none-any.whl
+```
+
+Without that variable pip takes the SDK's platform wheel, which carries
+its own copy of Claude Code -- 219 MB of the SDK's 220 -- and the SDK
+prefers it to yours. The guide explains it, and what to do when your
+Python is older than 3.11.
+
+One wheel covers more ground than the three artefacts it replaced (a
+Linux AppImage, a Windows zip and a container image), because every
+compiled dependency publishes wheels for all three platforms and macOS
+never had an artefact at all.
 
 ## Status
 
-Phases 0 through 5 are built and demonstrated on real hardware; phase 6 is
-part-built. As of 2026-10-23 it runs on a physical Pentium 200 MMX under
-Windows 98 SE, installed over the network, driving a tool-calling turn end
-to end. What is left is a clean install by somebody who is not the author,
-and publishing. See `notes/PROGRESS.md` and `notes/ROADMAP.md`.
+**Alpha.** It runs on a physical Pentium 200 MMX under Windows 98 SE,
+installed over the network, driving tool-calling turns end to end. What
+has not happened yet is a clean install by somebody who is not the
+author, which is the thing an alpha is for. See `notes/PROGRESS.md` and
+`notes/ROADMAP.md`.
 
 ## Build
 
@@ -103,13 +116,11 @@ Requires Open Watcom 2.0 at `/usr/bin/watcom` (override with `WATCOM=`).
 `.github/workflows/release.yml` pins a dated build and installs it from
 `ow-snapshot.tar.xz`, which is the easiest way to get one.
 
-To build the release artefacts locally — the same scripts CI calls:
+To build all four release assets locally — the same scripts CI calls,
+in the order they have to run, with one `SHA256SUMS` over the result:
 
 ```sh
-./tools/gen/mkrelease.sh    # the two Windows 98 zips
-./tools/gen/mkappimage.sh   # the bridge, Linux AppImage
-./tools/gen/mkwinzip.sh     # the bridge, Windows zip (builds on Linux)
-docker build -f docker/Dockerfile -t gaston-bridge .
+make release
 ```
 
 ## Licence

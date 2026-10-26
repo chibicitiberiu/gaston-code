@@ -970,8 +970,7 @@ RetroAI/
   tools/                      # vm/ gen/ check/
   vm/                         # disk images and run scripts (gitignored)
   gremote/                    # host-side Python driver for gremote.exe
-  docker/                     # the bridge's container image
-  docs/                       # published: how it works
+  docs/                       # published: how it works, and GUIDE.md
   notes/                      # working state, gitignored
 ```
 

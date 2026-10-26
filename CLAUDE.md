@@ -5,7 +5,10 @@ to a Python bridge (`bridge/`) on Linux over one TCP socket.
 
 `docs/` is published and describes how the system works:
 `ARCHITECTURE.md`, `REMOTE.md` (gremote), `PERMISSIONS.md`,
-`UIAUTOMATION.md`, `FORKED.md`.
+`UIAUTOMATION.md`, `FORKED.md`. `GUIDE.md` is the one written for a user
+rather than a maintainer -- it is the source for the release's guide zip
+(`tools/gen/mkguide.py`), and `tests/python/meta/test_guide_agrees.py`
+pins the facts it shares with `mkrelease.sh`.
 
 `notes/` is gitignored working state, not published. `notes/PROGRESS.md` is
 what is built and why decisions were made. `notes/BACKLOG.md` is what was
