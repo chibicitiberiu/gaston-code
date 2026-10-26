@@ -993,6 +993,38 @@ void MainWindow::layout(HWND hwnd)
             m_toolbar->move_top(cx, GUTTER, cw);
         }
     }
+
+    /* EVERY CHILD REPAINTS, because after a resize some of them do not.
+     *
+     * Measured on the P200 (BACKLOG 44): maximise the window and Send and
+     * Stop draw as plain white rectangles, or the permission bar's Allow
+     * and Deny draw as empty ones -- while MSAA reports all of them present
+     * at their correct rectangles with their correct text, and a click at
+     * those coordinates is accepted. Minimising and restoring repaints them
+     * correctly every time, which says the controls were never wrong, only
+     * unpainted.
+     *
+     * Three things line up to cause it. The class sets no CS_HREDRAW /
+     * CS_VREDRAW (registerClass below memsets WNDCLASSA and never sets
+     * `style`), so a resize invalidates only the newly exposed region;
+     * WS_CLIPCHILDREN -- correctly -- keeps the parent from painting under
+     * any child, so every child's rectangle is clipped out of what little
+     * the parent does repaint; and the MoveWindow calls above are then the
+     * only thing left that could invalidate a child. The ones that fail are
+     * the ones that move furthest: input.cpp positions Send and Stop from
+     * the FULL window width, so a 640->800 maximise slides them ~165px.
+     *
+     * NOT CS_HREDRAW | CS_VREDRAW, which is the textbook answer and is
+     * almost certainly why it was never set: that repaints the whole client
+     * area on every step of a drag-resize, and redrawing the transcript
+     * continuously is exactly the cost this codebase spends effort avoiding
+     * on a 200MHz machine.
+     *
+     * No RDW_ERASE and no RDW_UPDATENOW either. This posts WM_PAINT and
+     * lets the message loop coalesce it, so a drag-resize costs one repaint
+     * per settled size rather than one per mouse move, and nothing paints a
+     * background the children are about to cover anyway. */
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 
 /* CreateWindowExA can fail, and on this platform that was never a theoretical
