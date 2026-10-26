@@ -58,17 +58,36 @@ Source = "https://github.com/chibicitiberiu/gaston-code"
 gaston-bridge = "bridge.server:main"
 
 [tool.setuptools]
+# FALSE, or `packages` does not mean what it says. The default is true,
+# which sweeps anything in the sdist that sits under a listed package in as
+# package DATA -- so bridge/devtools, deliberately left out of `packages`
+# below, arrived in the wheel anyway as files belonging to `bridge`. The
+# .toml runtime data is named explicitly in `package-data`, so nothing here
+# depends on the sweep.
+include-package-data = false
 # Named rather than discovered. Auto-discovery at this repository's root
 # finds `tests`, `tools`, `research` and `vm` and tries to package them.
+# NOT `bridge.devtools`, and that is a security decision rather than a
+# tidiness one. fakegui.py is a complete wire client with PREFS and
+# PERMREPLY -- which is to say, exactly the tool needed to send a
+# policy-rewriting handshake to a bridge whose secret somebody has. Both
+# ends of that are now closed (bridge/server.py refuses an outward bind on
+# the shipped secret), but shipping the client for it in every install
+# would be handing it out prebuilt.
+#
+# NOT `gremote` either: it is the HOST-side driver for the guest's remote
+# server, used from a checkout by tests and research, and a bridge user has
+# no call for it. It is also a plain top-level name, which is the more
+# collidable of the two.
+#
+# Both stay in the source tree. This drops them from the INSTALL.
 packages = [
     "bridge",
     "bridge.agent",
-    "bridge.devtools",
     "bridge.files",
     "bridge.services",
     "bridge.view",
     "bridge.wire",
-    "gremote",
     # No __init__.py in either, so they are not importable packages and
     # nothing imports them -- but setuptools sees a directory of files under
     # a package and warns "would be ignored" on every build unless they are

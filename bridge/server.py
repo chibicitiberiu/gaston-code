@@ -622,14 +622,14 @@ def _summarise(args: dict) -> str:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    # GASTON_PROG exists for the release launchers. Run as `-m bridge.server`
-    # argparse takes the program name from sys.argv[0] and prints
-    # "usage: server.py", which is right in a checkout and wrong in an
-    # AppImage or a Windows zip, where the thing the user typed is called
-    # gaston-bridge. The launchers set it; nothing else does, and unset it
-    # behaves exactly as before.
+    # NAMED, not taken from sys.argv[0]. Run as `-m bridge.server` argparse
+    # prints "usage: server.py", which is the one name nobody types. This
+    # used to be read from a GASTON_PROG environment variable that the
+    # AppImage and Windows-zip launchers set; both are gone, the wheel's
+    # console script is the only way users start this, and it is called
+    # gaston-bridge.
     ap = argparse.ArgumentParser(description="Gaston Code bridge",
-                                 prog=os.environ.get("GASTON_PROG") or None)
+                                 prog="gaston-bridge")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use the retro-segment interface, not 0.0.0.0")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
