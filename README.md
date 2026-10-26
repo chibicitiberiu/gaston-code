@@ -13,6 +13,13 @@ but its client is a console REPL; [retro-agent](https://github.com/voidsstr/retr
 has a complete guest tool surface and a hardened protocol but is headless and
 drives the Agent SDK rather than Claude Code.
 
+![Gaston Code on a Pentium 200, running a VBScript it just wrote](docs/images/p200-converter.png)
+
+*A Pentium 200 MMX under Windows 98 SE. Asked for a Fahrenheit/Celsius
+converter with a UI, the agent wrote `TEMPCONV.VBS`, launched it, drove its
+dialogs from the keyboard to check both directions, and reported what it had
+not tested. The dialog in front is that script running.*
+
 ## Why "Gaston Code"?
 
 The name follows Claude Code. Claude is a French name, and Gaston is another
