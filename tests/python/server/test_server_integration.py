@@ -3351,3 +3351,31 @@ async def test_cr_cr_lf_from_a_text_mode_program_is_one_line_break(harness):
     assert "Reply one" in text and "Reply two" in text
     assert "\r\r" not in text
     await harness.close(writer)
+
+
+async def test_a_session_that_will_not_start_does_not_kill_the_attach(
+        harness, monkeypatch):
+    """The failure the startup preflight cannot catch.
+
+    `claude -v` exits 0 with no credentials, so a Claude Code that is
+    installed but NOT SIGNED IN passes bridge.claudecli.resolve() and then
+    fails where the session is actually built -- in `_post_attach`, which
+    had no `try` and no caller with one. The user got a traceback on the
+    bridge and a dropped socket on the Windows 98 machine. The same thing
+    happens if the CLI is removed or de-authenticated while the bridge is
+    running, which no startup check could ever see.
+
+    Attaching without a session is survivable: READY still goes out, the
+    reason is written into the transcript, and the next message tries
+    again.
+    """
+    async def refuse(_guest):
+        raise RuntimeError("Invalid API key / not logged in")
+
+    monkeypatch.setattr(harness.bridge.session, "make_session", refuse)
+
+    reader, writer = await harness.connect()
+    frames = await harness.recv_until(reader, {"READY"})
+    assert [f for f in frames if f.type == "READY"], [f.type for f in frames]
+    assert harness.bridge.connection.guest.claude is None
+    await harness.close(writer)

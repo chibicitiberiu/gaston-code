@@ -184,10 +184,11 @@ def candidates() -> list[tuple[str, str]]:
 def _dedupe(found: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """One entry per real file, keeping the FIRST spelling of it.
 
-    The symlink, not its target. A native install repoints
-    ~/.local/bin/claude at each self-update -- this box has five versions
-    under ~/.claude/share/versions -- so pinning the resolved file would
-    freeze a long-running bridge to a version the user has since replaced.
+    The symlink, not its target. A native install makes
+    ~/.local/bin/claude a symlink into ~/.local/share/claude/versions/ and
+    repoints it on each self-update -- the author's box has five versions
+    there -- so pinning the resolved file would freeze a long-running
+    bridge to a version the user has since replaced.
     realpath is only the identity used to notice that `which` and the
     location list found the same file twice, which here they do.
     """
