@@ -4,9 +4,9 @@
 # source tree and has no build step". That was true and is still how it is
 # developed: nothing below changes `make lint`, `make test-fast` or running
 # `python -m bridge.server` out of a checkout. What it adds is the ability to
-# INSTALL the bridge, which the three host-side release artefacts all need --
-# the AppImage and the Windows zip embed a Python and install into it, and
-# `gaston-bridge` as a console script is what each one's launcher calls.
+# INSTALL the bridge, which is now the whole host-side release: one
+# py3-none-any wheel, installed with pipx or `uv tool install`, with
+# `gaston-bridge` as the console script the user runs.
 #
 # The guest side is not here and never will be: it is C++98 built by Open
 # Watcom, packaged by tools/gen/mkrelease.sh.
@@ -30,17 +30,23 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Tiberiu Chibici" }]
 keywords = ["claude", "windows98", "retrocomputing", "agent"]
 
-# Deliberately the same two direct dependencies as requirements.in, and no
-# pins here. A LIBRARY that pins its transitives is a library that cannot be
-# installed beside anything; the pinning belongs in requirements.txt, which
-# is what the release builds install from.
+# The same two direct dependencies as requirements.in. A LIBRARY that pins
+# its transitives cannot be installed beside anything, so the transitives
+# stay unpinned here -- but this is an APPLICATION that lives in its own
+# pipx venv, and the SDK is not a transitive. It gets an upper bound.
 #
-# claude-agent-sdk carries Claude Code: one wheel per platform, each with
-# the CLI as package data, which the SDK prefers to anything on PATH. So
-# every artefact built from this has it already, and none of them needs the
-# user to install it -- see requirements.in.
+# THE BOUND IS LOAD-BEARING, not tidiness. bridge/claudecli.py warns when
+# the user's Claude Code is older than the SDK was built against, reading
+# claude_agent_sdk._cli_version.__cli_version__. Unbounded, that threshold
+# is whatever PyPI served the morning each user installed: 0.2.153 says
+# 2.1.273 and 0.2.174 says 2.1.310, so two people months apart get
+# different answers from the same release.
+#
+# Claude Code itself is NOT carried. The SDK's platform wheels bundle it;
+# the install line in docs/GUIDE.md asks for the sdist instead, so the CLI
+# the user installed is the one that runs. See requirements.in.
 dependencies = [
-    "claude-agent-sdk>=0.2.153",
+    "claude-agent-sdk>=0.2.153,<0.3",
     "pillow>=12.0",
 ]
 

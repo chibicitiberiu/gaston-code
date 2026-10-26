@@ -1,8 +1,15 @@
-# The bridge's runtime, plus what the gates need. `make lint` and
-# `make test-fast` run from this; a release build does not.
+# The bridge's runtime, plus what the gates and the release scripts need.
+# `make lint`, `make test-fast` and `make release` run from this.
 -r requirements.in
 
 mypy==2.3.1
 pytest==9.1.1
 pytest-asyncio==1.4.0
 ruff==0.16.9
+
+# The release scripts. `build` is what tools/gen/mkwheel.sh calls and
+# `markdown` is what tools/gen/mkguide.py renders with -- both were in this
+# box's .venv and in neither lock, so a runner copying the install line
+# would have died on `No module named build`.
+build==1.3.0
+markdown==3.10

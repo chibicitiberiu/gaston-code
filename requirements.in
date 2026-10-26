@@ -1,23 +1,25 @@
 # What the BRIDGE needs at runtime, and nothing else.
 #
-# Two direct dependencies. Everything else in requirements.txt is a
-# transitive of these two, pinned by `uv pip compile` so a release build is
-# reproducible rather than "whatever the index served that morning".
+# Two direct dependencies. Everything else in the lock is a transitive of
+# these two, pinned by `uv pip compile` so a build is reproducible rather
+# than "whatever the index served that morning".
 #
-# claude-agent-sdk DOES bring Claude Code with it, which is worth knowing
-# before packaging anything: it publishes one wheel per platform (86-98 MB
-# each) and every one carries the CLI as package data at
-# claude_agent_sdk/_bundled/claude[.exe], 228-231 MB unpacked. Its
-# `_find_bundled_cli()` is tried BEFORE the shutil.which fallback, so that
-# copy is what runs. The sdist carries no binary, so an install from source
-# does fall back to a CLI on PATH -- nothing in this project installs that
-# way, and each release build asserts the bundled binary is present rather
-# than assuming either answer.
+# INSTALL THE SDK FROM SOURCE, NOT FROM ITS WHEEL. claude-agent-sdk
+# publishes one wheel per platform and each carries Claude Code itself as
+# package data at claude_agent_sdk/_bundled/claude[.exe] -- 219 MB of the
+# SDK's 220. `_find_bundled_cli()` is tried BEFORE shutil.which, so that
+# copy is what runs, and nothing we ship can be smaller than it.
 #
-# That one fact is most of the size of all three host artefacts, and getting
-# it backwards cost a container image 279 MB of a second, unused copy and
-# gave two launchers a guard that refused to start over a CLI they already
-# contained.
+# The sdist carries no binary (0.3 MB), so `--no-binary claude-agent-sdk`
+# gives a pure-Python SDK that falls through to the CLI the user installed.
+# That is the shape every artefact now has, and it is why Claude Code is a
+# prerequisite rather than cargo.
+#
+# THE OPTION CANNOT LIVE IN THIS FILE. `uv pip compile` accepts a
+# `--no-binary` line here without complaint and silently drops it from the
+# output; a lock file has no way to say "take this one from source". So it
+# is set where installs actually happen: the user's install line (see
+# docs/GUIDE.md) and PIP_NO_BINARY in CI.
 claude-agent-sdk==0.2.153
 
 # Lazily imported, in two places: bridge/wire/uiview.py renders the guest's
