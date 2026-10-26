@@ -19,7 +19,7 @@ BUILD_DIRS = build tmp
 # default goal -- `make` printed the help and built nothing.
 .DEFAULT_GOAL := all
 
-.PHONY: all guest guest-checks check wine-smoke lint pylint-py test test-fast gates clean help
+.PHONY: all guest guest-checks check wine-smoke lint pylint-py test test-fast gates release clean help
 
 help:
 	@echo "all         build the Win98 guest binary"
@@ -29,6 +29,7 @@ help:
 	@echo "test-fast   python tests except the Wine suites (~15s) -- the inner loop"
 	@echo "lint        ruff + mypy on the Python, and the guest RichEdit grep"
 	@echo "gates       run all verification gates together (check, test, lint)"
+	@echo "release     build all four release assets into build/release"
 	@echo "clean       remove build/ and tmp/ entirely"
 
 all: guest
@@ -175,6 +176,30 @@ test-fast: guest-gaston
 # and static syntax lints.
 gates: check test lint
 	@echo "All verification gates passed."
+
+# THE FOUR ASSETS, IN ORDER, WITH ONE SUMS FILE OVER ALL OF THEM.
+#
+# They come from three scripts that write into one directory, and the
+# checksums have to cover everything or they are worse than nothing --
+# a SHA256SUMS listing three of four assets looks complete. mkrelease.sh
+# used to write one over `*.zip`, which after the wheel joined the release
+# would have hashed the guide and missed the wheel entirely, because .whl
+# is not *.zip. So no script writes it any more and this does, last.
+#
+# NOT REPRODUCIBLE, and that is recorded rather than implied: `zip -X`
+# drops extra fields but the central directory keeps the DOS date and
+# time, mkrelease stages through mktemp so mtimes differ on every run, and
+# setuptools takes a wheel's date_time from file mtimes. Two builds of the
+# same commit give different hashes. The sums file says what IS in a given
+# release, not that two people can produce it byte for byte.
+release:
+	./tools/gen/mkrelease.sh
+	./tools/gen/mkwheel.sh
+	$(PY) tools/gen/mkguide.py
+	@cd build/release && rm -f SHA256SUMS && \
+	  sha256sum ./* | sed 's|\./||' > SHA256SUMS && cat SHA256SUMS
+	@echo
+	@echo "release: four assets and SHA256SUMS in build/release"
 
 clean:
 	@$(MAKE) -C win clean

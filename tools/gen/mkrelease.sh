@@ -18,17 +18,22 @@
 #                             be driven, which is a separate decision with
 #                             separate consequences -- it opens a port
 #
-# The host-side Python is NOT in either. It has three artefacts of its own
-# (a Windows zip, a Linux AppImage and a container image) because it runs on
-# a modern machine, and bundling it with a 1998 binary would mean a person
-# downloading 80 MB of CPython to copy a 262 KB exe onto a floppy.
+# The host-side Python is NOT in either. It is one wheel of its own
+# (tools/gen/mkwheel.sh) because it runs on a modern machine, and bundling
+# it with a 1998 binary would mean downloading CPython to copy a 262 KB exe
+# onto a floppy.
 #
-# NOTHING HERE WRITES A SECRET. Both INIs ship with the placeholder the
-# programs refuse: gremote's `load()` fails startup on `secret=change-me`
-# with "still the shipped default; set one" (win/remote/config.cpp:213), and
-# that refusal is the feature. A release that booted straight into listening
-# on 0.0.0.0 with a secret printed in a README would be worse than no
-# release.
+# NOTHING HERE WRITES A SECRET, and the two programs answer that
+# differently -- which the previous version of this comment got wrong by
+# claiming both refuse their placeholder. Only gremote does: `load()` fails
+# startup on `secret=change-me` with "still the shipped default; set one"
+# (win/remote/config.cpp:210-214). GASTON.EXE has no such check; it simply
+# dials out with whatever it was given and the bridge answers
+# `[bad_secret] rejected`, which is a clear failure but not a refusal to
+# start. The bridge holds the other end: it refuses to serve a non-loopback
+# address with no GASTON_SECRET or with the shipped default
+# (bridge/server.py). A release that booted straight into listening on
+# 0.0.0.0 with a secret printed in a README would be worse than no release.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -115,8 +120,16 @@ for f in gaston.exe gremote.exe gupdate.exe; do
   [ -f "$BIN/$f" ] || { echo "mkrelease: $BIN/$f missing" >&2; exit 1; }
 done
 
-rm -rf "$OUT"
+# ITS OWN TWO FILES, NOT THE DIRECTORY. This used to be `rm -rf "$OUT"`,
+# which was right while mkrelease was the only thing writing there. It is
+# not any more: mkwheel.sh and mkguide.py write the other two assets into
+# the same directory, and no ordering of the three saves them -- run first,
+# mkrelease deletes nothing and its sums cover two of four; run last, it
+# deletes the other two. So it removes what it is about to replace and
+# leaves everything else alone. `make release` is what runs all three and
+# writes one SHA256SUMS over the result.
 mkdir -p "$OUT"
+rm -f "$OUT/gaston-$VERSION-win98.zip" "$OUT/gremote-$VERSION-win98.zip"
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -203,7 +216,7 @@ INSTALL
      tools_detect.ini has no 8.3 form at all -- if your transfer shortened
      it to TOOLSDET.INI, rename it back.
 
-  2. Edit C:\GASTON\\gaston.ini. Set [bridge] host to the machine running
+  2. Edit C:\GASTON\gaston.ini. Set [bridge] host to the machine running
      the bridge, and [bridge] secret to the same string that machine has in
      GASTON_SECRET. The shipped values connect to nothing on purpose.
 
@@ -364,7 +377,7 @@ INSTALL
      build sent over the network; without it in the same directory, that is
      refused and a new version means a walk to this machine.
 
-  2. Edit C:\GREMOTE\\gremote.ini. At minimum set [server] secret to
+  2. Edit C:\GREMOTE\gremote.ini. At minimum set [server] secret to
      something long and random, and [server] allow to the address of the
      one machine that should be able to connect. GREMOTE.EXE REFUSES TO
      START while the secret is the shipped placeholder, and says so in
@@ -434,13 +447,18 @@ GREMOTE_FILES=(GREMOTE.EXE GUPDATE.EXE gremote.ini GREMOTE.REG
 ( cd "$G" && zip -q -X "$OUT/gaston-$VERSION-win98.zip"   "${GASTON_FILES[@]}" )
 ( cd "$R" && zip -q -X "$OUT/gremote-$VERSION-win98.zip" "${GREMOTE_FILES[@]}" )
 
-for z in "$OUT"/*.zip; do
+# NAMED, not globbed. `"$OUT"/*.zip` would print the guide zip's contents
+# as though this script had built it.
+for z in "$OUT/gaston-$VERSION-win98.zip" "$OUT/gremote-$VERSION-win98.zip"; do
   echo
   echo "$(basename "$z")  --  $(stat -c%s "$z") bytes"
   unzip -l "$z" | sed -n '4,$p' | head -n -2 | sed 's/^/    /'
 done
 
+# NO SHA256SUMS HERE. It used to write one over `*.zip`, which after the
+# wheel joined the release would have hashed the guide zip and silently
+# MISSED the wheel -- `.whl` is not `*.zip`. A sums file that covers some
+# of the assets is worse than none, because it looks complete. `make
+# release` writes one over everything, once, last.
 echo
-( cd "$OUT" && sha256sum ./*.zip | sed 's|\./||' > SHA256SUMS && cat SHA256SUMS )
-echo
-echo "release $VERSION in $OUT"
+echo "guest $VERSION in $OUT"

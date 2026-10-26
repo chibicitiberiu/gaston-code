@@ -1,24 +1,29 @@
-# The release build: five artefacts, one tag.
+# The release build: four artefacts, one tag.
 #
 # WHAT THIS FILE IS AND IS NOT. Every piece of packaging logic lives in a
 # script that runs on a developer's machine -- tools/gen/mkrelease.sh,
-# mkappimage.sh, mkwinzip.sh and docker/Dockerfile. This file installs the
-# toolchains, calls them, and publishes what they produced. When a release
-# is wrong it is wrong in one of those scripts, where it can be run again in
-# four seconds instead of pushed and watched.
+# mkwheel.sh and mkguide.py, which `make release` runs in order. This file
+# installs the toolchains, calls them, and publishes what they produced.
+# When a release is wrong it is wrong in one of those scripts, where it can
+# be run again in four seconds instead of pushed and watched.
 #
-# THE FIVE:
-#   gaston-<ver>-win98.zip               the Windows 98 GUI client
-#   gremote-<ver>-win98.zip              the Windows 98 remote-control server
-#   gaston-bridge-<ver>-x86_64.AppImage  the host half, Linux
-#   gaston-bridge-<ver>-windows-x64.zip  the host half, Windows
-#   <dockerhub>/gaston-bridge:<ver>      the host half, container
+# THE FOUR:
+#   gaston-<ver>-win98.zip                       the Windows 98 GUI client
+#   gremote-<ver>-win98.zip                      the Win98 remote server
+#   gaston_code_bridge-<ver>-py3-none-any.whl    the host half, every host
+#   gaston-code-<ver>-guide.zip                  the user guide
 #
-# EVERYTHING IS BUILT ON UBUNTU, including the Windows zip. The bridge is
-# pure Python plus wheels, so `pip install --platform win_amd64
-# --only-binary :all:` fetches the Windows wheels perfectly well from Linux
-# -- see the header of mkwinzip.sh. No Windows runner means no build that
-# can fail for reasons nobody here can reproduce.
+# ONE WHEEL REPLACED THREE HOST ARTEFACTS -- an AppImage, a Windows zip and
+# a container image. All three existed because claude-agent-sdk's platform
+# wheels bundle Claude Code itself, so shipping the bridge meant shipping a
+# quarter of a gigabyte. Installed from the SDK's sdist it is 449 KB of
+# pure Python that runs the user's own CLI, and one py3-none-any wheel
+# covers Linux, macOS and Windows -- more ground than the three covered
+# between them, since macOS never had an artefact at all.
+#
+# SHA256SUMS IS WRITTEN HERE AND NOWHERE ELSE. No build script writes one,
+# because each would cover only its own share and the merge would pick a
+# winner in silence. The one below covers all four.
 name: release
 
 on:
@@ -77,8 +82,16 @@ jobs:
         with:
           python-version: '3.13'
 
+      # PIP_NO_BINARY, so the gates run against the shape users get. With
+      # the SDK's platform wheel installed, `_find_bundled_cli()` wins on
+      # every machine the code is tested on and the bring-your-own-CLI path
+      # is never once exercised by the people changing it -- which is
+      # exactly how the bundled CLI came to be documented backwards in four
+      # files. No runner has a `claude`, so the resolver's tests use fakes.
       - name: Install the gates' dependencies
         run: pip install -r requirements-dev.txt
+        env:
+          PIP_NO_BINARY: claude-agent-sdk
 
       # Ruff, mypy, the RichEdit grep, and the Python suite except the Wine
       # runs. wine-smoke is deliberately not here: it is eight minutes and a
@@ -113,16 +126,24 @@ jobs:
       # image caps and the NT-only import audit -- and writes the two zips.
       - run: ./tools/gen/mkrelease.sh --version "${{ steps.ver.outputs.version }}"
 
+      # NAMED, not `*.zip`. The guide is a zip too, and an
+      # extension-only glob here would sweep up anything else that ever
+      # lands in this directory -- while `merge-multiple: true` below
+      # flattens every artifact into one dist/, where a duplicate would
+      # pick a winner silently.
       - uses: actions/upload-artifact@v7
         with:
           name: guest
-          path: build/release/*.zip
+          path: |
+            build/release/gaston-${{ steps.ver.outputs.version }}-win98.zip
+            build/release/gremote-${{ steps.ver.outputs.version }}-win98.zip
           if-no-files-found: error
 
   # ------------------------------------------------------------------------
-  # The host side's two file artefacts. Both built here; see the note about
-  # the Windows zip at the top of this file.
-  bridge-files:
+  # The bridge, as one wheel. No version input: the wheel is named from
+  # pyproject.toml, and the guest job already refuses a tag that disagrees
+  # with it -- so this job cannot be wrong about a number it never reads.
+  bridge:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -131,95 +152,60 @@ jobs:
         with:
           python-version: '3.13'
 
-      # python-appimage pulls and extracts the manylinux2014 image to get its
-      # Python, so a container runtime has to be there. ubuntu-latest has
-      # docker; this fails loudly rather than mysteriously if that changes.
-      - name: Check for a container runtime
-        run: docker version --format '{{.Server.Version}}'
+      # mkwheel.sh makes its own venv for `build`, then installs the wheel
+      # into a second one and asks it for --help -- including a check that
+      # the SDK beside it is the source build and carries no CLI.
+      - run: ./tools/gen/mkwheel.sh
 
-      - name: squashfs tools
-        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
-
-      # Each script asserts that the SDK's bundled Claude Code is really in
-      # what it produced -- the AppImage by reading its squashfs, the zip by
-      # stating the file. Both artefacts' documentation promises the user
-      # there is nothing to install, so neither may ship without it.
-      - run: ./tools/gen/mkappimage.sh
-      - run: ./tools/gen/mkwinzip.sh
-
+      # *.whl, NOT build/release/*. The build also emits an sdist, which is
+      # a build artefact rather than a fifth release asset.
       - uses: actions/upload-artifact@v7
         with:
-          name: bridge-files
-          path: |
-            build/release/*.AppImage
-            build/release/*.zip
+          name: bridge
+          path: build/release/*.whl
           if-no-files-found: error
 
   # ------------------------------------------------------------------------
-  # The container image. Pushed only for a real tag, and only when the
-  # Docker Hub credentials exist -- a fork without them builds the image,
-  # proves it builds, and stops there.
-  bridge-image:
+  # The user guide. Deliberately NOT `needs: guest`: making the guide wait
+  # on a 150 MB Open Watcom install, `make lint` and `make test-fast` is bad
+  # enough, but it would also mean an image cap moving kills the guide build
+  # for a reason the guide has nothing to do with.
+  guide:
     runs-on: ubuntu-latest
-    needs: guest
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v4
-
-      # Through `env` and not `${{ }}` inside the script: an expression is
-      # substituted into the shell script file the runner writes to disk, so
-      # interpolating a secret there puts it in a file. As an environment
-      # variable it is only ever a variable the script tests.
-      - name: Do we have somewhere to push?
-        id: have
-        env:
-          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          if [ -n "$TOKEN" ]; then
-            echo "push=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "push=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no DOCKERHUB_TOKEN, so the image is built and not pushed"
-          fi
-
-      - uses: docker/login-action@v4
-        if: steps.have.outputs.push == 'true' && github.ref_type == 'tag'
+      - uses: actions/setup-python@v7
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          python-version: '3.13'
 
-      # DOCKERHUB_IMAGE as a repository variable, so a fork pushes to its
-      # own namespace without editing this file.
-      - name: Image name
-        id: img
-        run: |
-          IMG="${{ vars.DOCKERHUB_IMAGE }}"
-          [ -n "$IMG" ] || IMG="chibicitiberiu/gaston-bridge"
-          echo "name=$IMG" >> "$GITHUB_OUTPUT"
+      # Its two dependencies directly, not requirements-dev.txt. Copying
+      # the guest job's line would pull claude-agent-sdk and, under
+      # PIP_NO_BINARY, build it from source -- so the guide could fail to
+      # build because of the agent SDK, which it has nothing to do with.
+      - run: pip install markdown==3.10 pillow==12.3.0
 
-      # linux/arm64 as well as amd64 -- the bridge is pure Python and
-      # claude-agent-sdk publishes a manylinux aarch64 wheel with its own
-      # bundled CLI, so an arm64 image is a real one rather than emulation.
-      - uses: docker/build-push-action@v7
+      - run: python3 tools/gen/mkguide.py
+
+      - uses: actions/upload-artifact@v7
         with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ steps.have.outputs.push == 'true' && github.ref_type == 'tag' }}
-          tags: |
-            ${{ steps.img.outputs.name }}:${{ needs.guest.outputs.version }}
-            ${{ steps.img.outputs.name }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          name: guide
+          path: build/release/*-guide.zip
+          if-no-files-found: error
 
   # ------------------------------------------------------------------------
-  # One release, five artefacts, one checksum file. Tags only: a manual run
+  # One release, four artefacts, one checksum file. Tags only: a manual run
   # has already uploaded everything as workflow artefacts, which is the
   # point of being able to run it manually.
+  #
+  # ONE CAVEAT ABOUT THE DRY RUN, because it is not obvious and it is
+  # expensive to learn by doing: the workflow_dispatch ref picker accepts
+  # TAGS as well as branches, so dispatching on v0.4.0 sets
+  # `ref_type == 'tag'` and publishes for real. The dry run is only a dry
+  # run from a branch.
   release:
     runs-on: ubuntu-latest
-    needs: [guest, bridge-files, bridge-image]
+    needs: [guest, bridge, guide]
     if: github.ref_type == 'tag'
     steps:
       - uses: actions/download-artifact@v8
@@ -231,32 +217,67 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          # Each build script writes its own SHA256SUMS for local use; they
-          # would collide on merge and each would cover only its own share.
+          # No build script writes one any more. mkrelease.sh used to, over
+          # `*.zip`, which after the wheel joined the release would have
+          # hashed the guide and silently MISSED the wheel -- .whl is not
+          # *.zip. A sums file covering three of four assets is worse than
+          # none, because it looks complete.
           rm -f SHA256SUMS
           sha256sum ./* | sed 's|\./||' | tee SHA256SUMS
           ls -la
+          # Four assets, no more and no less. `merge-multiple: true`
+          # flattens every artifact into this one directory, so a name
+          # colliding between two jobs would pick a winner in silence.
+          test "$(ls -1 | grep -vc '^SHA256SUMS$')" = 4
 
+      # DRAFT AS WELL AS PRERELEASE, and draft is the one that matters.
+      # `prerelease` publishes immediately with a label on it; `draft`
+      # holds the release unlisted until somebody has read the asset list
+      # and the generated notes. For the first run of a workflow that has
+      # never executed -- make lint and make test-fast have never run on a
+      # runner, and the Open Watcom cache key has never been populated --
+      # that is the difference between a mistake you fix and a mistake
+      # people have already downloaded.
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
+          draft: true
+          prerelease: true
           body: |
+            First alpha. Read the guide before anything else.
+
             ## Downloads
+
+            **Start here**
+            - `gaston-code-${{ needs.guest.outputs.version }}-guide.zip` — how to set the whole thing up. Open `guide.html`; it reads in Internet Explorer 5 on the Windows 98 machine as well as in a modern browser.
 
             **On the Windows 98 machine**
             - `gaston-${{ needs.guest.outputs.version }}-win98.zip` — the GUI client. This is the one you want.
             - `gremote-${{ needs.guest.outputs.version }}-win98.zip` — optional, and a separate decision: it opens a port that lets another machine drive this one.
 
-            **On the modern machine** — one of these three, and you need one:
-            - `gaston-bridge-${{ needs.guest.outputs.version }}-x86_64.AppImage` — Linux, one file.
-            - `gaston-bridge-${{ needs.guest.outputs.version }}-windows-x64.zip` — Windows, carries its own Python.
-            - `docker pull ${{ vars.DOCKERHUB_IMAGE || 'chibicitiberiu/gaston-bridge' }}:${{ needs.guest.outputs.version }}`
+            **On the modern machine**
+            - `gaston_code_bridge-${{ needs.guest.outputs.version }}-py3-none-any.whl` — Linux, macOS or Windows.
 
-            Claude Code is already inside all three bridge artefacts — the
-            agent SDK's platform wheels carry it. You still have to provide
-            credentials: `ANTHROPIC_API_KEY`, or an authenticated
-            `~/.claude`.
+            ## Claude Code is a prerequisite
 
-            Each zip has a README with the install steps. Checksums are in
-            `SHA256SUMS`.
+            The bridge runs the copy on your machine rather than carrying
+            its own, so install it first and sign in:
+
+            ```
+            curl -fsSL https://claude.ai/install.sh | bash
+            ```
+
+            Then install the bridge with the SDK built from source, or you
+            get a second 219 MB copy of Claude Code that is used in
+            preference to yours:
+
+            ```
+            export PIP_NO_BINARY=claude-agent-sdk
+            pipx install gaston_code_bridge-${{ needs.guest.outputs.version }}-py3-none-any.whl
+            ```
+
+            The guide explains both lines, and what to do when your Python
+            is older than 3.11.
+
+            Checksums for all four assets are in `SHA256SUMS`.
