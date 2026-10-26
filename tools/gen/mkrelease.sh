@@ -413,6 +413,25 @@ INSTALL
      "listen: on 0.0.0.0:7401". If the port only answers after you log on,
      step 4 did not take.
 
+WHAT DRIVES IT, WHICH IS NOT IN THIS ZIP
+  This is the server half only. The client is a Python package called
+  `gremote`, which runs on the other machine:
+
+      from gremote import Remote
+
+      with Remote("192.168.1.50", secret="...") as r:
+          print(r.hello["os"])
+          r.exec(r"C:\WINDOWS\COMMAND\CSCRIPT.EXE //nologo x.vbs")
+
+  It is NOT yet published as a package of its own -- that is planned as
+  `gremote-client`. For now it lives in the project repository, under
+  `gremote/`, and needs the `bridge` package beside it:
+
+      https://github.com/chibicitiberiu/gaston-code
+
+  A plain TCP client speaking the protocol in docs/REMOTE.md also works;
+  the Python package is a convenience, not the interface.
+
 FILES
   GREMOTE.EXE   the server.
   GUPDATE.EXE   installs a build sent over the network. Keep it alongside.

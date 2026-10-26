@@ -110,6 +110,19 @@ TITLE = "Setting up Gaston Code"
 #: 640x480 IE5 window, and the <pre> note above says what that costs.
 MAX_CODE_COLS = 72
 
+#: MEASURED IN IE 5.0 ON THE P200, 2026-10-27: the screenshots are
+#: 800x600 full-desktop captures, and a maximised IE5 window on an 800x600
+#: screen has about 780px of content width once the vertical scrollbar is
+#: taken out. So a natural-size image overflowed and put a horizontal
+#: scrollbar under the WHOLE page -- the text still wrapped and stayed
+#: readable, but every page carried a scrollbar it did not need.
+#:
+#: Scaled with width/height attributes rather than cropped. Cropping to
+#: just the client window would be sharper, but the desktop around it is
+#: part of what the shot is saying -- this runs on Windows 98 -- and these
+#: are illustrations, not reference material.
+MAX_IMG_W = 700
+
 
 def read_guide():
     return (REPO / "docs" / "GUIDE.md").read_text(encoding="utf-8")
@@ -153,6 +166,9 @@ def size_images(html, images_dir):
             raise SystemExit("mkguide: %s is referenced and missing" % src)
         with Image.open(path) as im:
             w, h = im.size
+        if w > MAX_IMG_W:
+            h = round(h * MAX_IMG_W / float(w))
+            w = MAX_IMG_W
         return '<img%s width="%d" height="%d"' % (m.group("rest"), w, h)
 
     return re.sub(r'<img(?P<rest>[^>]*?src="(?P<src>[^"]+)"[^>]*?)',
