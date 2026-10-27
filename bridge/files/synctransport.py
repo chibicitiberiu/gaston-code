@@ -135,10 +135,31 @@ class SyncTransport:
             off = 0
             while True:
                 piece = data[off:off + CHUNK]
+                # THE PREFIX GOES ON THE FIRST CHUNK ONLY, which is the
+                # guest's own contract: win/sync/syncrpc.cpp says "Only the
+                # FIRST chunk carries the prefix; later chunks are all
+                # data" and skips `g_put.data_off` bytes when off == 0 and
+                # nothing otherwise.
+                #
+                # Sending it every time made the guest write the path
+                # bytes INTO the file at every chunk boundary, and its
+                # ChunkSink (win/fs/xfer.cpp) counts what it wrote -- so
+                # `m_received` ran ahead of the offset we were sending by
+                # len(prefix) per chunk, and `off != m_received` refused
+                # the third chunk as out_of_order.
+                #
+                # Which means the sync layer could not push a file bigger
+                # than one chunk: 8K-16K corrupted and failed its CRC at
+                # SYNCPUTEND, and anything past 16K was refused outright.
+                # Found on the Athlon 2026-10-27, where a 22,437-byte
+                # screcord.cpp was refused twice and the agent worked
+                # around it with put_file -- which is why it looked like a
+                # filename problem rather than a size one.
+                body = (prefix + piece) if off == 0 else piece
                 await self._guest.link.send(
                     self._guest,
                     Frame("SYNCPUT", {"id": sid, "total": str(len(data)),
-                                      "off": str(off)}, prefix + piece),
+                                      "off": str(off)}, body),
                     compress=True)
                 off += CHUNK
                 if off >= len(data):
