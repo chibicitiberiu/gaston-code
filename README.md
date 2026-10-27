@@ -24,6 +24,15 @@ and typed 212 into it to check. 97 seconds, $0.13. The banner across the top
 is the client telling you the desktop is being driven, with the key that
 stops it.*
 
+![Gaston Code building a Win32 polygon drawer in Auto mode](docs/images/demo-polygon.webp)
+
+*A second one, also real time. In Auto mode the agent works in its own
+folder without asking, and a second model checks anything outside it. Asked
+for a program that draws a polygon with as many sides as you type, it wrote
+`polygon.cpp` and a `build.bat`, compiled, and described what it had made --
+3 to 360 sides, redrawing as you type, rejecting anything else. 30 seconds,
+$0.11.*
+
 ![Gaston Code on a Pentium 200, running a VBScript it just wrote](docs/images/p200-converter.png)
 
 *The same question on a Pentium 200 MMX with 32 MB, which has no C compiler:
