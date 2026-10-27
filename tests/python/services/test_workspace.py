@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from bridge.files import ignores as I
 from bridge.services.config import BridgeConfig
 from bridge.services.workspace import WorkspaceService
 
@@ -349,3 +350,49 @@ async def test_a_long_work_root_that_still_has_room_gets_its_folder():
     g = _guest("Sky colour", home=deep)
     await ws.name_work_dir(g)
     assert g.work_guest == deep + "\\SKYCOLOU"
+
+
+async def test_a_new_folder_is_made_with_its_ignore_list_in_it(tmp_path):
+    """The list reaches the user because it is a file in their own work
+    folder, not a constant in a program on the other side of the link."""
+    ws = _ws(sync_dir=str(tmp_path))
+    g = _guest("Sky colour")
+    await ws.name_work_dir(g)
+    text = (tmp_path / "SKYCOLOU" / ".gastonignore").read_text()
+    assert text.splitlines()[0] == I.MARKER
+    assert "\ntemp/\n" in text
+
+
+async def test_the_notice_says_where_the_list_is_only_when_one_was_written():
+    """No mirror, nothing written, and nothing to point at -- a notice
+    naming a file that is not there is worse than no notice."""
+    wrote = []
+
+    async def block(guest, html):
+        wrote.append(html)
+
+    ws = _ws(write_block=block)
+    await ws.name_work_dir(_guest("Sky colour"))
+    assert wrote and "gastonignore" not in str(wrote[0])
+
+
+async def test_the_notice_points_at_the_list_when_there_is_one(tmp_path):
+    wrote = []
+
+    async def block(guest, html):
+        wrote.append(html)
+
+    ws = _ws(sync_dir=str(tmp_path), write_block=block)
+    await ws.name_work_dir(_guest("Sky colour"))
+    assert wrote and ".gastonignore" in str(wrote[0])
+
+
+async def test_a_folder_that_already_has_a_list_keeps_it(tmp_path):
+    """`on_setwork` points at a folder the user chose, which may be a tree
+    they already ignore things in."""
+    (tmp_path / "SKYCOLOU").mkdir()
+    (tmp_path / "SKYCOLOU" / ".gastonignore").write_text("mine/\n")
+    ws = _ws(sync_dir=str(tmp_path))
+    g = _guest("Sky colour")
+    await ws.name_work_dir(g)
+    assert (tmp_path / "SKYCOLOU" / ".gastonignore").read_text() == "mine/\n"

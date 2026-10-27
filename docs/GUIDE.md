@@ -176,6 +176,11 @@ The first time it wants to do something, you get a bar:
 Allow or Deny. The mode menu at the bottom of the window changes how
 often you are asked; `Manual` asks every time, and is where to start.
 
+Each conversation gets a folder on the machine, and its contents are
+mirrored to the bridge host. What is left out of that mirror is listed in
+`.gastonignore`, a file in that same folder -- **Work > Edit ignore list**
+opens it in Notepad. Any `.gitignore` you put there is read as well.
+
 ## 6. gremote, which is optional
 
 `gremote-0.4.3-win98.zip` is a separate download and a separate

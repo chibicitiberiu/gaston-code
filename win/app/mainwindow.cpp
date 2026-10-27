@@ -1770,6 +1770,53 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
 
+        case IDM_WORKIGN: {
+            /* The ignore list is a FILE in the work directory, seeded
+             * there by the bridge, so it rides the mirror like anything
+             * else and an edit made here goes back the same way -- one
+             * sync pass later, not instantly.
+             *
+             * Notepad by name rather than the "open" verb: Windows 98 has
+             * no handler registered for .gastonignore and would answer
+             * with the Open With dialog. */
+            const char *cur = rc_workdir_current();
+            char path[MAX_PATH];
+            char quoted[MAX_PATH + 4];
+            const char *sep;
+            if (!cur || !*cur)
+                return 0;
+            sep = cur[strlen(cur) - 1] == '\\' ? "" : "\\";
+            /* Checked, not logged: a truncated path would open Notepad on
+             * some other file, or on nothing, and say it had worked. */
+            if (!rc_strf(path, sizeof path, "%s%s.gastonignore", cur, sep)) {
+                MessageBoxA(hwnd, cur, "The path to the ignore list is too "
+                            "long for this machine", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+            if (GetFileAttributesA(path) == 0xFFFFFFFF) {
+                MessageBoxA(hwnd, path, "Not here yet -- the ignore list "
+                            "arrives with the next file sync",
+                            MB_OK | MB_ICONINFORMATION);
+                return 0;
+            }
+            rc_strf(quoted, sizeof quoted, "\"%s\"", path);
+            {
+                typedef HINSTANCE (WINAPI *PFN_SHEXEC)(HWND, LPCSTR, LPCSTR,
+                                                       LPCSTR, LPCSTR, INT);
+                Dll sh(LoadLibraryA("shell32.dll"));
+                PFN_SHEXEC go = sh.valid()
+                    ? (PFN_SHEXEC)GetProcAddress(sh.get(), "ShellExecuteA")
+                    : NULL;
+                if (go)
+                    go(hwnd, "open", "notepad.exe", quoted, NULL,
+                       SW_SHOWNORMAL);
+                else
+                    MessageBoxA(hwnd, path, "Ignore list",
+                                MB_OK | MB_ICONINFORMATION);
+            }
+            return 0;
+        }
+
         case IDM_ATTFILE: {
             typedef BOOL (WINAPI *PFN_GETOPENFILENAMEA)(LPOPENFILENAMEA);
             OPENFILENAMEA ofn;

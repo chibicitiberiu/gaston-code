@@ -225,6 +225,12 @@ bool OptionMenus::frame(rc_frame *f)
                 AppendMenuA(m_workMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuA(m_workMenu, !m_curWork.empty() ? MF_STRING : MF_GRAYED,
                             IDM_WORKOPEN, "&Open work directory");
+                /* The ignore list lives IN the work directory, as a
+                 * file the bridge seeds there, so it is greyed for the
+                 * same reason Open is: there is no folder to look in
+                 * until this conversation has one. */
+                AppendMenuA(m_workMenu, !m_curWork.empty() ? MF_STRING : MF_GRAYED,
+                            IDM_WORKIGN, "Edit &ignore list");
                 AppendMenuA(m_workMenu, MF_STRING, IDM_WORKSET,
                             "Change &work directory...");
             } else if (strcmp(kind, "command") == 0 && m_commands.size() < MAX_OPTS) {

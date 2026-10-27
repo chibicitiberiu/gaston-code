@@ -147,3 +147,54 @@ def test_what_the_agent_builds_still_comes_back(tmp_path):
     assert n("screcord.exe") is False
     assert n("build/app.exe") is False
     assert n("screcord.obj") is True
+
+
+def test_seed_writes_the_defaults_where_someone_can_read_them(tmp_path):
+    """The list stops being a hidden guess by being a file in the folder.
+
+    The module's own note -- "a long list of guesses is how something the
+    user actually wanted stops syncing with no report" -- is only answered
+    if the list is somewhere the user can see it.
+    """
+    assert I.seed(str(tmp_path)) is True
+    text = (tmp_path / ".gastonignore").read_text()
+    assert text.splitlines()[0] == I.MARKER
+    for pat in I.DEFAULTS:
+        assert f"\n{pat}\n" in text
+
+
+def test_seed_never_touches_a_file_somebody_else_wrote(tmp_path):
+    (tmp_path / ".gastonignore").write_text("mine/\n")
+    assert I.seed(str(tmp_path)) is False
+    assert (tmp_path / ".gastonignore").read_text() == "mine/\n"
+
+
+def test_a_line_deleted_from_a_seeded_list_is_really_deleted(tmp_path):
+    """The whole point of writing the defaults out. Applying DEFAULTS over
+    the top of the file would make the edit do nothing, which is worse
+    than never having shown the list."""
+    I.seed(str(tmp_path))
+    p = tmp_path / ".gastonignore"
+    p.write_text("".join(ln + "\n" for ln in p.read_text().splitlines()
+                         if ln != "temp/"))
+    n = I.load(str(tmp_path))
+    assert n("temp/big.bin") is False
+    assert n("tmp/big.bin") is True, "the other scratch rule is untouched"
+    assert n(".git/config") is True, "and the rest of the list still holds"
+
+
+def test_a_hand_written_list_still_gets_the_defaults(tmp_path):
+    """Without the marker there is no reason to think the file carries the
+    built-in set, and silently dropping `.git/` from somebody's own
+    `.gastonignore` is the one direction this must never fail in."""
+    (tmp_path / ".gastonignore").write_text("mine/\n")
+    n = I.load(str(tmp_path))
+    assert n(".git/config") is True
+    assert n("mine/x") is True
+
+
+def test_ours_are_not_negotiable_either_way(tmp_path):
+    """ALWAYS is applied whether or not the file is ours: `*.gaston-tmp` is
+    a half-written transfer, not a preference."""
+    I.seed(str(tmp_path))
+    assert I.load(str(tmp_path))("a/b.gaston-tmp") is True

@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..agent import sessions as sesslist
+from ..files import ignores as I
 from ..files import paths as P
 from ..guest import GuestSession, work_root_on_guest
 from ..view import html as H
@@ -71,6 +72,19 @@ class WorkspaceService:
     def work_dir(self, guest: GuestSession) -> str:
         """Where the agent works for THIS conversation."""
         return guest.work_dir or self.config.cwd or os.getcwd()
+
+    def seed_ignores(self, path: str) -> bool:
+        """Put the starter ignore list in a folder we have just made.
+
+        The list is written INTO the mirror rather than held in this
+        program, so it reaches the machine with the next pass and the
+        person there can open it. See `files/ignores.py`.
+        """
+        try:
+            return I.seed(path)
+        except OSError:
+            log.exception("could not write the ignore list in %s", path)
+            return False
 
     def retarget_perms(self, guest: GuestSession) -> None:
         """Point the permission desk at this conversation's folder."""
@@ -315,6 +329,7 @@ class WorkspaceService:
         # the state this function already had a name for.
         base = self.config.sync_dir
         path = ""
+        seeded = False
         if base:
             path = os.path.join(base, name)
             try:
@@ -323,6 +338,7 @@ class WorkspaceService:
                 log.exception("could not create %s", path)
                 return
             guest.work_dir = path
+            seeded = self.seed_ignores(path)
 
         # THE MACHINE HALF, unconditional. `send_options` (the caller) puts
         # this in the OPTION `work` row of the next batch, and the client's
@@ -339,14 +355,12 @@ class WorkspaceService:
             guest.work_guest,
         )
         if self.write_block:
-            await self.write_block(
-                guest,
-                H.notice(
-                    "This conversation works in "
-                    + guest.work_guest
-                    + " on your machine."
-                ),
-            )
+            text = ("This conversation works in " + guest.work_guest
+                    + " on your machine.")
+            if seeded:
+                text += (" What stays behind is listed in .gastonignore"
+                         " there; Work > Edit ignore list opens it.")
+            await self.write_block(guest, H.notice(text))
         if not path:
             # No notice for the agent here: `with_sync_preamble` only runs
             # with a mirror, and it would reach the agent one turn late
@@ -384,6 +398,7 @@ class WorkspaceService:
         # told the user their own choice was unusable.
         base = self.config.sync_dir
         local = ""
+        seeded = False
         if base:
             local = os.path.join(base, name)
             try:
@@ -400,6 +415,7 @@ class WorkspaceService:
                     )
                 return
             guest.work_dir = local
+            seeded = self.seed_ignores(local)
 
         guest.work_guest = path
         guest.work_planned = name
@@ -413,12 +429,11 @@ class WorkspaceService:
             path,
         )
         if self.write_block:
-            await self.write_block(
-                guest,
-                H.notice(
-                    "This conversation works in " + path + " on your machine."
-                ),
-            )
+            text = "This conversation works in " + path + " on your machine."
+            if seeded:
+                text += (" What stays behind is listed in .gastonignore"
+                         " there; Work > Edit ignore list opens it.")
+            await self.write_block(guest, H.notice(text))
 
         if not guest.conv_id and guest.claude:
             with contextlib.suppress(Exception):

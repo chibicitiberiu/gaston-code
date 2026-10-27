@@ -10,6 +10,13 @@ So: `.gitignore` is honoured where present, at any directory level the way git
 applies it, plus `.gastonignore` for things that should not sync but should
 stay in the repository, plus built-in defaults for the cases every tree has.
 
+**The defaults are written into the tree rather than kept hidden.** `seed()`
+puts them in a new work folder's `.gastonignore`, marked with `MARKER`, and a
+file carrying that marker IS the list -- `load()` applies no defaults over the
+top of it, so a line deleted there is really deleted. A `.gastonignore`
+without the marker is somebody's own file from before this existed, and the
+defaults still apply to it.
+
 **Changing the pattern set is a SCOPE change, never a deletion.** Adding one
 line to `.gitignore` can remove a thousand paths from the scan, and the natural
 reading of "present last pass, absent now" is that the user deleted them -- so
@@ -42,10 +49,11 @@ DEFAULTS = (
     ".gaston-state/",
     #: SCRATCH, BY CONVENTION RATHER THAN BY GUESS. The rest of this tuple
     #: is "things every tree has"; these two are a place the agent is TOLD
-    #: to put bulk output, in prompts/machine.toml's `mirrored`. A
+    #: to put bulk output, in prompts/machine.toml's `mirrored`, and the
+    #: user is told by `seed` writing this whole tuple into the folder. A
     #: convention nobody is told about is a guess, which is what the note
-    #: above warns against -- the prompt line and these two entries are one
-    #: change and should not be separated.
+    #: above warns against -- the prompt line, `seed` and these two entries
+    #: are one change and should not be separated.
     #:
     #: Why it is needed: a 640x480x24bpp BMP is 921,654 bytes and MAX_FILE
     #: is 1,048,576, so a screen recorder's frames each cleared the
@@ -65,6 +73,63 @@ DEFAULTS = (
 
 #: Ours. Never syncable, and not something a user should have to list.
 ALWAYS = ("*.gaston-tmp", "*.gaston-old")
+
+#: The first line of a list this bridge wrote, and the whole of how `load`
+#: tells one from a file somebody typed. Versioned so a later DEFAULTS can
+#: be migrated into an old file rather than guessed at.
+MARKER = "# gaston ignore list v1"
+
+#: Read in Notepad on the machine, so the lines are short enough not to
+#: wrap at 640x480. Each one is its own literal: the prose ratchet
+#: (tests/python/meta) gives this file a budget of zero bytes over 120.
+_HEADER = (
+    "",
+    "What does not cross to your machine, one pattern per line.",
+    "",
+    "A trailing / means a folder. * and ? are wildcards. A line",
+    "starting with ! puts something back. Blank lines and lines",
+    "starting with # are ignored. Any .gitignore here is read too.",
+    "",
+    "THESE LINES ARE THE LIST. The built-in set was copied in when",
+    "this folder was made, so a line deleted here really is gone.",
+    "Keep the first line above and it stays that way.",
+    "",
+)
+
+
+def template() -> str:
+    """The starter list, as the text of a file."""
+    head = [MARKER] + [("# " + s).rstrip() for s in _HEADER]
+    return "\n".join(head + list(DEFAULTS) + [""])
+
+
+def seed(root: str) -> bool:
+    """Write the starter list into `root`. True if this call wrote it.
+
+    `O_EXCL` rather than "does it exist": the one file this may never
+    touch is one somebody else wrote, and a check leaves a window where
+    two callers both find it missing. Any other `OSError` is the caller's
+    to report -- a work folder that cannot be written to is worth a line
+    in the log, not a silent pass.
+    """
+    try:
+        fd = os.open(os.path.join(root, ".gastonignore"),
+                     os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(template())
+    return True
+
+
+def _generated(root: str) -> bool:
+    """Is the list at the top of this tree one we wrote?"""
+    try:
+        with open(os.path.join(root, ".gastonignore"),
+                  encoding="utf-8", errors="replace") as fh:
+            return fh.readline().strip() == MARKER
+    except OSError:
+        return False
 
 
 def _translate(pat: str, flags: int = 0) -> re.Pattern:
@@ -199,7 +264,12 @@ def load(root: str, *, extra: tuple[str, ...] = (),
     whose `src/.gitignore` is ignored would push build output from exactly the
     directory the user was most careful about.
     """
-    rules = [_Rule(p, "") for p in DEFAULTS + ALWAYS]
+    # A marked file carries the defaults already; applying them again on
+    # top would make deleting a line from it do nothing, which is the
+    # hidden-guess problem this is here to end. ALWAYS is not negotiable
+    # and stays either way.
+    built_in = () if _generated(root) else DEFAULTS
+    rules = [_Rule(p, "") for p in built_in + ALWAYS]
     rules += [_Rule(p, "", fold_extra) for p in extra]
     sources: list[str] = []
 
