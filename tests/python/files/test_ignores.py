@@ -107,3 +107,43 @@ def test_comments_and_blank_lines(tmp_path):
     n = I.load(str(tmp_path))
     assert n("a.log") is True
     assert n("a comment") is False
+
+
+def test_scratch_folders_are_out_of_the_mirror(tmp_path):
+    """`temp/` and `tmp/` are a CONVENTION, not a guess, and the prompt is
+    the other half of it: bridge/prompts/machine.toml tells the agent to put
+    bulk output there because everything in the mirrored folder crosses a
+    link that may be 5 KB/s.
+
+    BACKLOG 47 is why. A screen recorder wrote 565 BMP frames beside its
+    exe and the mirror pulled all 499 MB from a 1998 machine. Neither cap
+    could have stopped it: a 640x480x24bpp BMP is 921,654 bytes against a
+    1,048,576 per-file cap, and 565 files against a 2000 limit. Both passed,
+    because what mattered was their product.
+    """
+    n = I.load(str(tmp_path))
+    assert n("temp/F00001.BMP") is True
+    assert n("tmp/F00001.BMP") is True
+    assert n("a/b/temp/big.bin") is True, "at any depth, like any dir rule"
+
+
+def test_the_scratch_rule_is_a_directory_not_a_name(tmp_path):
+    """`temp/` ends in a slash, so a FILE called temp still syncs. Losing a
+    user's temp.c to a rule meant for a scratch folder is exactly the
+    "something the user actually wanted stops syncing" the module's own
+    note warns about."""
+    n = I.load(str(tmp_path))
+    assert n("src/temp.c") is False
+    assert n("temp.txt") is False
+    assert n("tmpfile.dat") is False
+
+
+def test_what_the_agent_builds_still_comes_back(tmp_path):
+    """NOT `build/`. In this project the thing being built is usually FOR
+    the guest, so the compiled exe is the deliverable -- ignoring it would
+    withhold the one file the user wanted. Object files are already noise
+    and already covered."""
+    n = I.load(str(tmp_path))
+    assert n("screcord.exe") is False
+    assert n("build/app.exe") is False
+    assert n("screcord.obj") is True

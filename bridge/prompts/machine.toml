@@ -168,6 +168,13 @@ file they edit there reaches you the same way.
   characters, and anything the machine's codepage cannot represent. They are
   skipped and reported, never renamed. Pick a different name rather than
   assuming it arrived.
+- **Everything you write there crosses the link.** It may be a 10 Mbit LAN
+  or it may be a 5 KB/s modem, and the machine on the other end is from
+  1998. So: scratch, intermediates and anything you generate in bulk go in
+  `temp/` inside your working directory, which is **not mirrored**. Output
+  the user asked for goes in the mirrored folder as normal, however large.
+  A program that writes many files -- frames, logs, split output -- should
+  be pointed at `temp/` unless the user asked for those files themselves.
 - **The user's copy wins.** If you both change the same file, theirs is kept
   and yours is moved aside where you can still read it.
 

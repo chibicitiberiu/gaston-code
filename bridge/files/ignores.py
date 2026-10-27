@@ -40,6 +40,27 @@ DEFAULTS = (
     "*.iso",
     ".gaston/",
     ".gaston-state/",
+    #: SCRATCH, BY CONVENTION RATHER THAN BY GUESS. The rest of this tuple
+    #: is "things every tree has"; these two are a place the agent is TOLD
+    #: to put bulk output, in prompts/machine.toml's `mirrored`. A
+    #: convention nobody is told about is a guess, which is what the note
+    #: above warns against -- the prompt line and these two entries are one
+    #: change and should not be separated.
+    #:
+    #: Why it is needed: a 640x480x24bpp BMP is 921,654 bytes and MAX_FILE
+    #: is 1,048,576, so a screen recorder's frames each cleared the
+    #: per-file cap by 127 KB; SYNC_MAX_FILES is 2000 and there were 565.
+    #: Both caps passed and 499 MB crossed a 10 Mbit link from a 1998
+    #: machine, because the quantity that mattered was their product and
+    #: nothing measures that (BACKLOG 47).
+    #:
+    #: NOT `build/`. In this project the thing being built is usually FOR
+    #: the guest and the compiled exe is the deliverable -- ignoring it
+    #: would keep the one file the user wanted from coming back. Object
+    #: files are already covered by *.o and *.obj above, which is the part
+    #: of a build directory that is genuinely noise.
+    "temp/",
+    "tmp/",
 )
 
 #: Ours. Never syncable, and not something a user should have to list.
