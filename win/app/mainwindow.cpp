@@ -610,8 +610,23 @@ void MainWindow::onChats(rc_frame *f)
         const char *id = rc_frame_get(f, "id");
         /* Against `was`, not m_net->conv -- see the top of this function.
          * onSwitched has already written conv by now, which is correct and
-         * is why it cannot also be the thing we compare against. */
-        if (id && strcmp(id, was) != 0) {
+         * is why it cannot also be the thing we compare against.
+         *
+         * AND NOT DURING A TURN. SWITCHED is not only an attach frame: the
+         * bridge sends one from resume_pending on the first message of a
+         * new conversation, to name the id the SDK just assigned -- mid
+         * turn, with the reply already streaming. Asking there answers with
+         * a RANGE, and RANGE means turnDone() and clear(), so the reply
+         * being written would vanish as it arrived.
+         *
+         * The old code was accidentally safe from that, because comparing
+         * against a buffer onSwitched had already overwritten meant this
+         * never fired at all -- for any case, which is why opening a
+         * conversation showed nothing. Fixing the comparison without this
+         * second condition would have traded a visible bug for a far worse
+         * one. */
+        if (id && strcmp(id, was) != 0
+            && !(m_turn && m_turn->active())) {
             if (m_pageBar) m_pageBar->goto_live();
         }
     }
