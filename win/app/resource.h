@@ -57,8 +57,8 @@
  */
 #define RC_VER_MAJOR 0
 #define RC_VER_MINOR 4
-#define RC_VER_PATCH 2
-#define RC_VER_STR   "0.4.2"
+#define RC_VER_PATCH 3
+#define RC_VER_STR   "0.4.3"
 
 /* Menu commands. Here rather than in main.cpp because gaston.rc's
  * ACCELERATORS block has to name IDM_NEW, and wrc cannot see a #define in a
