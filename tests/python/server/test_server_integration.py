@@ -3381,23 +3381,24 @@ async def test_a_session_that_will_not_start_does_not_kill_the_attach(
     await harness.close(writer)
 
 
-async def test_opening_a_conversation_pushes_a_window_of_its_history(
+async def test_opening_a_conversation_sends_switched_and_nothing_more(
         harness, monkeypatch):
-    """Otherwise the transcript stays empty and the guest never knows.
+    """The window is the GUEST's to ask for, and that is deliberate.
 
-    Reported from the Athlon on 2026-10-27: clicking an older conversation
-    left "Loading conversation..." notices stacked under the empty-session
-    text, the page bar still reading "Page 1/1 (Live)", and -- the tell --
-    the status bar CLEAR, which only happens once SWITCHED has arrived. So
-    the switch finished, the blocks were in the paginator, and nothing had
-    told the guest to fetch them.
+    bridge/services/session.py says it in `new_session_locked`: "SWITCHED
+    AND NOTHING ELSE. The bridge used to push the transcript straight
+    after this; stage 3b made the guest ask, which is what leaves this
+    side with no opinion about how big a window is." A push here would
+    need a page size this side has no business knowing.
 
-    The history is written with notify=False on purpose: a conversation
-    restores as dozens of blocks and a frame per block is waste. But
-    SWITCHED stopped carrying a page total at stage 3b, the chat list's
-    handler only re-marks the row, and MainWindow::onSwitched only clears
-    the status -- so "the pages themselves arrive immediately afterwards"
-    was an expectation with nothing behind it.
+    This pins that, because a plausible-looking fix for the Athlon bug of
+    2026-10-27 -- an older conversation opening to an empty transcript --
+    was to send a RANGE after SWITCHED. It worked, and it was wrong: the
+    fault was in the guest (win/app/mainwindow.cpp onChats compared the
+    incoming conversation id against a buffer the chat list's callback had
+    already overwritten with it, so it never saw a change and never
+    asked). Pushing from here would have hidden that and then sent two
+    windows once the guest was fixed.
     """
     from bridge.view import html as H
 
@@ -3409,10 +3410,7 @@ async def test_opening_a_conversation_pushes_a_window_of_its_history(
     kinds = [f.type for f in frames]
 
     assert "SWITCHED" in kinds, kinds
-    assert "RANGE" in kinds, (
-        "SWITCHED arrived but no window followed it, so the guest has an "
-        "empty transcript and no reason to ask: %s" % kinds)
-    assert kinds.index("RANGE") > kinds.index("SWITCHED"), (
-        "the window must follow SWITCHED -- before it, the guest has not "
-        "yet pointed its cache at the conversation the pages belong to")
+    assert "RANGE" not in kinds, (
+        "the bridge pushed a window; the guest asks for one (stage 3b), "
+        "and pushing needs a page size this side does not have: %s" % kinds)
     await harness.close(w)

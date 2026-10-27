@@ -596,26 +596,6 @@ class SessionService:
             await self.presentation.write_block(guest, block, stream=False, notify=False)
 
         await self.connection.send(guest, switched(session_id))
-        # AND THEN PUSH A WINDOW, or the transcript stays empty.
-        #
-        # The history above is written with notify=False on purpose -- a
-        # conversation restores as dozens of blocks and notifying per block
-        # would be dozens of frames the guest does not need. But nothing
-        # then told it there was anything to fetch: SWITCHED carries no page
-        # total (it stopped at stage 3b), onSwitchedFrame only re-marks the
-        # chat list, and MainWindow::onSwitched only clears the status. So
-        # neither side asked, and win/app/mainwindow.cpp's "the pages
-        # themselves arrive immediately afterwards" was an expectation with
-        # nothing behind it.
-        #
-        # Reported from the Athlon, 2026-10-27: clicking an older
-        # conversation left three "Loading conversation..." notices stacked
-        # under the empty-session text, the page bar still reading
-        # "Page 1/1 (Live)", and the status bar CLEAR -- which is the tell
-        # that SWITCHED did arrive and the switch did finish. The blocks
-        # were in the paginator the whole time; 48 of them for the first
-        # conversation tried.
-        await self.presentation.send_range(guest, "live", "")
         await self.options.send_options(guest)
 
     async def match_surface_locked(self, guest: GuestSession) -> None:

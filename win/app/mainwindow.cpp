@@ -562,6 +562,29 @@ void MainWindow::onSwitched(rc_frame *f)
  * in and it wants values, not frames. */
 void MainWindow::onChats(rc_frame *f)
 {
+    /* WHICH CONVERSATION WE WERE ON, READ BEFORE THE CHAT LIST RUNS.
+     *
+     * `m_chats->frame(f)` below ends in ChatList::onSwitchedFrame, which
+     * calls `m_listener->onSwitched(f)` -- this class -- and THAT writes
+     * m_net->conv. So the test further down, which exists to fire only on a
+     * real change of conversation, was comparing the incoming id against a
+     * buffer that had already been set to the incoming id. It never
+     * differed, so goto_live() never ran, so the guest never asked for the
+     * new conversation's transcript.
+     *
+     * Reported from the Athlon on 2026-10-27, as two separate bugs that
+     * turned out to be this one: opening an older conversation showed
+     * "Loading conversation..." over an empty transcript, and File > New
+     * Session "did nothing" -- it reset the session and the mode and the
+     * work directory, and left the previous conversation's text on screen,
+     * which from the user's seat is indistinguishable from nothing.
+     *
+     * New Session is the case that proves it is this and not the bridge:
+     * SWITCHED carries id="" there, onSwitched writes conv="", and "" ==
+     * "" is just as equal as the other way round. */
+    char was[sizeof(((rc_net *)0)->conv)];
+    rc_strf(was, sizeof(was), "%s", m_net ? m_net->conv : "");
+
     if (m_chats) m_chats->frame(f);
 
     /* THE TRANSCRIPT FOR THE CONVERSATION WE JUST MOVED TO, asked for here
@@ -585,8 +608,10 @@ void MainWindow::onChats(rc_frame *f)
      * being written would vanish as it arrived. */
     if (strcmp(f->type, "SWITCHED") == 0) {
         const char *id = rc_frame_get(f, "id");
-        if (id && strcmp(id, m_net->conv) != 0) {
-            rc_strf(m_net->conv, sizeof(m_net->conv), "%s", id);
+        /* Against `was`, not m_net->conv -- see the top of this function.
+         * onSwitched has already written conv by now, which is correct and
+         * is why it cannot also be the thing we compare against. */
+        if (id && strcmp(id, was) != 0) {
             if (m_pageBar) m_pageBar->goto_live();
         }
     }
